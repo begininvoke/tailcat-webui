@@ -1,0 +1,168 @@
+name: Release Binaries
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify release source
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 11.3.0 }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '26'
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - working-directory: web
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          check-latest: true
+          cache-dependency-path: go.sum
+      - run: make verify
+
+  release:
+    name: Create release draft
+    needs: verify
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: true
+
+  binary:
+    name: Build ${{ matrix.platform }}
+    needs: [verify, release]
+    if: ${{ always() && needs.verify.result == 'success' && (startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch') && (github.event_name == 'workflow_dispatch' || needs.release.result == 'success') }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-latest, platform: linux-amd64, goos: linux, goarch: amd64, binary: tailcat-webui, archive: tar.gz }
+          - { runner: ubuntu-latest, platform: linux-arm64, goos: linux, goarch: arm64, binary: tailcat-webui, archive: tar.gz }
+          - { runner: windows-latest, platform: windows-amd64, goos: windows, goarch: amd64, binary: tailcat-webui.exe, archive: zip }
+          - { runner: macos-latest, platform: darwin-amd64, goos: darwin, goarch: amd64, binary: tailcat-webui, archive: tar.gz }
+          - { runner: macos-latest, platform: darwin-arm64, goos: darwin, goarch: arm64, binary: tailcat-webui, archive: tar.gz }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.3.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '26'
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: Build web assets
+        working-directory: web
+        run: |
+          pnpm install --frozen-lockfile --ignore-scripts
+          pnpm build
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          check-latest: true
+          cache-dependency-path: go.sum
+      - name: Build binary
+        shell: bash
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: '0'
+        run: |
+          rm -rf webdist/dist
+          cp -R web/dist webdist/dist
+          mkdir -p dist/package
+          go build -trimpath \
+            -ldflags="-s -w -X github.com/ca-x/tailcat-webui/internal/version.Version=${{ github.ref_name }} -X github.com/ca-x/tailcat-webui/internal/version.BuildTime=$(date -u '+%Y-%m-%dT%H:%M:%SZ') -X github.com/ca-x/tailcat-webui/internal/version.GitCommit=${{ github.sha }}" \
+            -o dist/package/${{ matrix.binary }} ./cmd/tailcat-webui
+          cp README.md README_ZH.md LICENSE NOTICE.md dist/package/
+      - name: Package archive
+        shell: bash
+        run: |
+          cd dist/package
+          if [ '${{ matrix.archive }}' = 'zip' ]; then
+            7z a ../tailcat-webui-${{ matrix.platform }}.zip .
+          else
+            tar czf ../tailcat-webui-${{ matrix.platform }}.tar.gz .
+          fi
+          cd ..
+          sha256sum tailcat-webui-${{ matrix.platform }}.* > tailcat-webui-${{ matrix.platform }}.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tailcat-webui-${{ matrix.platform }}
+          path: |
+            dist/tailcat-webui-${{ matrix.platform }}.*
+      - name: Upload release assets
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: dist/tailcat-webui-${{ matrix.platform }}.*
+
+  docker:
+    name: Build release image
+    needs: [verify, release]
+    if: ${{ always() && needs.verify.result == 'success' && startsWith(github.ref, 'refs/tags/') && needs.release.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
+      - id: buildmeta
+        run: echo "time=$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ github.ref_name }}
+            BUILD_TIME=${{ steps.buildmeta.outputs.time }}
+            GIT_COMMIT=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  finalize:
+    name: Publish verified release
+    needs: [binary, docker]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: false
+          generate_release_notes: true

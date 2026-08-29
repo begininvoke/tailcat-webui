@@ -1,0 +1,391 @@
+openapi: 3.1.0
+info:
+  title: Tailcat WebUI API
+  version: 0.1.0
+  description: Owner-scoped management API for Tailcat server and client runtimes.
+servers:
+  - url: /api/v1
+security:
+  - cookieAuth: []
+paths:
+  /health:
+    get:
+      security: []
+      operationId: health
+      responses:
+        '200': { description: Healthy, content: { application/json: { schema: { type: object } } } }
+  /config:
+    get:
+      security: []
+      operationId: publicConfig
+      responses:
+        '200':
+          description: Public deployment configuration
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [auth_mode, unsafe_ssh, version]
+                properties:
+                  auth_mode: { type: string, enum: [oidc, demo] }
+                  unsafe_ssh: { type: boolean }
+                  version: { type: string }
+  /auth/login:
+    get:
+      security: []
+      operationId: startOIDCLogin
+      parameters:
+        - { in: query, name: return_to, schema: { type: string, default: / } }
+      responses:
+        '302': { description: Redirect to the OIDC provider }
+  /auth/callback:
+    get:
+      security: []
+      operationId: completeOIDCLogin
+      parameters:
+        - { in: query, name: state, required: true, schema: { type: string } }
+        - { in: query, name: code, required: true, schema: { type: string } }
+      responses:
+        '302': { description: Session created and redirected to the console }
+  /auth/demo:
+    post:
+      security: []
+      operationId: demoLogin
+      responses:
+        '200': { description: Demo session created, content: { application/json: { schema: { $ref: '#/components/schemas/User' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+  /auth/logout:
+    post:
+      operationId: logout
+      responses:
+        '204': { description: Session revoked }
+  /auth/me:
+    get:
+      operationId: currentUser
+      responses:
+        '200': { description: Current user, content: { application/json: { schema: { $ref: '#/components/schemas/User' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+  /dashboard:
+    get:
+      operationId: dashboard
+      responses:
+        '200': { description: Owner dashboard summary, content: { application/json: { schema: { type: object } } } }
+  /servers:
+    get:
+      operationId: listServers
+      responses:
+        '200': { description: Owner servers, content: { application/json: { schema: { $ref: '#/components/schemas/ServerList' } } } }
+    post:
+      operationId: createServer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [name, key_mode]
+              properties:
+                name: { type: string, minLength: 1, maxLength: 80 }
+                key_mode: { type: string, enum: [ephemeral, saved] }
+                region: { type: string, default: auto }
+                derp_map_url: { type: string, format: uri }
+                exit_node_enabled: { type: boolean, default: false }
+                start: { type: boolean, default: false }
+      responses:
+        '201': { description: Server created, content: { application/json: { schema: { $ref: '#/components/schemas/Server' } } } }
+        '422': { $ref: '#/components/responses/Error' }
+  /servers/{id}:
+    delete:
+      operationId: deleteServer
+      parameters: [{ $ref: '#/components/parameters/ID' }]
+      responses:
+        '204': { description: Server deleted }
+        '404': { $ref: '#/components/responses/Error' }
+  /servers/{id}/start:
+    post:
+      operationId: startServer
+      parameters: [{ $ref: '#/components/parameters/ID' }]
+      responses:
+        '200': { description: Running server, content: { application/json: { schema: { $ref: '#/components/schemas/Server' } } } }
+        '409': { $ref: '#/components/responses/Error' }
+  /servers/{id}/stop:
+    post:
+      operationId: stopServer
+      parameters: [{ $ref: '#/components/parameters/ID' }]
+      responses:
+        '204': { description: Server stopped }
+        '409': { $ref: '#/components/responses/Error' }
+  /servers/{id}/mappings:
+    get:
+      operationId: listMappings
+      parameters: [{ $ref: '#/components/parameters/ID' }]
+      responses:
+        '200': { description: Server mappings, content: { application/json: { schema: { type: object } } } }
+    post:
+      operationId: createMapping
+      parameters: [{ $ref: '#/components/parameters/ID' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [name, kind, listen_port]
+              properties:
+                name: { type: string }
+                kind: { type: string, enum: [tcp, no_auth_ssh] }
+                listen_port: { type: integer, minimum: 1, maximum: 65535 }
+                target_host: { type: string }
+                target_port: { type: integer, minimum: 0, maximum: 65535 }
+      responses:
+        '201': { description: Mapping created, content: { application/json: { schema: { type: object } } } }
+  /mappings/{id}:
+    delete:
+      operationId: deleteMapping
+      parameters: [{ $ref: '#/components/parameters/ID' }]
+      responses:
+        '204': { description: Mapping deleted }
+  /servers/{id}/allowed-clients:
+    get:
+      operationId: listAllowedClients
+      parameters: [{ $ref: '#/components/parameters/ID' }]
+      responses:
+        '200': { description: Allowed public keys, content: { application/json: { schema: { type: object } } } }
+    post:
+      operationId: createAllowedClient
+      parameters: [{ $ref: '#/components/parameters/ID' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [name, public_key]
+              properties:
+                name: { type: string }
+                public_key: { type: string, pattern: '^nodekey:' }
+      responses:
+        '201': { description: Public key allowed, content: { application/json: { schema: { type: object } } } }
+  /allowed-clients/{id}:
+    delete:
+      operationId: deleteAllowedClient
+      parameters: [{ $ref: '#/components/parameters/ID' }]
+      responses:
+        '204': { description: Allowed key removed; restart a running server to revoke it }
+  /clients:
+    get:
+      operationId: listClients
+      responses:
+        '200': { description: Owner clients, content: { application/json: { schema: { $ref: '#/components/schemas/ClientList' } } } }
+    post:
+      operationId: createClient
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [name, server]
+              properties:
+                name: { type: string, minLength: 1, maxLength: 80 }
+                server: { type: string, description: Tailcat token or DNS name }
+                derp_map_url: { type: string, format: uri }
+                save_identity: { type: boolean, default: false }
+      responses:
+        '201': { description: Client created, content: { application/json: { schema: { $ref: '#/components/schemas/Client' } } } }
+  /clients/{id}:
+    delete:
+      operationId: deleteClient
+      parameters: [{ $ref: '#/components/parameters/ID' }]
+      responses:
+        '204': { description: Client deleted }
+  /clients/{id}/ping:
+    post:
+      operationId: pingClient
+      parameters: [{ $ref: '#/components/parameters/ID' }]
+      responses:
+        '200': { description: Updated client path, content: { application/json: { schema: { $ref: '#/components/schemas/Client' } } } }
+  /clients/{id}/tunnel:
+    get:
+      operationId: tunnelClient
+      description: Same-origin WebSocket upgrade whose byte stream is connected through the selected Tailcat client only after the origin check succeeds.
+      parameters:
+        - { $ref: '#/components/parameters/ID' }
+        - { in: query, name: address, required: true, schema: { type: string, example: 'server.tailcat:80' } }
+      responses:
+        '101': { description: WebSocket tunnel established }
+  /tokens/parse:
+    post:
+      operationId: parseToken
+      requestBody: { $ref: '#/components/requestBodies/Token' }
+      responses:
+        '200': { description: Parsed token fields, content: { application/json: { schema: { type: object } } } }
+  /tokens/resolve:
+    post:
+      operationId: resolveToken
+      requestBody: { $ref: '#/components/requestBodies/Token' }
+      responses:
+        '200': { description: Self-contained token, content: { application/json: { schema: { type: object } } } }
+  /routes:
+    get:
+      operationId: listRoutes
+      responses:
+        '200': { description: Owner routes, content: { application/json: { schema: { $ref: '#/components/schemas/RouteList' } } } }
+    post:
+      operationId: createRoute
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [client_id, name, slug, remote_port, base_path, access]
+              properties:
+                client_id: { type: string, format: uuid }
+                name: { type: string }
+                slug: { type: string, pattern: '^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$' }
+                remote_port: { type: integer, minimum: 1, maximum: 65535 }
+                base_path: { type: string, pattern: '^/' }
+                access: { type: string, enum: [private, public] }
+                allowed_methods:
+                  type: array
+                  items: { type: string, enum: [GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS] }
+                  default: [GET, HEAD]
+      responses:
+        '201': { description: Route created, content: { application/json: { schema: { $ref: '#/components/schemas/Route' } } } }
+  /routes/{id}:
+    delete:
+      operationId: deleteRoute
+      parameters: [{ $ref: '#/components/parameters/ID' }]
+      responses:
+        '204': { description: Route deleted }
+  /routes/{id}/open:
+    get:
+      operationId: openPrivateRoute
+      description: Issue a short-lived scoped grant and redirect the owner to the separate published-resource origin.
+      parameters: [{ $ref: '#/components/parameters/ID' }]
+      responses:
+        '303': { description: Redirect to the published route with a one-minute grant }
+        '404': { $ref: '#/components/responses/Error' }
+  /events:
+    get:
+      operationId: runtimeEvents
+      responses:
+        '200':
+          description: Server-sent runtime events
+          content:
+            text/event-stream: { schema: { type: string } }
+components:
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: tailcat_session
+  parameters:
+    ID:
+      in: path
+      name: id
+      required: true
+      schema: { type: string, format: uuid }
+  requestBodies:
+    Token:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [token]
+            properties:
+              token: { type: string }
+  responses:
+    Error:
+      description: Machine-readable error
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+  schemas:
+    User:
+      type: object
+      required: [id]
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        display_name: { type: string }
+        avatar_url: { type: string, format: uri }
+    Server:
+      type: object
+      required: [id, name, key_mode, region, runtime_state]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        key_mode: { type: string, enum: [ephemeral, saved] }
+        region: { type: string }
+        runtime_state: { type: string, enum: [running, stopped] }
+        connection_token: { type: string, description: Present only while running }
+        public_key: { type: string }
+        exit_node_enabled: { type: boolean }
+        allowlist_enabled: { type: boolean }
+        desired_running: { type: boolean }
+        mapping_count: { type: integer }
+        allowed_key_count: { type: integer }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    Client:
+      type: object
+      required: [id, name, runtime_state, token_hint]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        runtime_state: { type: string, enum: [idle, ready] }
+        token_hint: { type: string }
+        public_key: { type: string }
+        last_ping_ms: { type: integer }
+        last_path: { type: string, enum: [direct, derp, peer-relay] }
+        derp_map_url: { type: string, format: uri }
+        saved_key: { type: boolean }
+        last_ping_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    Route:
+      type: object
+      required: [id, client_id, name, slug, remote_port, access, url]
+      properties:
+        id: { type: string, format: uuid }
+        client_id: { type: string, format: uuid }
+        name: { type: string }
+        slug: { type: string }
+        remote_port: { type: integer }
+        base_path: { type: string }
+        access: { type: string, enum: [private, public] }
+        allowed_methods: { type: array, items: { type: string } }
+        url: { type: string, format: uri }
+        enabled: { type: boolean }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    ServerList:
+      type: object
+      properties: { items: { type: array, items: { $ref: '#/components/schemas/Server' } } }
+    ClientList:
+      type: object
+      properties: { items: { type: array, items: { $ref: '#/components/schemas/Client' } } }
+    RouteList:
+      type: object
+      properties: { items: { type: array, items: { $ref: '#/components/schemas/Route' } } }
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string }
+            message: { type: string }
+            request_id: { type: string }
+            fields: { type: object, additionalProperties: { type: string } }

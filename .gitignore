@@ -1,0 +1,14 @@
+.env
+.env.local
+.env.*.local
+*.db
+*.db-shm
+*.db-wal
+*.key
+*.pem
+/data/
+/dist/
+/bin/
+/web/node_modules/
+/web/dist/
+/coverage.out
