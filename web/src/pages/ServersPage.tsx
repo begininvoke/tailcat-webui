@@ -10,7 +10,7 @@ import { ResourceState } from '../components/ResourceState'
 import { RuntimeState } from '../components/RuntimeState'
 import { useAsyncResource } from '../hooks/useAsyncResource'
 import { api, type ExitRule, type Server } from '../services/api'
-import { beginServerSettingsLoad, completeServerSettingsLoad, emptyServerSettings, failServerSettingsLoad, isValidCIDR, type ServerSettingsData } from './serverPolicy'
+import { beginExitNodeUpdate, beginServerSettingsLoad, completeExitNodeUpdate, completeServerSettingsLoad, emptyExitNodeUpdate, emptyServerSettings, failServerSettingsLoad, invalidateExitNodeUpdate, isValidCIDR, type ServerSettingsData } from './serverPolicy'
 
 interface ServerFormValues {
   name: string; key_mode: 'ephemeral' | 'saved'; region: string; derp_map_url?: string; exit_node_enabled: boolean; start: boolean
@@ -34,8 +34,9 @@ export default function ServersPage() {
   const [busyID, setBusyID] = useState('')
   const [mappingServer, setMappingServer] = useState<Server | null>(null)
   const [settings, setSettings] = useState(emptyServerSettings)
-  const [exitNodeUpdating, setExitNodeUpdating] = useState(false)
+  const [exitNodeUpdate, setExitNodeUpdate] = useState(emptyExitNodeUpdate)
   const settingsRequest = useRef(0)
+  const exitNodeUpdateID = useRef(0)
   const [mappingForm] = Form.useForm<MappingFormValues>()
   const [allowedForm] = Form.useForm<AllowedClientFormValues>()
   const [exitRuleForm] = Form.useForm<ExitRuleFormValues>()
@@ -73,7 +74,7 @@ export default function ServersPage() {
 
   const openMappings = async (server: Server) => {
     const requestID = ++settingsRequest.current
-    setMappingServer(server); setSettings(beginServerSettingsLoad(server.id, requestID))
+    setMappingServer(server); setSettings(beginServerSettingsLoad(server.id, requestID)); setExitNodeUpdate(invalidateExitNodeUpdate)
     try {
       const [nextMappings, nextAllowed, nextExitRules] = await Promise.all([api.mappings(server.id), api.allowedClients(server.id), api.exitRules(server.id)])
       if (settingsRequest.current !== requestID) return
@@ -86,7 +87,7 @@ export default function ServersPage() {
 
   const closeSettings = () => {
     const requestID = ++settingsRequest.current
-    setMappingServer(null); setSettings(emptyServerSettings(requestID))
+    setMappingServer(null); setSettings(emptyServerSettings(requestID)); setExitNodeUpdate(invalidateExitNodeUpdate)
   }
 
   const updateSettings = (serverID: string, requestID: number, data: Partial<ServerSettingsData>) => {
@@ -156,7 +157,8 @@ export default function ServersPage() {
     if (!mappingServer) return
     const requestID = settingsRequest.current
     const serverID = mappingServer.id
-    setExitNodeUpdating(true)
+    const updateID = ++exitNodeUpdateID.current
+    setExitNodeUpdate(beginExitNodeUpdate(updateID))
     try {
       const nextServer = await api.setExitNodeEnabled(serverID, enabled)
       if (settingsRequest.current !== requestID) return
@@ -164,7 +166,7 @@ export default function ServersPage() {
     } catch {
       if (settingsRequest.current === requestID) void message.error(t('servers.exitNodeUpdateFailed'))
     } finally {
-      if (settingsRequest.current === requestID) setExitNodeUpdating(false)
+      setExitNodeUpdate((current) => completeExitNodeUpdate(current, updateID))
     }
   }
 
@@ -267,7 +269,7 @@ export default function ServersPage() {
                 <Typography.Text strong>{t('servers.exitNodeEnabled')}</Typography.Text>
                 <Flex align="center" justify="space-between" gap={16}>
                   <Typography.Text type="secondary">{mappingServer?.exit_node_enabled ? t('servers.ruleEnabled') : t('servers.ruleDisabled')}</Typography.Text>
-                  <Switch checked={mappingServer?.exit_node_enabled} disabled={!mappingServer?.exit_node_enabled && !hasEnabledExitRule} loading={exitNodeUpdating} onChange={(enabled) => void setExitNodeEnabled(enabled)} aria-label={t('servers.exitNodeEnabled')} />
+                  <Switch checked={mappingServer?.exit_node_enabled} disabled={!mappingServer?.exit_node_enabled && !hasEnabledExitRule} loading={exitNodeUpdate.updating} onChange={(enabled) => void setExitNodeEnabled(enabled)} aria-label={t('servers.exitNodeEnabled')} />
                 </Flex>
               </Flex>
               {!mappingServer?.exit_node_enabled && !hasEnabledExitRule && <Alert type="info" showIcon message={t('servers.exitNodeDisabledHint')} className="drawer-alert" />}

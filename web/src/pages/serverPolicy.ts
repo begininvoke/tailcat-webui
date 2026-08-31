@@ -13,6 +13,28 @@ export interface ServerSettingsState extends ServerSettingsData {
   error: boolean
 }
 
+export interface ExitNodeUpdateState {
+  updateID: number
+  updating: boolean
+}
+
+export function emptyExitNodeUpdate(): ExitNodeUpdateState {
+  return { updateID: 0, updating: false }
+}
+
+export function beginExitNodeUpdate(updateID: number): ExitNodeUpdateState {
+  return { updateID, updating: true }
+}
+
+export function invalidateExitNodeUpdate(state: ExitNodeUpdateState): ExitNodeUpdateState {
+  return { ...state, updating: false }
+}
+
+export function completeExitNodeUpdate(state: ExitNodeUpdateState, updateID: number): ExitNodeUpdateState {
+  if (state.updateID !== updateID) return state
+  return { ...state, updating: false }
+}
+
 export function emptyServerSettings(requestID = 0): ServerSettingsState {
   return { serverID: null, requestID, mappings: [], allowedClients: [], exitRules: [], loading: false, error: false }
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ExitRule } from '../services/api'
-import { beginServerSettingsLoad, completeServerSettingsLoad, isValidCIDR } from './serverPolicy'
+import { beginExitNodeUpdate, beginServerSettingsLoad, completeExitNodeUpdate, completeServerSettingsLoad, emptyExitNodeUpdate, invalidateExitNodeUpdate, isValidCIDR } from './serverPolicy'
 
 const exitRule = (id: string, enabled: boolean): ExitRule => ({
   id, server_id: 'server-a', prefix: '10.0.0.0/8', start_port: 443, end_port: 443, enabled,
@@ -32,5 +32,17 @@ describe('server policy helpers', () => {
     })
     expect(completeB.exitRules.map((rule) => rule.id)).toEqual(['rule-b'])
     expect(completeB.loading).toBe(false)
+  })
+
+  it('clears an exit-node update when its settings generation is invalidated', () => {
+    const updateA = beginExitNodeUpdate(1)
+    const invalidated = invalidateExitNodeUpdate(updateA)
+
+    expect(invalidated.updating).toBe(false)
+    expect(completeExitNodeUpdate(invalidated, updateA.updateID)).toEqual(invalidated)
+
+    const updateB = beginExitNodeUpdate(2)
+    expect(completeExitNodeUpdate(updateB, updateA.updateID)).toEqual(updateB)
+    expect(emptyExitNodeUpdate()).toEqual({ updateID: 0, updating: false })
   })
 })
