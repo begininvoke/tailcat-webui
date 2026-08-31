@@ -408,7 +408,7 @@ func (a *API) deleteServer(c *echo.Context) error {
 }
 
 type setExitNodeRequest struct {
-	Enabled bool `json:"enabled"`
+	Enabled *bool `json:"enabled"`
 }
 
 func (a *API) setExitNodeEnabled(c *echo.Context) error {
@@ -420,7 +420,10 @@ func (a *API) setExitNodeEnabled(c *echo.Context) error {
 	if err := c.Bind(&request); err != nil {
 		return err
 	}
-	view, err := a.tailnet.SetExitNodeEnabled(c.Request().Context(), p.ID, c.Param("id"), request.Enabled)
+	if request.Enabled == nil {
+		return badRequest("VALIDATION_ERROR", "The enabled field is required")
+	}
+	view, err := a.tailnet.SetExitNodeEnabled(c.Request().Context(), p.ID, c.Param("id"), *request.Enabled)
 	if err != nil {
 		return err
 	}
@@ -443,7 +446,7 @@ type createExitRuleRequest struct {
 	Prefix    string `json:"prefix"`
 	StartPort uint16 `json:"start_port"`
 	EndPort   uint16 `json:"end_port"`
-	Enabled   bool   `json:"enabled"`
+	Enabled   *bool  `json:"enabled"`
 }
 
 func (a *API) createExitRule(c *echo.Context) error {
@@ -455,7 +458,10 @@ func (a *API) createExitRule(c *echo.Context) error {
 	if err := c.Bind(&request); err != nil {
 		return err
 	}
-	view, err := a.tailnet.CreateExitRule(c.Request().Context(), p.ID, c.Param("id"), tailnet.CreateExitRuleInput{Prefix: request.Prefix, StartPort: request.StartPort, EndPort: request.EndPort, Enabled: request.Enabled})
+	if request.Enabled == nil {
+		return badRequest("VALIDATION_ERROR", "The enabled field is required")
+	}
+	view, err := a.tailnet.CreateExitRule(c.Request().Context(), p.ID, c.Param("id"), tailnet.CreateExitRuleInput{Prefix: request.Prefix, StartPort: request.StartPort, EndPort: request.EndPort, Enabled: *request.Enabled})
 	if err != nil {
 		return err
 	}
