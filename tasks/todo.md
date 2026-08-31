@@ -27,7 +27,7 @@
 - [x] Runtime phases, typed event envelope and exhaustive UI labels
 - [x] Injectable Tailcat server/client runtime adapter
 - [x] Route-scoped reusable HTTP transport registry and invalidation
-- [ ] Port-aware operator target-rule parser and resolver
+- [x] Port-aware operator target-rule parser and resolver
 - [ ] Owner-scoped exit-node rule persistence and runtime enforcement
 - [ ] Server policy management UI in English and Chinese
 - [ ] Diagnostic schema and bounded reserved-port protocol
