@@ -2,6 +2,7 @@ package database
 
 import (
 	"testing"
+	"time"
 )
 
 func TestOpenAppliesTransferCompositeOwnershipForeignKeys(t *testing.T) {
@@ -13,8 +14,14 @@ func TestOpenAppliesTransferCompositeOwnershipForeignKeys(t *testing.T) {
 		_ = client.Close()
 		_ = raw.Close()
 	})
-	if _, err := client.User.Create().SetIssuer("test").SetSubject("database-runtime").Save(t.Context()); err != nil {
+	owner, err := client.User.Create().SetIssuer("test").SetSubject("database-runtime").Save(t.Context())
+	if err != nil {
 		t.Fatalf("database.Open client has uninitialized Ent runtime: %v", err)
+	}
+	tailClient := client.TailClient.Create().SetUserID(owner.ID).SetName("database-runtime-client").SetServerTokenCipher([]byte("cipher")).SetTokenHint("tc…").SaveX(t.Context())
+	job := client.TransferJob.Create().SetUserID(owner.ID).SetClientID(tailClient.ID).SetRemoteShareID("01900000-0000-7000-8000-000000000001").SetRemoteCapabilityCipher([]byte("encrypted-capability")).SetExpiresAt(time.Now().Add(time.Hour)).SaveX(t.Context())
+	if _, err := client.TransferJob.UpdateOneID(job.ID).SetReceivedBytes(0).Save(t.Context()); err != nil {
+		t.Fatalf("database.Open client has uninitialized transfer invariant loader: %v", err)
 	}
 
 	for _, table := range []string{"transfer_shares", "share_files", "transfer_jobs", "transfer_items"} {

@@ -199,16 +199,30 @@ func TestTransferPartialEntityUpdatesFailClosed(t *testing.T) {
 	if _, err := partialJob.Update().SetTotalBytes(1).Save(ctx); err == nil {
 		t.Fatal("partial job entity bypassed total/received validation")
 	}
-	if _, err := partialJob.Update().SetReceivedBytes(1).Save(ctx); err == nil {
+	if _, err := partialJob.Update().SetReceivedBytes(transferBlockSize + 1).Save(ctx); err == nil {
 		t.Fatal("partial job entity bypassed received/total validation")
+	}
+	markerJob := db.TransferJob.Query().Where(transferjob.IDEQ(job.ID)).Select(transferjob.FieldID, transferjob.FieldUserID, transferjob.FieldClientID, transferjob.FieldRemoteShareID, transferjob.FieldRemoteCapabilityCipher).OnlyX(ctx)
+	if _, err := markerJob.Update().SetTotalBytes(1).Save(ctx); err == nil {
+		t.Fatal("marker-complete partial job entity bypassed total/received validation")
+	}
+	if _, err := markerJob.Update().SetReceivedBytes(transferBlockSize + 1).Save(ctx); err == nil {
+		t.Fatal("marker-complete partial job entity bypassed received/total validation")
 	}
 
 	partialItem := db.TransferItem.Query().Where(transferitem.IDEQ(item.ID)).Select(transferitem.FieldID).OnlyX(ctx)
 	if _, err := partialItem.Update().SetReceivedBytes(0).Save(ctx); err == nil {
 		t.Fatal("partial item entity bypassed received/completed validation")
 	}
-	if _, err := partialItem.Update().SetCompletedBlocks(nil).Save(ctx); err == nil {
+	if _, err := partialItem.Update().SetCompletedBlocks([]int{1}).Save(ctx); err == nil {
 		t.Fatal("partial item entity bypassed completed block validation")
+	}
+	markerItem := db.TransferItem.Query().Where(transferitem.IDEQ(item.ID)).Select(transferitem.FieldID, transferitem.FieldUserID, transferitem.FieldJobID, transferitem.FieldRemoteFileID, transferitem.FieldStorageName, transferitem.FieldVirtualPath, transferitem.FieldBlake3, transferitem.FieldBlockSize).OnlyX(ctx)
+	if _, err := markerItem.Update().SetReceivedBytes(0).Save(ctx); err == nil {
+		t.Fatal("marker-complete partial item entity bypassed received/completed validation")
+	}
+	if _, err := markerItem.Update().SetCompletedBlocks([]int{1}).Save(ctx); err == nil {
+		t.Fatal("marker-complete partial item entity bypassed completed block validation")
 	}
 
 	fullJob := db.TransferJob.GetX(ctx, job.ID)
@@ -224,6 +238,10 @@ func TestTransferPartialEntityUpdatesFailClosed(t *testing.T) {
 	}
 	if _, err := db.TransferItem.UpdateOneID(item.ID).SetReceivedBytes(transferBlockSize).Save(ctx); err != nil {
 		t.Fatalf("item UpdateOneID: %v", err)
+	}
+	zeroItem := newTransferItem(db, owner.ID, job.ID, 0, nil, 0).SaveX(ctx)
+	if _, err := zeroItem.Update().SetReceivedBytes(0).Save(ctx); err != nil {
+		t.Fatalf("zero-byte full item entity update: %v", err)
 	}
 }
 

@@ -32,20 +32,11 @@ func validateTransferJobMutation(next ent.Mutator) ent.Mutator {
 			return nil, fmt.Errorf("bulk transfer job updates are not supported")
 		}
 		if mutation.Op().Is(ent.OpCreate | ent.OpUpdateOne) {
-			if mutation.Op().Is(ent.OpUpdateOne) {
-				if err := requireTransferJobUpdateMarkers(ctx, mutation); err != nil {
-					return nil, err
-				}
-			}
-			totalBytes, err := mutationInt64(ctx, mutation, "total_bytes")
+			state, err := transferJobState(ctx, mutation)
 			if err != nil {
 				return nil, err
 			}
-			receivedBytes, err := mutationInt64(ctx, mutation, "received_bytes")
-			if err != nil {
-				return nil, err
-			}
-			if receivedBytes > totalBytes {
+			if state.ReceivedBytes > state.TotalBytes {
 				return nil, fmt.Errorf("transfer job received bytes exceed total bytes")
 			}
 		}
@@ -59,31 +50,17 @@ func validateTransferItemMutation(next ent.Mutator) ent.Mutator {
 			return nil, fmt.Errorf("bulk transfer item updates are not supported")
 		}
 		if mutation.Op().Is(ent.OpCreate | ent.OpUpdateOne) {
-			if mutation.Op().Is(ent.OpUpdateOne) {
-				if err := requireTransferItemUpdateMarkers(ctx, mutation); err != nil {
-					return nil, err
-				}
-			}
-			sizeBytes, err := mutationInt64(ctx, mutation, "size_bytes")
+			state, err := transferItemState(ctx, mutation)
 			if err != nil {
 				return nil, err
 			}
-			receivedBytes, err := mutationInt64(ctx, mutation, "received_bytes")
-			if err != nil {
+			if err := validateTransferBlockSize(state.BlockSize); err != nil {
 				return nil, err
 			}
-			blockHashes, err := mutationStrings(ctx, mutation, "block_hashes")
-			if err != nil {
-				return nil, err
-			}
-			if len(blockHashes) != transferBlockCount(sizeBytes) {
+			if len(state.BlockHashes) != transferBlockCount(state.SizeBytes) {
 				return nil, fmt.Errorf("transfer item block hash count does not match file size")
 			}
-			completedBlocks, err := mutationCompletedBlocks(ctx, mutation)
-			if err != nil {
-				return nil, err
-			}
-			if err := validateResumeProgress(sizeBytes, receivedBytes, completedBlocks); err != nil {
+			if err := validateResumeProgress(state.SizeBytes, state.ReceivedBytes, state.CompletedBlocks); err != nil {
 				return nil, err
 			}
 		}
@@ -91,65 +68,111 @@ func validateTransferItemMutation(next ent.Mutator) ent.Mutator {
 	})
 }
 
-func requireTransferJobUpdateMarkers(ctx context.Context, mutation ent.Mutation) error {
-	for _, name := range []string{"user_id", "client_id", "remote_share_id"} {
-		value, err := mutationOldString(ctx, mutation, name)
+func transferJobState(ctx context.Context, mutation ent.Mutation) (TransferJobInvariantState, error) {
+	if mutation.Op().Is(ent.OpUpdateOne) {
+		state, err := loadTransferJobInvariantState(ctx, mutation)
 		if err != nil {
-			return err
+			return TransferJobInvariantState{}, err
 		}
-		if err := validateUUIDv7(value); err != nil {
-			return fmt.Errorf("incomplete transfer job entity for update: %w", err)
-		}
+		return applyTransferJobMutation(mutation, state)
 	}
-	capability, err := mutationOldBytes(ctx, mutation, "remote_capability_cipher")
+	totalBytes, err := mutationInt64(ctx, mutation, "total_bytes")
 	if err != nil {
-		return err
+		return TransferJobInvariantState{}, err
 	}
-	if len(capability) == 0 {
-		return fmt.Errorf("incomplete transfer job entity for update")
+	receivedBytes, err := mutationInt64(ctx, mutation, "received_bytes")
+	if err != nil {
+		return TransferJobInvariantState{}, err
 	}
-	return nil
+	return TransferJobInvariantState{TotalBytes: totalBytes, ReceivedBytes: receivedBytes}, nil
 }
 
-func requireTransferItemUpdateMarkers(ctx context.Context, mutation ent.Mutation) error {
-	for _, name := range []string{"user_id", "job_id", "remote_file_id"} {
-		value, err := mutationOldString(ctx, mutation, name)
+func applyTransferJobMutation(mutation ent.Mutation, state TransferJobInvariantState) (TransferJobInvariantState, error) {
+	if _, added := mutation.AddedField("total_bytes"); added {
+		return TransferJobInvariantState{}, fmt.Errorf("additive update for total_bytes is not supported")
+	}
+	if _, added := mutation.AddedField("received_bytes"); added {
+		return TransferJobInvariantState{}, fmt.Errorf("additive update for received_bytes is not supported")
+	}
+	if value, ok := mutation.Field("total_bytes"); ok {
+		var valid bool
+		state.TotalBytes, valid = value.(int64)
+		if !valid {
+			return TransferJobInvariantState{}, fmt.Errorf("unexpected type %T for total_bytes", value)
+		}
+	}
+	if value, ok := mutation.Field("received_bytes"); ok {
+		var valid bool
+		state.ReceivedBytes, valid = value.(int64)
+		if !valid {
+			return TransferJobInvariantState{}, fmt.Errorf("unexpected type %T for received_bytes", value)
+		}
+	}
+	return state, nil
+}
+
+func transferItemState(ctx context.Context, mutation ent.Mutation) (TransferItemInvariantState, error) {
+	if mutation.Op().Is(ent.OpUpdateOne) {
+		state, err := loadTransferItemInvariantState(ctx, mutation)
 		if err != nil {
-			return err
+			return TransferItemInvariantState{}, err
 		}
-		if err := validateUUIDv7(value); err != nil {
-			return fmt.Errorf("incomplete transfer item entity for update: %w", err)
+		return applyTransferItemMutation(mutation, state)
+	}
+	sizeBytes, err := mutationInt64(ctx, mutation, "size_bytes")
+	if err != nil {
+		return TransferItemInvariantState{}, err
+	}
+	blockSize, err := mutationInt64(ctx, mutation, "block_size")
+	if err != nil {
+		return TransferItemInvariantState{}, err
+	}
+	blockHashes, err := mutationStrings(ctx, mutation, "block_hashes")
+	if err != nil {
+		return TransferItemInvariantState{}, err
+	}
+	completedBlocks, err := mutationCompletedBlocks(ctx, mutation)
+	if err != nil {
+		return TransferItemInvariantState{}, err
+	}
+	receivedBytes, err := mutationInt64(ctx, mutation, "received_bytes")
+	if err != nil {
+		return TransferItemInvariantState{}, err
+	}
+	return TransferItemInvariantState{SizeBytes: sizeBytes, BlockSize: blockSize, BlockHashes: blockHashes, CompletedBlocks: completedBlocks, ReceivedBytes: receivedBytes}, nil
+}
+
+func applyTransferItemMutation(mutation ent.Mutation, state TransferItemInvariantState) (TransferItemInvariantState, error) {
+	if _, added := mutation.AddedField("received_bytes"); added {
+		return TransferItemInvariantState{}, fmt.Errorf("additive update for received_bytes is not supported")
+	}
+	if value, ok := mutation.Field("received_bytes"); ok {
+		var valid bool
+		state.ReceivedBytes, valid = value.(int64)
+		if !valid {
+			return TransferItemInvariantState{}, fmt.Errorf("unexpected type %T for received_bytes", value)
 		}
 	}
-	storageName, err := mutationOldString(ctx, mutation, "storage_name")
-	if err != nil {
-		return err
+	if value, ok := mutation.Field("completed_blocks"); ok {
+		var valid bool
+		state.CompletedBlocks, valid = value.([]int)
+		if !valid {
+			return TransferItemInvariantState{}, fmt.Errorf("unexpected type %T for completed_blocks", value)
+		}
 	}
-	if err := validateStorageName(storageName); err != nil {
-		return fmt.Errorf("incomplete transfer item entity for update: %w", err)
+	appender, ok := mutation.(appendedCompletedBlocksMutation)
+	if !ok {
+		return state, nil
 	}
-	virtualPath, err := mutationOldString(ctx, mutation, "virtual_path")
-	if err != nil {
-		return err
+	appended, ok := appender.AppendedCompletedBlocks()
+	if !ok {
+		return state, nil
 	}
-	if err := validateVirtualPath(virtualPath); err != nil {
-		return fmt.Errorf("incomplete transfer item entity for update: %w", err)
+	if _, set := mutation.Field("completed_blocks"); set {
+		return TransferItemInvariantState{}, fmt.Errorf("set and append completed blocks in one mutation are not supported")
 	}
-	blake3, err := mutationOldString(ctx, mutation, "blake3")
-	if err != nil {
-		return err
-	}
-	if err := validateBLAKE3(blake3); err != nil {
-		return fmt.Errorf("incomplete transfer item entity for update: %w", err)
-	}
-	blockSize, err := mutationOldInt64(ctx, mutation, "block_size")
-	if err != nil {
-		return err
-	}
-	if err := validateTransferBlockSize(blockSize); err != nil {
-		return fmt.Errorf("incomplete transfer item entity for update: %w", err)
-	}
-	return nil
+	state.CompletedBlocks = append(state.CompletedBlocks, appended...)
+	return state, nil
 }
 
 func mutationInt64(ctx context.Context, mutation ent.Mutation, name string) (int64, error) {
@@ -170,42 +193,6 @@ func mutationInt64(ctx context.Context, mutation ent.Mutation, name string) (int
 	result, ok := value.(int64)
 	if !ok {
 		return 0, fmt.Errorf("unexpected old type %T for %s", value, name)
-	}
-	return result, nil
-}
-
-func mutationOldInt64(ctx context.Context, mutation ent.Mutation, name string) (int64, error) {
-	value, err := mutation.OldField(ctx, name)
-	if err != nil {
-		return 0, fmt.Errorf("load existing %s: %w", name, err)
-	}
-	result, ok := value.(int64)
-	if !ok {
-		return 0, fmt.Errorf("unexpected old type %T for %s", value, name)
-	}
-	return result, nil
-}
-
-func mutationOldString(ctx context.Context, mutation ent.Mutation, name string) (string, error) {
-	value, err := mutation.OldField(ctx, name)
-	if err != nil {
-		return "", fmt.Errorf("load existing %s: %w", name, err)
-	}
-	result, ok := value.(string)
-	if !ok {
-		return "", fmt.Errorf("unexpected old type %T for %s", value, name)
-	}
-	return result, nil
-}
-
-func mutationOldBytes(ctx context.Context, mutation ent.Mutation, name string) ([]byte, error) {
-	value, err := mutation.OldField(ctx, name)
-	if err != nil {
-		return nil, fmt.Errorf("load existing %s: %w", name, err)
-	}
-	result, ok := value.([]byte)
-	if !ok {
-		return nil, fmt.Errorf("unexpected old type %T for %s", value, name)
 	}
 	return result, nil
 }
