@@ -55,7 +55,10 @@ func fileLinkCount(os.FileInfo) (uint64, bool) {
 	return 0, false
 }
 
-func rootedFileLinkCount(root *os.Root, name string, _ os.FileInfo) (uint64, bool, error) {
+func rootedFileLinkCount(root *os.Root, name string, before os.FileInfo) (uint64, bool, error) {
+	if err := validatePlatformFileInfo(before); err != nil {
+		return 0, false, err
+	}
 	file, err := root.Open(name)
 	if err != nil {
 		return 0, false, err
@@ -67,6 +70,26 @@ func rootedFileLinkCount(root *os.Root, name string, _ os.FileInfo) (uint64, boo
 	}
 	if info.FileAttributes&syscall.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
 		return 0, false, ErrSymlink
+	}
+	if info.FileAttributes&syscall.FILE_ATTRIBUTE_DIRECTORY != 0 {
+		return 0, false, ErrNotRegular
+	}
+	if err := validateWindowsPrivateDACL(file); err != nil {
+		return 0, false, err
+	}
+	opened, err := file.Stat()
+	if err != nil {
+		return 0, false, err
+	}
+	after, err := root.Lstat(name)
+	if err != nil {
+		return 0, false, err
+	}
+	if err := validatePlatformFileInfo(after); err != nil {
+		return 0, false, err
+	}
+	if err := validateStableFileIdentity(before, opened, after); err != nil {
+		return 0, false, err
 	}
 	return uint64(info.NumberOfLinks), true, nil
 }
@@ -87,7 +110,10 @@ func validateOpenedRegularFile(file *os.File, expectedLinks uint64) error {
 	if err != nil {
 		return err
 	}
-	return validateWindowsHandleInformation(info, expectedLinks, false)
+	if err := validateWindowsHandleInformation(info, expectedLinks, false); err != nil {
+		return err
+	}
+	return validateWindowsPrivateDACL(file)
 }
 
 func validateOpenedDirectory(file *os.File) error {

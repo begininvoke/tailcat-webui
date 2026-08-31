@@ -1467,6 +1467,129 @@ func TestRecoveryRejectsAmbiguousThreeLinkPair(t *testing.T) {
 	}
 }
 
+func TestPairRecoveryRejectsFinalReplacementBetweenVerifyAndUnlink(t *testing.T) {
+	storage, _, tempName, finalName := makeFailedTempFinalPair(t)
+	storage.hooks.remove = (*os.Root).Remove
+	var replaced atomic.Bool
+	storage.hooks.afterPairVerified = func() {
+		if !replaced.CompareAndSwap(false, true) {
+			return
+		}
+		finalPath := filepath.Join(storageTestSharePath(storage), finalName)
+		if err := os.Remove(finalPath); err != nil {
+			t.Errorf("remove verified final: %v", err)
+			return
+		}
+		if err := os.WriteFile(finalPath, []byte("replacement"), 0o600); err != nil {
+			t.Errorf("write replacement final: %v", err)
+		}
+	}
+	if _, err := storage.CleanupTemps(t.Context(), testOwnerID, testShareID); !errors.Is(err, ErrFileChanged) {
+		t.Fatalf("replacement recovery error = %v, want ErrFileChanged", err)
+	}
+	if _, err := os.Lstat(filepath.Join(storageTestSharePath(storage), tempName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("verified temp alias remains: %v", err)
+	}
+	content, err := os.ReadFile(filepath.Join(storageTestSharePath(storage), finalName))
+	if err != nil || string(content) != "replacement" {
+		t.Fatalf("replacement content=%q error=%v", content, err)
+	}
+	if got := requireUsage(t, storage); got != (QuotaUsage{OwnerBytes: 3, ShareBytes: 3, ShareFiles: 1}) {
+		t.Fatalf("quota after rejected replacement = %+v", got)
+	}
+}
+
+func TestValidateStableFileIdentityRejectsReplacement(t *testing.T) {
+	directory := t.TempDir()
+	firstPath := filepath.Join(directory, "first")
+	secondPath := filepath.Join(directory, "second")
+	if err := os.WriteFile(firstPath, []byte("first"), 0o600); err != nil {
+		t.Fatalf("Write first: %v", err)
+	}
+	if err := os.WriteFile(secondPath, []byte("second"), 0o600); err != nil {
+		t.Fatalf("Write second: %v", err)
+	}
+	first, err := os.Stat(firstPath)
+	if err != nil {
+		t.Fatalf("Stat first: %v", err)
+	}
+	second, err := os.Stat(secondPath)
+	if err != nil {
+		t.Fatalf("Stat second: %v", err)
+	}
+	if err := validateStableFileIdentity(first, first, first); err != nil {
+		t.Fatalf("stable identity: %v", err)
+	}
+	if err := validateStableFileIdentity(first, first, second); !errors.Is(err, ErrFileChanged) {
+		t.Fatalf("replacement identity error = %v, want ErrFileChanged", err)
+	}
+}
+
+func TestCloseRacingAfterLifecycleCheckWaitsForLinkWinner(t *testing.T) {
+	rootPath := filepath.Join(t.TempDir(), "staging")
+	storage, err := NewStorage(rootPath)
+	if err != nil {
+		t.Fatalf("NewStorage: %v", err)
+	}
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	storage.hooks.afterLifecycleCheckBeforeLink = func() {
+		close(entered)
+		<-release
+	}
+	storeDone := make(chan struct {
+		file StoredFile
+		err  error
+	}, 1)
+	go func() {
+		file, err := storage.Store(t.Context(), testOwnerID, testShareID, 3, readCloser(strings.NewReader("abc")))
+		storeDone <- struct {
+			file StoredFile
+			err  error
+		}{file: file, err: err}
+	}()
+	<-entered
+	closeStarted := make(chan struct{})
+	closeDone := make(chan error, 1)
+	go func() {
+		close(closeStarted)
+		closeDone <- storage.Close()
+	}()
+	<-closeStarted
+	select {
+	case err := <-closeDone:
+		close(release)
+		<-storeDone
+		t.Fatalf("Close crossed the checked-but-unlinked publication: %v", err)
+	default:
+	}
+	close(release)
+	stored := <-storeDone
+	if stored.err != nil {
+		t.Fatalf("link-winning Store: %v", stored.err)
+	}
+	if err := <-closeDone; err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	reopened, err := NewStorage(rootPath)
+	if err != nil {
+		t.Fatalf("reopen Storage: %v", err)
+	}
+	defer reopened.Close()
+	if got := requireUsage(t, reopened); got != (QuotaUsage{OwnerBytes: 3, ShareBytes: 3, ShareFiles: 1}) {
+		t.Fatalf("post-Close committed usage = %+v", got)
+	}
+	handle, err := reopened.Open(t.Context(), testOwnerID, testShareID, stored.file.StorageName)
+	if err != nil {
+		t.Fatalf("Open linked winner: %v", err)
+	}
+	content, err := io.ReadAll(handle)
+	closeErr := handle.Close()
+	if err != nil || closeErr != nil || string(content) != "abc" {
+		t.Fatalf("linked winner content=%q readErr=%v closeErr=%v", content, err, closeErr)
+	}
+}
+
 func TestRemoveMissingCommittedFileReleasesQuotaIdempotently(t *testing.T) {
 	storage := newTestStorage(t)
 	stored, err := storage.Store(t.Context(), testOwnerID, testShareID, 3, readCloser(strings.NewReader("abc")))
@@ -1829,6 +1952,11 @@ func (r *blockingReadCloser) Close() error {
 type noProgressReadCloser struct {
 	reads  atomic.Int32
 	closed atomic.Bool
+}
+
+func ExampleStorage_Close_reentrantCallbacks() {
+	fmt.Println("call Storage.Close only after source and hook callbacks return")
+	// Output: call Storage.Close only after source and hook callbacks return
 }
 
 type signalingReadCloser struct {

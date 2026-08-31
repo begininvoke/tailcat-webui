@@ -95,12 +95,14 @@ type QuotaUsage struct {
 }
 
 type storageHooks struct {
-	syncFile      func(*os.File) error
-	syncDir       func(*os.File) error
-	link          func(*os.Root, string, string) error
-	remove        func(*os.Root, string) error
-	beforePublish func()
-	afterIngest   func(int64, string)
+	syncFile                      func(*os.File) error
+	syncDir                       func(*os.File) error
+	link                          func(*os.Root, string, string) error
+	remove                        func(*os.Root, string) error
+	beforePublish                 func()
+	afterIngest                   func(int64, string)
+	afterPairVerified             func()
+	afterLifecycleCheckBeforeLink func()
 }
 
 type constructorHooks struct {
@@ -344,7 +346,14 @@ func validatePrivateDirectory(info os.FileInfo) error {
 	return nil
 }
 
-// Close releases the rooted directory handle. It is idempotent.
+// Close cancels and joins admitted operations, then releases the rooted
+// directory handle. It is idempotent.
+//
+// Close must not be called synchronously from an upload source's Read or Close
+// method, or from a Storage test/instrumentation hook invoked inside an admitted
+// operation. Close waits for that operation, so a callback waiting on Close
+// would wait on itself. Signal an external owner and return from the callback
+// before that owner calls Close.
 func (s *Storage) Close() error {
 	if s == nil || s.root == nil {
 		return nil
@@ -355,6 +364,8 @@ func (s *Storage) Close() error {
 		s.closed.Store(true)
 	}
 	s.lifecycleMu.Unlock()
+	// The exported reentrancy contract above is required: an admitted callback
+	// cannot synchronously join the operation currently executing that callback.
 	s.active.Wait()
 	s.releasePendingReservations()
 	s.closeOnce.Do(func() {
@@ -1018,7 +1029,24 @@ func (s *Storage) publishNoReplace(ctx context.Context, root *os.Root, tempName 
 		if err := s.operationError(ctx); err != nil {
 			return "", err
 		}
+		s.lifecycleMu.Lock()
+		if s.closed.Load() {
+			s.lifecycleMu.Unlock()
+			return "", ErrClosed
+		}
+		if err := contextError(ctx); err != nil {
+			s.lifecycleMu.Unlock()
+			return "", err
+		}
+		if s.hooks.afterLifecycleCheckBeforeLink != nil {
+			s.hooks.afterLifecycleCheckBeforeLink()
+		}
+		if err := contextError(ctx); err != nil {
+			s.lifecycleMu.Unlock()
+			return "", err
+		}
 		err = s.hooks.link(root, tempName, name)
+		s.lifecycleMu.Unlock()
 		if err == nil {
 			return name, nil
 		}
@@ -1291,12 +1319,19 @@ func (s *Storage) prepareFinalEntry(root *os.Root, finalName string) (os.FileInf
 	if links != 2 {
 		return nil, ErrMultipleLinks
 	}
-	tempName, verifiedFinal, err := verifiedTempFinalPair(root, finalName)
-	if err != nil || verifiedFinal != finalName {
+	pair, err := verifiedTempFinalPair(root, finalName)
+	if err != nil || pair.finalName != finalName {
 		return nil, errors.Join(ErrMultipleLinks, err)
 	}
-	if err := s.hooks.remove(root, tempName); err != nil {
+	defer pair.final.Close()
+	if s.hooks.afterPairVerified != nil {
+		s.hooks.afterPairVerified()
+	}
+	if err := s.hooks.remove(root, pair.tempName); err != nil {
 		return nil, fmt.Errorf("remove temporary alias: %w", err)
+	}
+	if err := validateRecoveredFinal(root, pair); err != nil {
+		return nil, err
 	}
 	if err := s.syncShareDirectory(root); err != nil {
 		return nil, fmt.Errorf("sync temporary-alias removal: %w", err)
@@ -1305,60 +1340,71 @@ func (s *Storage) prepareFinalEntry(root *os.Root, finalName string) (os.FileInf
 }
 
 func (s *Storage) recoverTempAlias(root *os.Root, tempName string) (string, error) {
-	verifiedTemp, finalName, err := verifiedTempFinalPair(root, tempName)
-	if err != nil || verifiedTemp != tempName {
+	pair, err := verifiedTempFinalPair(root, tempName)
+	if err != nil || pair.tempName != tempName {
 		return "", errors.Join(ErrMultipleLinks, err)
+	}
+	defer pair.final.Close()
+	if s.hooks.afterPairVerified != nil {
+		s.hooks.afterPairVerified()
 	}
 	if err := s.hooks.remove(root, tempName); err != nil {
 		return "", fmt.Errorf("remove temporary alias: %w", err)
 	}
-	if _, err := safeRegularInfo(root, finalName); err != nil {
-		return "", fmt.Errorf("validate recovered final: %w", err)
+	if err := validateRecoveredFinal(root, pair); err != nil {
+		return "", err
 	}
-	return finalName, nil
+	return pair.finalName, nil
 }
 
-func verifiedTempFinalPair(root *os.Root, memberName string) (string, string, error) {
+type verifiedPair struct {
+	tempName  string
+	finalName string
+	final     *os.File
+	finalInfo os.FileInfo
+}
+
+func verifiedTempFinalPair(root *os.Root, memberName string) (verifiedPair, error) {
 	member, err := privateRegularInfo(root, memberName)
 	if err != nil {
-		return "", "", err
+		return verifiedPair{}, err
 	}
 	links, available, err := rootedFileLinkCount(root, memberName, member)
 	if err != nil {
-		return "", "", err
+		return verifiedPair{}, err
 	}
 	if !available || links != 2 {
-		return "", "", ErrMultipleLinks
+		return verifiedPair{}, ErrMultipleLinks
 	}
 	entries, err := readRootDirectory(root)
 	if err != nil {
-		return "", "", err
+		return verifiedPair{}, err
 	}
 	aliases := make([]string, 0, 2)
 	for _, entry := range entries {
 		info, err := root.Lstat(entry.Name())
 		if err != nil {
-			return "", "", err
+			return verifiedPair{}, err
 		}
 		if os.SameFile(member, info) {
 			aliases = append(aliases, entry.Name())
 		}
 	}
 	if len(aliases) != 2 {
-		return "", "", ErrMultipleLinks
+		return verifiedPair{}, ErrMultipleLinks
 	}
 	var tempName, finalName string
 	for _, name := range aliases {
 		info, err := privateRegularInfo(root, name)
 		if err != nil {
-			return "", "", err
+			return verifiedPair{}, err
 		}
 		aliasLinks, available, err := rootedFileLinkCount(root, name, info)
 		if err != nil {
-			return "", "", err
+			return verifiedPair{}, err
 		}
 		if !available || aliasLinks != 2 {
-			return "", "", ErrMultipleLinks
+			return verifiedPair{}, ErrMultipleLinks
 		}
 		switch {
 		case isTempName(name) && tempName == "":
@@ -1366,13 +1412,67 @@ func verifiedTempFinalPair(root *os.Root, memberName string) (string, string, er
 		case !isTempName(name) && validateStorageName(name) == nil && finalName == "":
 			finalName = name
 		default:
-			return "", "", ErrMultipleLinks
+			return verifiedPair{}, ErrMultipleLinks
 		}
 	}
 	if tempName == "" || finalName == "" {
-		return "", "", ErrMultipleLinks
+		return verifiedPair{}, ErrMultipleLinks
 	}
-	return tempName, finalName, nil
+	before, err := privateRegularInfo(root, finalName)
+	if err != nil {
+		return verifiedPair{}, err
+	}
+	final, err := root.Open(finalName)
+	if err != nil {
+		return verifiedPair{}, err
+	}
+	opened, err := final.Stat()
+	if err != nil {
+		_ = final.Close()
+		return verifiedPair{}, err
+	}
+	after, err := privateRegularInfo(root, finalName)
+	if err != nil {
+		_ = final.Close()
+		return verifiedPair{}, err
+	}
+	if err := validateStableFileIdentity(before, opened, after); err != nil || !os.SameFile(member, opened) {
+		_ = final.Close()
+		return verifiedPair{}, errors.Join(err, ErrFileChanged)
+	}
+	if err := validateOpenedRegularFile(final, 2); err != nil {
+		_ = final.Close()
+		return verifiedPair{}, err
+	}
+	return verifiedPair{tempName: tempName, finalName: finalName, final: final, finalInfo: opened}, nil
+}
+
+func validateRecoveredFinal(root *os.Root, pair verifiedPair) error {
+	pathInfo, err := privateRegularInfo(root, pair.finalName)
+	if err != nil {
+		return fmt.Errorf("reinspect recovered final: %w", err)
+	}
+	handleInfo, err := pair.final.Stat()
+	if err != nil {
+		return fmt.Errorf("restat recovered final handle: %w", err)
+	}
+	if err := validateStableFileIdentity(pair.finalInfo, handleInfo, pathInfo); err != nil {
+		return err
+	}
+	if err := validateOpenedRegularFile(pair.final, 1); err != nil {
+		return err
+	}
+	if _, err := safeRegularInfo(root, pair.finalName); err != nil {
+		return fmt.Errorf("validate recovered final: %w", err)
+	}
+	return nil
+}
+
+func validateStableFileIdentity(before, opened, after os.FileInfo) error {
+	if before == nil || opened == nil || after == nil || !os.SameFile(before, opened) || !os.SameFile(opened, after) {
+		return ErrFileChanged
+	}
+	return nil
 }
 
 func validateStoredFileInfo(info os.FileInfo) error {
