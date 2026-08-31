@@ -8,7 +8,9 @@ import (
 	"log/slog"
 	"net"
 	"reflect"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/ca-x/tailcat-webui/ent"
 	"github.com/ca-x/tailcat-webui/ent/enttest"
@@ -96,6 +98,140 @@ func (r *fakeClientRuntime) DialTCPPort(context.Context, uint16) (net.Conn, erro
 
 func (r *fakeClientRuntime) Dial(context.Context, string, string) (net.Conn, error) {
 	return nil, errFakeRuntime
+}
+
+type recordingTailcatServerEngine struct {
+	mu     sync.Mutex
+	events []string
+}
+
+func (e *recordingTailcatServerEngine) Start() error {
+	e.record("start")
+	return nil
+}
+
+func (e *recordingTailcatServerEngine) Close() error {
+	e.record("close")
+	return nil
+}
+
+func (e *recordingTailcatServerEngine) DrainTCP(context.Context) error {
+	e.record("drain")
+	return nil
+}
+
+func (e *recordingTailcatServerEngine) ConnectionToken() string { return "fake-token" }
+func (e *recordingTailcatServerEngine) PublicKey() string       { return "nodekey:fake-server" }
+func (e *recordingTailcatServerEngine) AddAllowedClient(key.NodePublic) {
+}
+
+func (e *recordingTailcatServerEngine) record(event string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.events = append(e.events, event)
+}
+
+func (e *recordingTailcatServerEngine) recordedEvents() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]string(nil), e.events...)
+}
+
+func TestTailcatRuntimeAdapterShutdownCancelsHandlers(t *testing.T) {
+	engine := new(recordingTailcatServerEngine)
+	runtime := newTailcatServerRuntime(engine)
+	if err := runtime.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	slots := make(chan struct{}, 1)
+	started := make(chan struct{})
+	canceled := make(chan struct{})
+	connectionClosed := make(chan error, 1)
+	release := make(chan struct{})
+	handler := runtime.wrapHandler(slots, func(ctx context.Context, connection net.Conn) {
+		close(started)
+		<-ctx.Done()
+		close(canceled)
+		_, err := connection.Write([]byte("closed"))
+		connectionClosed <- err
+		<-release
+		engine.record("handler-exit")
+	})
+	admitted, peer := net.Pipe()
+	t.Cleanup(func() { _ = peer.Close() })
+	go handler(admitted)
+	waitForRuntimeSignal(t, started, "admitted handler start")
+
+	shutdownErr := make(chan error, 1)
+	go func() {
+		shutdownErr <- (&runningServer{server: runtime}).shutdown(t.Context())
+	}()
+	waitForRuntimeSignal(t, canceled, "handler context cancellation")
+	if err := waitForRuntimeError(t, connectionClosed, "tracked connection close"); err == nil {
+		t.Fatal("tracked connection remained writable during shutdown")
+	}
+	if got, want := engine.recordedEvents(), []string{"start"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("events while handler is active = %v, want %v", got, want)
+	}
+	select {
+	case err := <-shutdownErr:
+		t.Fatalf("shutdown returned before admitted handler exited: %v", err)
+	default:
+	}
+
+	lateRan := make(chan struct{}, 1)
+	lateHandler := runtime.wrapHandler(slots, func(context.Context, net.Conn) {
+		lateRan <- struct{}{}
+	})
+	lateConnection, latePeer := net.Pipe()
+	t.Cleanup(func() { _ = latePeer.Close() })
+	lateDone := make(chan struct{})
+	go func() {
+		lateHandler(lateConnection)
+		close(lateDone)
+	}()
+	waitForRuntimeSignal(t, lateDone, "late admission rejection")
+	select {
+	case <-lateRan:
+		t.Fatal("handler ran after shutdown stopped admission")
+	default:
+	}
+	if _, err := latePeer.Read(make([]byte, 1)); err == nil {
+		t.Fatal("late connection remained open after admission rejection")
+	}
+
+	close(release)
+	if err := waitForRuntimeError(t, shutdownErr, "runtime shutdown"); err != nil {
+		t.Fatalf("shutdown: %v", err)
+	}
+	if got, want := engine.recordedEvents(), []string{"start", "handler-exit", "drain", "close"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("shutdown events = %v, want %v", got, want)
+	}
+}
+
+func waitForRuntimeSignal(t *testing.T, signal <-chan struct{}, name string) {
+	t.Helper()
+	timer := time.NewTimer(2 * time.Second)
+	defer timer.Stop()
+	select {
+	case <-signal:
+	case <-timer.C:
+		t.Fatalf("timed out waiting for %s", name)
+	}
+}
+
+func waitForRuntimeError(t *testing.T, result <-chan error, name string) error {
+	t.Helper()
+	timer := time.NewTimer(2 * time.Second)
+	defer timer.Stop()
+	select {
+	case err := <-result:
+		return err
+	case <-timer.C:
+		t.Fatalf("timed out waiting for %s", name)
+		return nil
+	}
 }
 
 func TestManagerStartFailureUsesRuntimeFactory(t *testing.T) {

@@ -95,3 +95,49 @@ Subject: `refactor: isolate Tailcat runtime adapters`
 - Reserved ports are exposed through the adapter contract now; registration and
   explicit rejection of user mappings on 41640/41641 remain intentionally
   deferred to the later diagnostics/transfer tasks per the preflight ruling.
+
+## Fix round 1: deterministic adapter cancellation
+
+Status: addressed the runtime-contracts review finding with a deterministic
+test at the concrete `tailcatServerRuntime` boundary. The only production seam
+added is the internal `tailcatServerEngine` interface and its upstream Tailcat
+wrapper; admission, cancellation, tracking, drain, and close behavior remain in
+the concrete adapter.
+
+Red command:
+
+```text
+go test -count=1 ./internal/tailnet -run '^TestTailcatRuntimeAdapterShutdownCancelsHandlers$'
+```
+
+Red result: compilation failed because the recording engine could not be passed
+to `newTailcatServerRuntime`, which still required `*tailcat.Server`.
+
+Green command and result:
+
+```text
+go test -count=1 ./internal/tailnet -run '^TestTailcatRuntimeAdapterShutdownCancelsHandlers$'
+ok  github.com/ca-x/tailcat-webui/internal/tailnet  0.006s
+```
+
+Race stress and scoped integration results:
+
+```text
+go test -count=50 -race ./internal/tailnet -run '^TestTailcatRuntimeAdapterShutdownCancelsHandlers$'
+ok  github.com/ca-x/tailcat-webui/internal/tailnet  1.029s
+
+go test -count=1 -race ./internal/tailnet
+ok  github.com/ca-x/tailcat-webui/internal/tailnet  1.823s
+```
+
+The test uses channel handshakes to prove all of the following without sleeps
+or external network access:
+
+- an admitted handler starts and receives adapter-owned context cancellation;
+- shutdown closes the handler's tracked connection;
+- a connection arriving after shutdown is closed without running its handler;
+- upstream `DrainTCP` is not invoked while the admitted handler is held open;
+- after handler exit, the exact observed order is handler exit, `DrainTCP`, then
+  `Close`.
+
+Fix commit subject: `test: cover runtime adapter cancellation`.

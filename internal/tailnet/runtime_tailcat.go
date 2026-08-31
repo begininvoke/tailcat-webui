@@ -44,7 +44,7 @@ func (tailcatRuntimeFactory) NewServer(_ context.Context, spec ServerSpec) (Serv
 		AllowedClients: slices.Clone(spec.AllowedClients),
 		AllowProxy:     spec.AllowProxy,
 	}
-	runtime := newTailcatServerRuntime(server)
+	runtime := newTailcatServerRuntime(&upstreamTailcatServer{server: server})
 	directSlots := make(chan struct{}, 128)
 	server.OnTCP = func(port uint16) func(net.Conn) {
 		handler := reservedHandlers[port]
@@ -97,7 +97,7 @@ func (tailcatRuntimeFactory) NewClient(_ context.Context, spec ClientSpec) (Clie
 }
 
 type tailcatServerRuntime struct {
-	server      *tailcat.Server
+	server      tailcatServerEngine
 	ctx         context.Context
 	cancel      context.CancelFunc
 	admissionMu sync.Mutex
@@ -106,7 +106,44 @@ type tailcatServerRuntime struct {
 	connections map[net.Conn]struct{}
 }
 
-func newTailcatServerRuntime(server *tailcat.Server) *tailcatServerRuntime {
+type tailcatServerEngine interface {
+	Start() error
+	Close() error
+	DrainTCP(context.Context) error
+	ConnectionToken() string
+	PublicKey() string
+	AddAllowedClient(key.NodePublic)
+}
+
+type upstreamTailcatServer struct {
+	server *tailcat.Server
+}
+
+func (s *upstreamTailcatServer) Start() error { return s.server.Start() }
+
+func (s *upstreamTailcatServer) Close() error { return s.server.Close() }
+
+func (s *upstreamTailcatServer) DrainTCP(ctx context.Context) error {
+	return s.server.DrainTCP(ctx)
+}
+
+func (s *upstreamTailcatServer) ConnectionToken() string {
+	return string(s.server.ConnBlob())
+}
+
+func (s *upstreamTailcatServer) PublicKey() string {
+	info, err := tailcat.ParseConnBlob(s.server.ConnBlob())
+	if err != nil {
+		return ""
+	}
+	return info.ServerPublic.String()
+}
+
+func (s *upstreamTailcatServer) AddAllowedClient(public key.NodePublic) {
+	s.server.AddAllowedClient(public)
+}
+
+func newTailcatServerRuntime(server tailcatServerEngine) *tailcatServerRuntime {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &tailcatServerRuntime{
 		server:      server,
@@ -140,15 +177,11 @@ func (r *tailcatServerRuntime) DrainTCP(ctx context.Context) error {
 }
 
 func (r *tailcatServerRuntime) ConnectionToken() string {
-	return string(r.server.ConnBlob())
+	return r.server.ConnectionToken()
 }
 
 func (r *tailcatServerRuntime) PublicKey() string {
-	info, err := tailcat.ParseConnBlob(r.server.ConnBlob())
-	if err != nil {
-		return ""
-	}
-	return info.ServerPublic.String()
+	return r.server.PublicKey()
 }
 
 func (r *tailcatServerRuntime) AddAllowedClient(public key.NodePublic) {
