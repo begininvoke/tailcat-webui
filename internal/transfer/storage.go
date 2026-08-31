@@ -107,7 +107,9 @@ type storageHooks struct {
 }
 
 type constructorHooks struct {
-	afterInitialLstat func()
+	afterInitialLstat  func()
+	syncDir            func(*os.File) error
+	closeVerifiedFinal func(*os.File) error
 }
 
 // Storage owns all filesystem path construction for staged transfer bytes.
@@ -247,6 +249,12 @@ func newStorage(rootPath string, constructorHooks constructorHooks) (*Storage, e
 	storage.hooks.link = (*os.Root).Link
 	storage.hooks.remove = (*os.Root).Remove
 	storage.hooks.closeVerifiedFinal = (*os.File).Close
+	if constructorHooks.syncDir != nil {
+		storage.hooks.syncDir = constructorHooks.syncDir
+	}
+	if constructorHooks.closeVerifiedFinal != nil {
+		storage.hooks.closeVerifiedFinal = constructorHooks.closeVerifiedFinal
+	}
 	if initializeQuota {
 		finishSharedQuotaInitialization(sharedQuota, storage.rebuildQuota())
 	}
@@ -875,10 +883,19 @@ func (s *Storage) CleanupTemps(ctx context.Context, ownerID, shareID string) (in
 			return removed, linkErr
 		}
 		if available && links == 2 {
-			if _, err := s.recoverTempAlias(shareRoot, entry.Name()); err != nil {
-				return removed, err
+			recovered, recoverErr := s.recoverTempAlias(shareRoot, entry.Name())
+			if recovered {
+				removed++
 			}
-			removed++
+			if recoverErr != nil {
+				var syncErr error
+				if recovered {
+					if err := s.syncShareDirectory(shareRoot); err != nil {
+						syncErr = fmt.Errorf("sync cleaned directory: %w", err)
+					}
+				}
+				return removed, errors.Join(recoverErr, syncErr)
+			}
 			continue
 		}
 		if err := validateStoredFileInfo(info); err != nil {
@@ -1174,12 +1191,21 @@ func (s *Storage) rebuildQuota() error {
 					return linkErr
 				}
 				if available && links == 2 {
-					if _, err := s.recoverTempAlias(shareRoot, fileEntry.Name()); err != nil {
+					recovered, recoverErr := s.recoverTempAlias(shareRoot, fileEntry.Name())
+					if recovered {
+						recoveredAlias = true
+					}
+					if recoverErr != nil {
+						var syncErr error
+						if recovered {
+							if err := s.syncShareDirectory(shareRoot); err != nil {
+								syncErr = fmt.Errorf("sync recovered share directory: %w", err)
+							}
+						}
 						_ = shareRoot.Close()
 						_ = ownerRoot.Close()
-						return err
+						return errors.Join(recoverErr, syncErr)
 					}
-					recoveredAlias = true
 				}
 			}
 			if recoveredAlias {
@@ -1344,25 +1370,27 @@ func (s *Storage) prepareFinalEntry(root *os.Root, finalName string) (_ os.FileI
 	return safeRegularInfo(root, finalName)
 }
 
-func (s *Storage) recoverTempAlias(root *os.Root, tempName string) (_ string, retErr error) {
+// recoverTempAlias reports a completed unlink and validation independently of
+// an error closing the pinned final handle.
+func (s *Storage) recoverTempAlias(root *os.Root, tempName string) (recovered bool, retErr error) {
 	pair, err := verifiedTempFinalPair(root, tempName)
 	if err != nil {
-		return "", errors.Join(ErrMultipleLinks, err)
+		return false, errors.Join(ErrMultipleLinks, err)
 	}
 	defer s.joinVerifiedFinalClose(pair.final, &retErr)
 	if pair.tempName != tempName {
-		return "", ErrMultipleLinks
+		return false, ErrMultipleLinks
 	}
 	if s.hooks.afterPairVerified != nil {
 		s.hooks.afterPairVerified()
 	}
 	if err := s.hooks.remove(root, tempName); err != nil {
-		return "", fmt.Errorf("remove temporary alias: %w", err)
+		return false, fmt.Errorf("remove temporary alias: %w", err)
 	}
 	if err := validateRecoveredFinal(root, pair); err != nil {
-		return "", err
+		return false, err
 	}
-	return pair.finalName, nil
+	return true, nil
 }
 
 type verifiedPair struct {
