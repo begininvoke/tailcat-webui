@@ -131,6 +131,10 @@ code, pre, .mono-value, .mono-input input, .mono-input textarea { font-family: u
 .tunnel-output { min-height: 220px; }
 .tunnel-send { margin-top: 12px; }
 .drawer-alert { margin-bottom: 16px; }
+.server-settings-tabs .ant-tabs-nav { margin-bottom: 16px; }
+.exit-node-toggle { min-height: 44px; margin-bottom: 16px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-subtle); }
+.exit-rule-prefix { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: anywhere; }
+.exit-rule-table .ant-table-cell { vertical-align: middle; }
 
 .mobile-nav { display: none; }
 
@@ -160,6 +164,11 @@ code, pre, .mono-value, .mono-input input, .mono-input textarea { font-family: u
   .resource-card .ant-descriptions-item-label { width: 104px; }
   .mono-value { max-width: 52vw; }
   .ant-drawer-content-wrapper { max-width: 100vw; }
+  .server-settings-tabs .ant-tabs-tab { min-height: 44px; padding-block: 10px; }
+  .server-settings-tabs .ant-list-item { align-items: center; }
+  .server-settings-tabs .ant-list-item-action > li > .ant-btn,
+  .exit-rule-table .ant-btn { min-width: 44px; min-height: 44px; }
+  .exit-rule-card .ant-list-item-meta-description { margin-top: 6px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

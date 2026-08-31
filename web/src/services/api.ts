@@ -29,6 +29,15 @@ export interface AllowedClient {
   id: string; server_id: string; name: string; public_key: string; created_at: string
 }
 
+export interface ExitRule {
+  id: string; server_id: string; prefix: string; start_port: number; end_port: number; enabled: boolean;
+  created_at: string; updated_at: string;
+}
+
+export interface CreateExitRuleInput {
+  prefix: string; start_port: number; end_port: number; enabled: boolean
+}
+
 export interface PublishedRoute {
   id: string; client_id: string; name: string; slug: string; remote_port: number; base_path: string;
   access: 'private' | 'public'; enabled: boolean; url: string; created_at: string; updated_at: string;
@@ -77,7 +86,11 @@ export const api = {
   createServer: (body: object) => request<Server>('/api/v1/servers', { method: 'POST', body: JSON.stringify(body) }),
   startServer: (id: string) => request<Server>(`/api/v1/servers/${id}/start`, { method: 'POST' }),
   stopServer: (id: string) => request<void>(`/api/v1/servers/${id}/stop`, { method: 'POST' }),
+  setExitNodeEnabled: (id: string, enabled: boolean) => request<Server>(`/api/v1/servers/${id}/exit-node`, { method: 'POST', body: JSON.stringify({ enabled }) }),
   deleteServer: (id: string) => request<void>(`/api/v1/servers/${id}`, { method: 'DELETE' }),
+  exitRules: (serverID: string) => request<{ items: ExitRule[] }>(`/api/v1/servers/${serverID}/exit-rules`).then((r) => r.items),
+  createExitRule: (serverID: string, body: CreateExitRuleInput) => request<ExitRule>(`/api/v1/servers/${serverID}/exit-rules`, { method: 'POST', body: JSON.stringify(body) }),
+  deleteExitRule: (id: string) => request<void>(`/api/v1/exit-rules/${id}`, { method: 'DELETE' }),
   mappings: (serverID: string) => request<{ items: PortMapping[] }>(`/api/v1/servers/${serverID}/mappings`).then((r) => r.items),
   createMapping: (serverID: string, body: object) => request<PortMapping>(`/api/v1/servers/${serverID}/mappings`, { method: 'POST', body: JSON.stringify(body) }),
   deleteMapping: (id: string) => request<void>(`/api/v1/mappings/${id}`, { method: 'DELETE' }),
