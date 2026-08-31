@@ -32,6 +32,11 @@ func validateTransferJobMutation(next ent.Mutator) ent.Mutator {
 			return nil, fmt.Errorf("bulk transfer job updates are not supported")
 		}
 		if mutation.Op().Is(ent.OpCreate | ent.OpUpdateOne) {
+			if mutation.Op().Is(ent.OpUpdateOne) {
+				if err := requireTransferJobUpdateMarkers(ctx, mutation); err != nil {
+					return nil, err
+				}
+			}
 			totalBytes, err := mutationInt64(ctx, mutation, "total_bytes")
 			if err != nil {
 				return nil, err
@@ -54,6 +59,11 @@ func validateTransferItemMutation(next ent.Mutator) ent.Mutator {
 			return nil, fmt.Errorf("bulk transfer item updates are not supported")
 		}
 		if mutation.Op().Is(ent.OpCreate | ent.OpUpdateOne) {
+			if mutation.Op().Is(ent.OpUpdateOne) {
+				if err := requireTransferItemUpdateMarkers(ctx, mutation); err != nil {
+					return nil, err
+				}
+			}
 			sizeBytes, err := mutationInt64(ctx, mutation, "size_bytes")
 			if err != nil {
 				return nil, err
@@ -81,6 +91,67 @@ func validateTransferItemMutation(next ent.Mutator) ent.Mutator {
 	})
 }
 
+func requireTransferJobUpdateMarkers(ctx context.Context, mutation ent.Mutation) error {
+	for _, name := range []string{"user_id", "client_id", "remote_share_id"} {
+		value, err := mutationOldString(ctx, mutation, name)
+		if err != nil {
+			return err
+		}
+		if err := validateUUIDv7(value); err != nil {
+			return fmt.Errorf("incomplete transfer job entity for update: %w", err)
+		}
+	}
+	capability, err := mutationOldBytes(ctx, mutation, "remote_capability_cipher")
+	if err != nil {
+		return err
+	}
+	if len(capability) == 0 {
+		return fmt.Errorf("incomplete transfer job entity for update")
+	}
+	return nil
+}
+
+func requireTransferItemUpdateMarkers(ctx context.Context, mutation ent.Mutation) error {
+	for _, name := range []string{"user_id", "job_id", "remote_file_id"} {
+		value, err := mutationOldString(ctx, mutation, name)
+		if err != nil {
+			return err
+		}
+		if err := validateUUIDv7(value); err != nil {
+			return fmt.Errorf("incomplete transfer item entity for update: %w", err)
+		}
+	}
+	storageName, err := mutationOldString(ctx, mutation, "storage_name")
+	if err != nil {
+		return err
+	}
+	if err := validateStorageName(storageName); err != nil {
+		return fmt.Errorf("incomplete transfer item entity for update: %w", err)
+	}
+	virtualPath, err := mutationOldString(ctx, mutation, "virtual_path")
+	if err != nil {
+		return err
+	}
+	if err := validateVirtualPath(virtualPath); err != nil {
+		return fmt.Errorf("incomplete transfer item entity for update: %w", err)
+	}
+	blake3, err := mutationOldString(ctx, mutation, "blake3")
+	if err != nil {
+		return err
+	}
+	if err := validateBLAKE3(blake3); err != nil {
+		return fmt.Errorf("incomplete transfer item entity for update: %w", err)
+	}
+	blockSize, err := mutationOldInt64(ctx, mutation, "block_size")
+	if err != nil {
+		return err
+	}
+	if err := validateTransferBlockSize(blockSize); err != nil {
+		return fmt.Errorf("incomplete transfer item entity for update: %w", err)
+	}
+	return nil
+}
+
 func mutationInt64(ctx context.Context, mutation ent.Mutation, name string) (int64, error) {
 	if _, added := mutation.AddedField(name); added {
 		return 0, fmt.Errorf("additive update for %s is not supported", name)
@@ -99,6 +170,42 @@ func mutationInt64(ctx context.Context, mutation ent.Mutation, name string) (int
 	result, ok := value.(int64)
 	if !ok {
 		return 0, fmt.Errorf("unexpected old type %T for %s", value, name)
+	}
+	return result, nil
+}
+
+func mutationOldInt64(ctx context.Context, mutation ent.Mutation, name string) (int64, error) {
+	value, err := mutation.OldField(ctx, name)
+	if err != nil {
+		return 0, fmt.Errorf("load existing %s: %w", name, err)
+	}
+	result, ok := value.(int64)
+	if !ok {
+		return 0, fmt.Errorf("unexpected old type %T for %s", value, name)
+	}
+	return result, nil
+}
+
+func mutationOldString(ctx context.Context, mutation ent.Mutation, name string) (string, error) {
+	value, err := mutation.OldField(ctx, name)
+	if err != nil {
+		return "", fmt.Errorf("load existing %s: %w", name, err)
+	}
+	result, ok := value.(string)
+	if !ok {
+		return "", fmt.Errorf("unexpected old type %T for %s", value, name)
+	}
+	return result, nil
+}
+
+func mutationOldBytes(ctx context.Context, mutation ent.Mutation, name string) ([]byte, error) {
+	value, err := mutation.OldField(ctx, name)
+	if err != nil {
+		return nil, fmt.Errorf("load existing %s: %w", name, err)
+	}
+	result, ok := value.([]byte)
+	if !ok {
+		return nil, fmt.Errorf("unexpected old type %T for %s", value, name)
 	}
 	return result, nil
 }

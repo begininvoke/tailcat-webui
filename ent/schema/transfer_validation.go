@@ -51,7 +51,8 @@ func validateVirtualPath(path string) error {
 		return fmt.Errorf("virtual path exceeds depth limit")
 	}
 	for _, segment := range segments {
-		if segment == "" || segment == "." || segment == ".." || isWindowsDeviceName(segment) {
+		windowsSegment := strings.TrimRight(segment, " .")
+		if windowsSegment != segment || windowsSegment == "" || windowsSegment == "." || windowsSegment == ".." || isWindowsDeviceName(windowsSegment) {
 			return fmt.Errorf("virtual path contains a non-canonical segment")
 		}
 	}

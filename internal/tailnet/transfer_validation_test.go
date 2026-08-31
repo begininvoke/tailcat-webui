@@ -11,6 +11,8 @@ import (
 
 	"github.com/ca-x/tailcat-webui/ent"
 	"github.com/ca-x/tailcat-webui/ent/enttest"
+	"github.com/ca-x/tailcat-webui/ent/transferitem"
+	"github.com/ca-x/tailcat-webui/ent/transferjob"
 
 	_ "github.com/lib-x/entsqlite"
 )
@@ -60,7 +62,7 @@ func TestTransferMetadataRejectsInvalidDirectWrites(t *testing.T) {
 	}
 
 	invalidUTF8 := string([]byte{0xff})
-	for _, virtualPath := range []string{"", "/absolute", `\\host\share`, "C:/volume", "CON/report.txt", "a//b", "a/./b", "a/../b", `a\b`, "a\x00b", invalidUTF8, strings.Repeat("a", 1025), strings.Repeat("a/", 32) + "z"} {
+	for _, virtualPath := range []string{"", "/absolute", `\\host\share`, "C:/volume", "CON/report.txt", "CON ", "report.txt.", "report.txt ", "folder/CON ", "folder/COM1.txt", "folder/report.txt.", "文件.", "文件 ", "a//b", "a/./b", "a/../b", `a\b`, "a\x00b", invalidUTF8, strings.Repeat("a", 1025), strings.Repeat("a/", 32) + "z"} {
 		virtualPath := virtualPath
 		t.Run("virtual_path", func(t *testing.T) {
 			if _, err := newShareFile(db, owner.ID, share.ID, 0, nil).SetVirtualPath(virtualPath).Save(ctx); err == nil {
@@ -182,6 +184,46 @@ func TestTransferMetadataRejectsInvalidDirectWrites(t *testing.T) {
 	}
 	if _, err := newTransferItem(db, owner.ID, otherJob.ID, 0, nil, 0).Save(ctx); err == nil {
 		t.Fatal("cross-owner job item was accepted")
+	}
+}
+
+func TestTransferPartialEntityUpdatesFailClosed(t *testing.T) {
+	db := enttest.Open(t, "sqlite3", "file:transfer-partial-update?mode=memory&cache=shared&_pragma=foreign_keys(1)")
+	ctx := t.Context()
+	owner := db.User.Create().SetIssuer("test").SetSubject("partial-owner").SaveX(ctx)
+	client := db.TailClient.Create().SetUserID(owner.ID).SetName("partial-client").SetServerTokenCipher([]byte("cipher")).SetTokenHint("tc…").SaveX(ctx)
+	job := newTransferJob(db, owner.ID, client.ID).SetTotalBytes(transferBlockSize).SetReceivedBytes(transferBlockSize).SaveX(ctx)
+	item := newTransferItem(db, owner.ID, job.ID, transferBlockSize, []int{0}, transferBlockSize).SaveX(ctx)
+
+	partialJob := db.TransferJob.Query().Where(transferjob.IDEQ(job.ID)).Select(transferjob.FieldID).OnlyX(ctx)
+	if _, err := partialJob.Update().SetTotalBytes(1).Save(ctx); err == nil {
+		t.Fatal("partial job entity bypassed total/received validation")
+	}
+	if _, err := partialJob.Update().SetReceivedBytes(1).Save(ctx); err == nil {
+		t.Fatal("partial job entity bypassed received/total validation")
+	}
+
+	partialItem := db.TransferItem.Query().Where(transferitem.IDEQ(item.ID)).Select(transferitem.FieldID).OnlyX(ctx)
+	if _, err := partialItem.Update().SetReceivedBytes(0).Save(ctx); err == nil {
+		t.Fatal("partial item entity bypassed received/completed validation")
+	}
+	if _, err := partialItem.Update().SetCompletedBlocks(nil).Save(ctx); err == nil {
+		t.Fatal("partial item entity bypassed completed block validation")
+	}
+
+	fullJob := db.TransferJob.GetX(ctx, job.ID)
+	if _, err := fullJob.Update().SetReceivedBytes(transferBlockSize).Save(ctx); err != nil {
+		t.Fatalf("full job entity update: %v", err)
+	}
+	if _, err := db.TransferJob.UpdateOneID(job.ID).SetReceivedBytes(transferBlockSize).Save(ctx); err != nil {
+		t.Fatalf("job UpdateOneID: %v", err)
+	}
+	fullItem := db.TransferItem.GetX(ctx, item.ID)
+	if _, err := fullItem.Update().SetReceivedBytes(transferBlockSize).Save(ctx); err != nil {
+		t.Fatalf("full item entity update: %v", err)
+	}
+	if _, err := db.TransferItem.UpdateOneID(item.ID).SetReceivedBytes(transferBlockSize).Save(ctx); err != nil {
+		t.Fatalf("item UpdateOneID: %v", err)
 	}
 }
 
