@@ -102,6 +102,9 @@ type blockResult struct {
 // BuildFileManifest hashes one validated Storage-owned file without accepting
 // or returning a host filesystem path.
 func (s *Storage) BuildFileManifest(ctx context.Context, ownerID, shareID, storageName, fileID, virtualPath string) (_ FileManifest, retErr error) {
+	if err := s.ensureOpen(); err != nil {
+		return FileManifest{}, err
+	}
 	if err := ctx.Err(); err != nil {
 		return FileManifest{}, err
 	}

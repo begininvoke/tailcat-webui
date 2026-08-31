@@ -21,7 +21,7 @@ const testFileID = "01900000-0000-7000-8000-000000000004"
 
 func TestBuildFileManifestEmptyKnownVectorAndImmutability(t *testing.T) {
 	storage := newTestStorage(t)
-	stored, err := storage.Store(t.Context(), testOwnerID, testShareID, 0, strings.NewReader(""))
+	stored, err := storage.Store(t.Context(), testOwnerID, testShareID, 0, readCloser(strings.NewReader("")))
 	if err != nil {
 		t.Fatalf("Store empty: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestBuildFileManifestExactAndOverBlockBoundariesAreDeterministic(t *testing
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			content := bytes.Repeat([]byte{0x5a}, tc.size)
-			stored, err := storage.Store(t.Context(), testOwnerID, testShareID, int64(len(content)), bytes.NewReader(content))
+			stored, err := storage.Store(t.Context(), testOwnerID, testShareID, int64(len(content)), readCloser(bytes.NewReader(content)))
 			if err != nil {
 				t.Fatalf("Store: %v", err)
 			}
@@ -104,7 +104,7 @@ func TestBuildFileManifestExactAndOverBlockBoundariesAreDeterministic(t *testing
 
 func TestBuildFileManifestRejectsUnsafeIdentityAndOverFileLimit(t *testing.T) {
 	storage := newTestStorage(t)
-	stored, err := storage.Store(t.Context(), testOwnerID, testShareID, 1, strings.NewReader("x"))
+	stored, err := storage.Store(t.Context(), testOwnerID, testShareID, 1, readCloser(strings.NewReader("x")))
 	if err != nil {
 		t.Fatalf("Store: %v", err)
 	}
@@ -153,7 +153,7 @@ func TestBuildFileManifestBoundsWorkersAndStopsOnCancellation(t *testing.T) {
 	storage := newTestStorage(t)
 	content := bytes.Repeat([]byte("worker-data"), int(3*BlockSize)/len("worker-data")+1)
 	content = content[:3*BlockSize]
-	stored, err := storage.Store(t.Context(), testOwnerID, testShareID, int64(len(content)), bytes.NewReader(content))
+	stored, err := storage.Store(t.Context(), testOwnerID, testShareID, int64(len(content)), readCloser(bytes.NewReader(content)))
 	if err != nil {
 		t.Fatalf("Store: %v", err)
 	}
@@ -194,7 +194,7 @@ func TestBuildFileManifestBoundsWorkersAndStopsOnCancellation(t *testing.T) {
 func TestBuildFileManifestDetectsFileChangingDuringHash(t *testing.T) {
 	storage := newTestStorage(t)
 	content := bytes.Repeat([]byte{0x42}, int(BlockSize+1))
-	stored, err := storage.Store(t.Context(), testOwnerID, testShareID, int64(len(content)), bytes.NewReader(content))
+	stored, err := storage.Store(t.Context(), testOwnerID, testShareID, int64(len(content)), readCloser(bytes.NewReader(content)))
 	if err != nil {
 		t.Fatalf("Store: %v", err)
 	}
@@ -223,7 +223,7 @@ func TestBuildFileManifestDetectsFileChangingDuringHash(t *testing.T) {
 func TestBuildFileManifestDetectsMTimeChangingDuringHash(t *testing.T) {
 	storage := newTestStorage(t)
 	content := bytes.Repeat([]byte{0x24}, int(BlockSize+1))
-	stored, err := storage.Store(t.Context(), testOwnerID, testShareID, int64(len(content)), bytes.NewReader(content))
+	stored, err := storage.Store(t.Context(), testOwnerID, testShareID, int64(len(content)), readCloser(bytes.NewReader(content)))
 	if err != nil {
 		t.Fatalf("Store: %v", err)
 	}
@@ -245,7 +245,7 @@ func TestBuildFileManifestDetectsMTimeChangingDuringHash(t *testing.T) {
 
 func TestStorageAndManifestOutputPassTask10ScalarValidators(t *testing.T) {
 	storage := newTestStorage(t)
-	stored, err := storage.Store(t.Context(), testOwnerID, testShareID, 3, strings.NewReader("abc"))
+	stored, err := storage.Store(t.Context(), testOwnerID, testShareID, 3, readCloser(strings.NewReader("abc")))
 	if err != nil {
 		t.Fatalf("Store: %v", err)
 	}

@@ -27,11 +27,12 @@ const (
 	MaxOwnerBytes    int64 = 2 * 1024 * 1024 * 1024
 	MaxFilesPerShare       = 1000
 
-	maxBoundaryBytes = 1024
-	maxBoundaryDepth = 32
-	randomNameBytes  = 16
-	maxNameAttempts  = 128
-	tempNamePrefix   = "tmp-"
+	maxBoundaryBytes         = 1024
+	maxBoundaryDepth         = 32
+	randomNameBytes          = 16
+	maxNameAttempts          = 128
+	tempNamePrefix           = "tmp-"
+	maxConsecutiveEmptyReads = 100
 )
 
 var (
@@ -43,6 +44,10 @@ var (
 	ErrSizeMismatch    = errors.New("transfer input size does not match reservation")
 	ErrReservationUsed = errors.New("transfer quota reservation is no longer pending")
 	ErrNameCollision   = errors.New("could not allocate an opaque storage name")
+	ErrRootChanged     = errors.New("transfer storage root changed while opening")
+	ErrPermissions     = errors.New("transfer storage entry has unsafe permissions")
+	ErrMultipleLinks   = errors.New("transfer storage entry has multiple hard links")
+	ErrClosed          = errors.New("transfer storage is closed")
 )
 
 // StoredFile is the filesystem metadata returned after an atomic publication.
@@ -63,10 +68,16 @@ type QuotaUsage struct {
 }
 
 type storageHooks struct {
-	syncFile     func(*os.File) error
-	syncDir      func(*os.File) error
-	rename       func(*os.Root, string, string) error
-	beforeRename func()
+	syncFile      func(*os.File) error
+	syncDir       func(*os.File) error
+	link          func(*os.Root, string, string) error
+	remove        func(*os.Root, string) error
+	beforePublish func()
+	afterIngest   func(int64, string)
+}
+
+type constructorHooks struct {
+	afterInitialLstat func()
 }
 
 // Storage owns all filesystem path construction for staged transfer bytes.
@@ -78,12 +89,12 @@ type Storage struct {
 
 	random        io.Reader
 	nameMu        sync.Mutex
-	writeMu       sync.Mutex
 	hooks         storageHooks
 	manifestHooks manifestHooks
 
 	closeOnce sync.Once
 	closeErr  error
+	closed    atomic.Bool
 }
 
 type quotaKey struct {
@@ -128,6 +139,10 @@ type Reservation struct {
 
 // NewStorage creates or opens a required, real staging root.
 func NewStorage(rootPath string) (*Storage, error) {
+	return newStorage(rootPath, constructorHooks{})
+}
+
+func newStorage(rootPath string, constructorHooks constructorHooks) (*Storage, error) {
 	if rootPath == "" || strings.ContainsRune(rootPath, 0) {
 		return nil, fmt.Errorf("%w: staging root is required", ErrInvalidPath)
 	}
@@ -147,10 +162,20 @@ func NewStorage(rootPath string) (*Storage, error) {
 	if !info.IsDir() {
 		return nil, fmt.Errorf("%w: staging root is not a directory", ErrInvalidPath)
 	}
+	if err := validatePrivateDirectory(info); err != nil {
+		return nil, fmt.Errorf("staging root: %w", err)
+	}
+	if constructorHooks.afterInitialLstat != nil {
+		constructorHooks.afterInitialLstat()
+	}
 
 	root, err := os.OpenRoot(rootPath)
 	if err != nil {
 		return nil, fmt.Errorf("open staging root: %w", err)
+	}
+	if err := validateRootAnchor(rootPath, root, info); err != nil {
+		_ = root.Close()
+		return nil, err
 	}
 	storage := &Storage{
 		root:   root,
@@ -162,7 +187,8 @@ func NewStorage(rootPath string) (*Storage, error) {
 	}
 	storage.hooks.syncFile = (*os.File).Sync
 	storage.hooks.syncDir = syncDirectory
-	storage.hooks.rename = (*os.Root).Rename
+	storage.hooks.link = (*os.Root).Link
+	storage.hooks.remove = (*os.Root).Remove
 	if err := storage.rebuildQuota(); err != nil {
 		_ = root.Close()
 		return nil, err
@@ -170,20 +196,64 @@ func NewStorage(rootPath string) (*Storage, error) {
 	return storage, nil
 }
 
+func validateRootAnchor(rootPath string, root *os.Root, initial os.FileInfo) error {
+	anchor, err := root.Open(".")
+	if err != nil {
+		return fmt.Errorf("open staging root anchor: %w", err)
+	}
+	anchorInfo, statErr := anchor.Stat()
+	closeErr := anchor.Close()
+	current, currentErr := os.Lstat(rootPath)
+	if statErr != nil || closeErr != nil || currentErr != nil {
+		return errors.Join(statErr, closeErr, currentErr)
+	}
+	if current.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%w: configured root became a symlink", ErrRootChanged)
+	}
+	if !anchorInfo.IsDir() || !current.IsDir() || !os.SameFile(initial, anchorInfo) || !os.SameFile(anchorInfo, current) {
+		return ErrRootChanged
+	}
+	if err := validatePrivateDirectory(anchorInfo); err != nil {
+		return fmt.Errorf("opened staging root: %w", err)
+	}
+	return nil
+}
+
+func validatePrivateDirectory(info os.FileInfo) error {
+	// Windows FileMode permission bits do not describe the directory ACL. The
+	// rooted handle and reparse checks still apply; ACL provisioning remains a
+	// configured-root invariant outside Go's portable os API.
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o700 {
+		return ErrPermissions
+	}
+	return nil
+}
+
 // Close releases the rooted directory handle. It is idempotent.
 func (s *Storage) Close() error {
 	if s == nil || s.root == nil {
 		return nil
 	}
+	s.closed.Store(true)
 	s.closeOnce.Do(func() {
 		s.closeErr = s.root.Close()
 	})
 	return s.closeErr
 }
 
+func (s *Storage) ensureOpen() error {
+	if s == nil || s.root == nil || s.closed.Load() {
+		return ErrClosed
+	}
+	return nil
+}
+
 // Reserve atomically admits a prospective file against file, share, owner,
 // and per-share file-count limits.
 func (s *Storage) Reserve(ctx context.Context, ownerID, shareID string, size int64) (*Reservation, error) {
+	if err := s.ensureOpen(); err != nil {
+		return nil, err
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -238,6 +308,9 @@ func (r *Reservation) Release() {
 
 // Usage returns current admitted bytes and file count.
 func (s *Storage) Usage(ctx context.Context, ownerID, shareID string) (QuotaUsage, error) {
+	if err := s.ensureOpen(); err != nil {
+		return QuotaUsage{}, err
+	}
 	if err := ctx.Err(); err != nil {
 		return QuotaUsage{}, err
 	}
@@ -261,10 +334,15 @@ func (s *Storage) Usage(ctx context.Context, ownerID, shareID string) (QuotaUsag
 	return usage, nil
 }
 
-// Store reserves quota and publishes exactly size bytes from src.
-func (s *Storage) Store(ctx context.Context, ownerID, shareID string, size int64, src io.Reader) (StoredFile, error) {
+// Store reserves quota and publishes exactly size bytes from src. Storage owns
+// src and closes it on every return; Close must unblock Read, as net/http
+// request bodies and io.PipeReader do.
+func (s *Storage) Store(ctx context.Context, ownerID, shareID string, size int64, src io.ReadCloser) (StoredFile, error) {
 	reservation, err := s.Reserve(ctx, ownerID, shareID, size)
 	if err != nil {
+		if src != nil {
+			_ = src.Close()
+		}
 		return StoredFile{}, err
 	}
 	return s.StoreReserved(ctx, reservation, src)
@@ -272,16 +350,37 @@ func (s *Storage) Store(ctx context.Context, ownerID, shareID string, size int64
 
 // StoreReserved streams a pending reservation into a private temporary file,
 // durably publishes it under a random basename, and commits the reservation.
-func (s *Storage) StoreReserved(ctx context.Context, reservation *Reservation, src io.Reader) (_ StoredFile, retErr error) {
+func (s *Storage) StoreReserved(ctx context.Context, reservation *Reservation, src io.ReadCloser) (stored StoredFile, retErr error) {
+	if src == nil {
+		if reservation != nil {
+			reservation.Release()
+		}
+		return StoredFile{}, fmt.Errorf("%w: nil reader", ErrInvalidPath)
+	}
+	var closeOnce sync.Once
+	var sourceCloseErr error
+	closeSource := func() {
+		closeOnce.Do(func() {
+			sourceCloseErr = src.Close()
+		})
+	}
+	stopContextClose := context.AfterFunc(ctx, closeSource)
+	defer func() {
+		stopContextClose()
+		closeSource()
+		if sourceCloseErr != nil && !errors.Is(retErr, sourceCloseErr) {
+			retErr = errors.Join(retErr, fmt.Errorf("close upload source: %w", sourceCloseErr))
+		}
+	}()
 	if reservation == nil || reservation.storage != s {
 		return StoredFile{}, fmt.Errorf("%w: wrong storage", ErrReservationUsed)
 	}
 	if reservation.state.Load() != reservationPending {
 		return StoredFile{}, ErrReservationUsed
 	}
-	if src == nil {
+	if err := s.ensureOpen(); err != nil {
 		reservation.Release()
-		return StoredFile{}, fmt.Errorf("%w: nil reader", ErrInvalidPath)
+		return StoredFile{}, err
 	}
 	if err := ctx.Err(); err != nil {
 		reservation.Release()
@@ -300,46 +399,54 @@ func (s *Storage) StoreReserved(ctx context.Context, reservation *Reservation, s
 		reservation.Release()
 		return StoredFile{}, err
 	}
-	cleanupName := tempName
+	tempExists := true
 	fileOpen := true
-	renamed := false
+	publishedName := ""
+	var writtenInfo os.FileInfo
 	defer func() {
 		if fileOpen {
 			if err := file.Close(); err != nil {
 				retErr = errors.Join(retErr, fmt.Errorf("close temporary file during cleanup: %w", err))
 			}
 		}
-		if cleanupName != "" {
-			if err := shareRoot.Remove(cleanupName); err != nil && !errors.Is(err, fs.ErrNotExist) {
-				retErr = errors.Join(retErr, fmt.Errorf("remove unpublished file: %w", err))
-			} else if err == nil && renamed {
-				retErr = errors.Join(retErr, s.syncShareDirectory(shareRoot))
+		if tempExists {
+			if err := s.hooks.remove(shareRoot, tempName); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				retErr = errors.Join(retErr, fmt.Errorf("remove temporary file: %w", err))
 			}
 		}
 		if retErr != nil {
-			reservation.Release()
+			if publishedName == "" {
+				reservation.Release()
+			} else {
+				s.reconcileFailedPublish(shareRoot, publishedName, writtenInfo, reservation, &retErr)
+			}
 		}
 	}()
 
 	hasher := blake3.New()
-	limited := io.LimitReader(src, reservation.size+1)
-	written, err := io.CopyBuffer(io.MultiWriter(file, hasher), contextReader{ctx: ctx, reader: limited}, make([]byte, 128*1024))
-	if err != nil {
-		return StoredFile{}, fmt.Errorf("stream staged file: %w", err)
-	}
-	if written != reservation.size {
-		if written > reservation.size && reservation.size == MaxFileBytes {
-			return StoredFile{}, ErrFileTooLarge
+	written, ingestErr := copyExactAndProbe(ctx, io.MultiWriter(file, hasher), src, reservation.size)
+	if s.hooks.afterIngest != nil {
+		info, statErr := file.Stat()
+		if statErr != nil {
+			return StoredFile{}, fmt.Errorf("stat ingested temporary file: %w", statErr)
 		}
-		return StoredFile{}, fmt.Errorf("%w: got %d bytes, reserved %d", ErrSizeMismatch, written, reservation.size)
+		s.hooks.afterIngest(info.Size(), hex.EncodeToString(hasher.Sum(nil)))
 	}
+	stopContextClose()
+	closeSource()
 	if err := ctx.Err(); err != nil {
 		return StoredFile{}, err
+	}
+	if ingestErr != nil {
+		return StoredFile{}, fmt.Errorf("stream staged file after %d bytes: %w", written, ingestErr)
+	}
+	if sourceCloseErr != nil {
+		return StoredFile{}, fmt.Errorf("close upload source: %w", sourceCloseErr)
 	}
 	if err := s.hooks.syncFile(file); err != nil {
 		return StoredFile{}, fmt.Errorf("sync staged file: %w", err)
 	}
-	writtenInfo, err := file.Stat()
+	writtenInfo, err = file.Stat()
 	if err != nil {
 		return StoredFile{}, fmt.Errorf("stat staged file: %w", err)
 	}
@@ -349,45 +456,46 @@ func (s *Storage) StoreReserved(ctx context.Context, reservation *Reservation, s
 	}
 	fileOpen = false
 
-	s.writeMu.Lock()
-	finalName, err := s.unusedFinalName(shareRoot)
-	if err == nil && s.hooks.beforeRename != nil {
-		s.hooks.beforeRename()
-	}
-	if err == nil {
-		err = s.hooks.rename(shareRoot, tempName, finalName)
-	}
-	s.writeMu.Unlock()
+	finalName, err := s.publishNoReplace(shareRoot, tempName)
 	if err != nil {
 		return StoredFile{}, fmt.Errorf("publish staged file: %w", err)
 	}
-	renamed = true
-	cleanupName = finalName
+	publishedName = finalName
+	stored = StoredFile{
+		StorageName: finalName,
+		Size:        writtenInfo.Size(),
+		MTime:       writtenInfo.ModTime().UTC(),
+		BLAKE3:      hex.EncodeToString(hasher.Sum(nil)),
+	}
+	if err := s.hooks.remove(shareRoot, tempName); err != nil {
+		return stored, fmt.Errorf("remove linked temporary file: %w", err)
+	}
+	tempExists = false
 	if err := s.syncShareDirectory(shareRoot); err != nil {
-		return StoredFile{}, fmt.Errorf("sync published directory: %w", err)
+		return stored, fmt.Errorf("sync published directory: %w", err)
 	}
 
 	info, err := safeRegularInfo(shareRoot, finalName)
 	if err != nil {
-		return StoredFile{}, err
+		return stored, err
 	}
 	if info.Size() != reservation.size || !os.SameFile(writtenInfo, info) {
-		return StoredFile{}, ErrFileChanged
+		return stored, ErrFileChanged
 	}
 	if err := reservation.commit(finalName); err != nil {
-		return StoredFile{}, err
+		return stored, err
 	}
-	cleanupName = ""
-	return StoredFile{
-		StorageName: finalName,
-		Size:        info.Size(),
-		MTime:       info.ModTime().UTC(),
-		BLAKE3:      hex.EncodeToString(hasher.Sum(nil)),
-	}, nil
+	publishedName = ""
+	stored.Size = info.Size()
+	stored.MTime = info.ModTime().UTC()
+	return stored, nil
 }
 
 // Open opens one Storage-generated regular file without exposing its host path.
 func (s *Storage) Open(ctx context.Context, ownerID, shareID, storageName string) (*os.File, error) {
+	if err := s.ensureOpen(); err != nil {
+		return nil, err
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -425,6 +533,9 @@ func (s *Storage) Open(ctx context.Context, ownerID, shareID, storageName string
 
 // Remove deletes one regular staged file and releases its committed quota.
 func (s *Storage) Remove(ctx context.Context, ownerID, shareID, storageName string) error {
+	if err := s.ensureOpen(); err != nil {
+		return err
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -433,13 +544,25 @@ func (s *Storage) Remove(ctx context.Context, ownerID, shareID, storageName stri
 	}
 	shareRoot, err := s.openShare(ownerID, shareID, false)
 	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			s.quota.remove(ownerID, shareID, storageName)
+			return nil
+		}
 		return err
 	}
 	defer shareRoot.Close()
 	if _, err := safeRegularInfo(shareRoot, storageName); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			s.quota.remove(ownerID, shareID, storageName)
+			return nil
+		}
 		return err
 	}
-	if err := shareRoot.Remove(storageName); err != nil {
+	if err := s.hooks.remove(shareRoot, storageName); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			s.quota.remove(ownerID, shareID, storageName)
+			return nil
+		}
 		return fmt.Errorf("remove staged file: %w", err)
 	}
 	s.quota.remove(ownerID, shareID, storageName)
@@ -451,6 +574,9 @@ func (s *Storage) Remove(ctx context.Context, ownerID, shareID, storageName stri
 
 // CleanupTemps removes only internal temporary files in one validated share.
 func (s *Storage) CleanupTemps(ctx context.Context, ownerID, shareID string) (int, error) {
+	if err := s.ensureOpen(); err != nil {
+		return 0, err
+	}
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
@@ -492,6 +618,9 @@ func (s *Storage) CleanupTemps(ctx context.Context, ownerID, shareID string) (in
 		if !info.Mode().IsRegular() {
 			return removed, fmt.Errorf("%w: temporary file", ErrNotRegular)
 		}
+		if err := validateStoredFileInfo(info); err != nil {
+			return removed, err
+		}
 		if err := shareRoot.Remove(entry.Name()); err != nil {
 			return removed, fmt.Errorf("remove temporary file: %w", err)
 		}
@@ -506,6 +635,9 @@ func (s *Storage) CleanupTemps(ctx context.Context, ownerID, shareID string) (in
 }
 
 func (s *Storage) openShare(ownerID, shareID string, create bool) (*os.Root, error) {
+	if err := s.ensureOpen(); err != nil {
+		return nil, err
+	}
 	if err := validateEntityID(ownerID); err != nil {
 		return nil, fmt.Errorf("owner ID: %w", err)
 	}
@@ -545,6 +677,9 @@ func openChildDirectory(parent *os.Root, name string, create bool) (*os.Root, er
 	if !info.IsDir() {
 		return nil, ErrInvalidPath
 	}
+	if err := validatePrivateDirectory(info); err != nil {
+		return nil, err
+	}
 	child, err := parent.OpenRoot(name)
 	if err != nil {
 		return nil, err
@@ -573,6 +708,10 @@ func openChildDirectory(parent *os.Root, name string, create bool) (*os.Root, er
 		}
 		return nil, ErrInvalidPath
 	}
+	if err := validatePrivateDirectory(anchorInfo); err != nil {
+		_ = child.Close()
+		return nil, err
+	}
 	return child, nil
 }
 
@@ -584,6 +723,16 @@ func (s *Storage) createTemp(root *os.Root) (string, *os.File, error) {
 		}
 		file, err := root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 		if err == nil {
+			info, statErr := file.Stat()
+			var validationErr error
+			if statErr == nil {
+				validationErr = validateStoredFileInfo(info)
+			}
+			if statErr != nil || validationErr != nil {
+				_ = file.Close()
+				_ = root.Remove(name)
+				return "", nil, errors.Join(statErr, validationErr)
+			}
 			return name, file, nil
 		}
 		if !errors.Is(err, fs.ErrExist) {
@@ -593,24 +742,57 @@ func (s *Storage) createTemp(root *os.Root) (string, *os.File, error) {
 	return "", nil, ErrNameCollision
 }
 
-func (s *Storage) unusedFinalName(root *os.Root) (string, error) {
+func (s *Storage) publishNoReplace(root *os.Root, tempName string) (string, error) {
 	for range maxNameAttempts {
 		name, err := s.randomName("")
 		if err != nil {
 			return "", err
 		}
-		info, err := root.Lstat(name)
-		if errors.Is(err, fs.ErrNotExist) {
+		if s.hooks.beforePublish != nil {
+			s.hooks.beforePublish()
+		}
+		err = s.hooks.link(root, tempName, name)
+		if err == nil {
 			return name, nil
 		}
-		if err != nil {
-			return "", fmt.Errorf("inspect storage-name candidate: %w", err)
+		if !errors.Is(err, fs.ErrExist) {
+			return "", err
+		}
+		info, statErr := root.Lstat(name)
+		if statErr != nil && !errors.Is(statErr, fs.ErrNotExist) {
+			return "", fmt.Errorf("inspect storage-name collision: %w", statErr)
+		}
+		if statErr != nil {
+			continue
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
 			return "", fmt.Errorf("%w: storage-name collision", ErrSymlink)
 		}
 	}
 	return "", ErrNameCollision
+}
+
+func (s *Storage) reconcileFailedPublish(root *os.Root, storageName string, writtenInfo os.FileInfo, reservation *Reservation, retErr *error) {
+	removeErr := s.hooks.remove(root, storageName)
+	if removeErr == nil || errors.Is(removeErr, fs.ErrNotExist) {
+		reservation.Release()
+		if removeErr == nil {
+			*retErr = errors.Join(*retErr, s.syncShareDirectory(root))
+		}
+		return
+	}
+	current, statErr := root.Lstat(storageName)
+	if errors.Is(statErr, fs.ErrNotExist) {
+		reservation.Release()
+		return
+	}
+	if statErr == nil && (current.Mode()&os.ModeSymlink != 0 || !current.Mode().IsRegular() || writtenInfo == nil || !os.SameFile(writtenInfo, current)) {
+		reservation.Release()
+		*retErr = errors.Join(*retErr, removeErr, ErrFileChanged)
+		return
+	}
+	commitErr := reservation.commit(storageName)
+	*retErr = errors.Join(*retErr, fmt.Errorf("rollback published file: %w", removeErr), statErr, commitErr)
 }
 
 func (s *Storage) randomName(prefix string) (string, error) {
@@ -631,10 +813,14 @@ func (s *Storage) syncShareDirectory(root *os.Root) error {
 	}
 	syncErr := s.hooks.syncDir(directory)
 	closeErr := directory.Close()
-	if runtime.GOOS == "windows" || errors.Is(syncErr, errors.ErrUnsupported) || errors.Is(syncErr, fs.ErrInvalid) {
+	if isUnsupportedDirectorySync(syncErr) {
 		syncErr = nil
 	}
 	return errors.Join(syncErr, closeErr)
+}
+
+func isUnsupportedDirectorySync(err error) bool {
+	return err != nil && (errors.Is(err, errors.ErrUnsupported) || errors.Is(err, fs.ErrInvalid))
 }
 
 func (s *Storage) rebuildQuota() error {
@@ -691,6 +877,11 @@ func (s *Storage) rebuildQuota() error {
 						_ = shareRoot.Close()
 						_ = ownerRoot.Close()
 						return fmt.Errorf("%w: temporary file", ErrNotRegular)
+					}
+					if err := validateStoredFileInfo(info); err != nil {
+						_ = shareRoot.Close()
+						_ = ownerRoot.Close()
+						return err
 					}
 					continue
 				}
@@ -752,7 +943,25 @@ func safeRegularInfo(root *os.Root, name string) (os.FileInfo, error) {
 	if !info.Mode().IsRegular() {
 		return nil, fmt.Errorf("%w: staged file", ErrNotRegular)
 	}
+	if err := validateStoredFileInfo(info); err != nil {
+		return nil, err
+	}
 	return info, nil
+}
+
+func validateStoredFileInfo(info os.FileInfo) error {
+	if info == nil || !info.Mode().IsRegular() {
+		return ErrNotRegular
+	}
+	// Windows FileMode permission bits do not describe the file ACL. Files are
+	// still created with 0600 and protected by the private configured root.
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+		return ErrPermissions
+	}
+	if links, ok := fileLinkCount(info); ok && links != 1 {
+		return ErrMultipleLinks
+	}
+	return nil
 }
 
 func validateEntityID(value string) error {
@@ -894,14 +1103,79 @@ func (q *quotaLedger) releaseLocked(ownerID, shareID string, size int64) {
 	}
 }
 
-type contextReader struct {
-	ctx    context.Context
-	reader io.Reader
-}
-
-func (r contextReader) Read(buffer []byte) (int, error) {
-	if err := r.ctx.Err(); err != nil {
-		return 0, err
+func copyExactAndProbe(ctx context.Context, dst io.Writer, src io.Reader, size int64) (int64, error) {
+	buffer := make([]byte, 128*1024)
+	remaining := size
+	var written int64
+	emptyReads := 0
+	for remaining > 0 {
+		if err := ctx.Err(); err != nil {
+			return written, err
+		}
+		readBuffer := buffer[:min(int64(len(buffer)), remaining)]
+		read, readErr := src.Read(readBuffer)
+		if read < 0 || read > len(readBuffer) {
+			return written, fmt.Errorf("%w: invalid reader count %d", ErrSizeMismatch, read)
+		}
+		if read > 0 {
+			emptyReads = 0
+			write, writeErr := dst.Write(readBuffer[:read])
+			written += int64(write)
+			remaining -= int64(write)
+			if writeErr != nil {
+				return written, writeErr
+			}
+			if write != read {
+				return written, io.ErrShortWrite
+			}
+		} else if readErr == nil {
+			emptyReads++
+			if emptyReads >= maxConsecutiveEmptyReads {
+				return written, io.ErrNoProgress
+			}
+		}
+		if readErr != nil {
+			if err := ctx.Err(); err != nil {
+				return written, err
+			}
+			if errors.Is(readErr, io.EOF) {
+				if remaining != 0 {
+					return written, ErrSizeMismatch
+				}
+				break
+			}
+			return written, readErr
+		}
 	}
-	return r.reader.Read(buffer)
+
+	emptyReads = 0
+	var probe [1]byte
+	for {
+		if err := ctx.Err(); err != nil {
+			return written, err
+		}
+		read, readErr := src.Read(probe[:])
+		if read < 0 || read > len(probe) {
+			return written, fmt.Errorf("%w: invalid probe count %d", ErrSizeMismatch, read)
+		}
+		if read > 0 {
+			if size == MaxFileBytes {
+				return written, ErrFileTooLarge
+			}
+			return written, ErrSizeMismatch
+		}
+		if readErr != nil {
+			if err := ctx.Err(); err != nil {
+				return written, err
+			}
+			if errors.Is(readErr, io.EOF) {
+				return written, nil
+			}
+			return written, readErr
+		}
+		emptyReads++
+		if emptyReads >= maxConsecutiveEmptyReads {
+			return written, io.ErrNoProgress
+		}
+	}
 }

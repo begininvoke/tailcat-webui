@@ -6,11 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -74,6 +77,206 @@ func TestNewStorageRejectsFileAndSymlinkRoots(t *testing.T) {
 	}
 }
 
+func TestNewStorageRejectsConfiguredRootSwapDuringOpen(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("deterministic replacement of an open directory is not portable on Windows")
+	}
+	parent := t.TempDir()
+	rootPath := filepath.Join(parent, "staging")
+	anchoredPath := filepath.Join(parent, "original")
+	if err := os.Mkdir(rootPath, 0o700); err != nil {
+		t.Fatalf("Mkdir root: %v", err)
+	}
+
+	_, err := newStorage(rootPath, constructorHooks{afterInitialLstat: func() {
+		if err := os.Rename(rootPath, anchoredPath); err != nil {
+			t.Fatalf("rename initial root: %v", err)
+		}
+		if err := os.Mkdir(rootPath, 0o700); err != nil {
+			t.Fatalf("create replacement root: %v", err)
+		}
+	}})
+	if !errors.Is(err, ErrRootChanged) {
+		t.Fatalf("root swap error = %v, want ErrRootChanged", err)
+	}
+}
+
+func TestStorageRemainsAnchoredAfterConfiguredPathReplacement(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("deterministic replacement of an open directory is not portable on Windows")
+	}
+	parent := t.TempDir()
+	rootPath := filepath.Join(parent, "staging")
+	anchoredPath := filepath.Join(parent, "anchored")
+	storage, err := NewStorage(rootPath)
+	if err != nil {
+		t.Fatalf("NewStorage: %v", err)
+	}
+	t.Cleanup(func() { _ = storage.Close() })
+	if err := os.Rename(rootPath, anchoredPath); err != nil {
+		t.Fatalf("rename configured root: %v", err)
+	}
+	if err := os.Mkdir(rootPath, 0o700); err != nil {
+		t.Fatalf("create replacement root: %v", err)
+	}
+
+	stored, err := storage.Store(t.Context(), testOwnerID, testShareID, 3, readCloser(strings.NewReader("abc")))
+	if err != nil {
+		t.Fatalf("Store through anchored root: %v", err)
+	}
+	anchoredFile := filepath.Join(anchoredPath, testOwnerID, testShareID, stored.StorageName)
+	if content, err := os.ReadFile(anchoredFile); err != nil || string(content) != "abc" {
+		t.Fatalf("anchored file content=%q error=%v", content, err)
+	}
+	entries, err := os.ReadDir(rootPath)
+	if err != nil {
+		t.Fatalf("ReadDir replacement root: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("replacement root was used: %v", entryNames(entries))
+	}
+}
+
+func TestStorageRejectsUnsafeDirectoryAndFileModes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Go FileMode permission bits do not represent Windows ACLs")
+	}
+	t.Run("root", func(t *testing.T) {
+		rootPath := t.TempDir()
+		if err := os.Chmod(rootPath, 0o755); err != nil {
+			t.Fatalf("Chmod root: %v", err)
+		}
+		if _, err := NewStorage(rootPath); !errors.Is(err, ErrPermissions) {
+			t.Fatalf("permissive root error = %v, want ErrPermissions", err)
+		}
+	})
+
+	for _, tc := range []struct {
+		name  string
+		setup func(*testing.T, string)
+	}{
+		{name: "owner", setup: func(t *testing.T, rootPath string) {
+			if err := os.Mkdir(filepath.Join(rootPath, testOwnerID), 0o755); err != nil {
+				t.Fatalf("Mkdir owner: %v", err)
+			}
+		}},
+		{name: "share", setup: func(t *testing.T, rootPath string) {
+			ownerPath := filepath.Join(rootPath, testOwnerID)
+			if err := os.Mkdir(ownerPath, 0o700); err != nil {
+				t.Fatalf("Mkdir owner: %v", err)
+			}
+			if err := os.Mkdir(filepath.Join(ownerPath, testShareID), 0o755); err != nil {
+				t.Fatalf("Mkdir share: %v", err)
+			}
+		}},
+		{name: "stored_file", setup: func(t *testing.T, rootPath string) {
+			sharePath := makeStorageDirectories(t, rootPath)
+			if err := os.WriteFile(filepath.Join(sharePath, strings.Repeat("a", 32)), []byte("x"), 0o644); err != nil {
+				t.Fatalf("Write stored file: %v", err)
+			}
+		}},
+		{name: "temporary_file", setup: func(t *testing.T, rootPath string) {
+			sharePath := makeStorageDirectories(t, rootPath)
+			if err := os.WriteFile(filepath.Join(sharePath, tempNamePrefix+strings.Repeat("a", 32)), []byte("x"), 0o644); err != nil {
+				t.Fatalf("Write temporary file: %v", err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rootPath := t.TempDir()
+			if err := os.Chmod(rootPath, 0o700); err != nil {
+				t.Fatalf("Chmod root: %v", err)
+			}
+			tc.setup(t, rootPath)
+			if _, err := NewStorage(rootPath); !errors.Is(err, ErrPermissions) {
+				t.Fatalf("NewStorage error = %v, want ErrPermissions", err)
+			}
+		})
+	}
+}
+
+func TestStorageRejectsMultiplyLinkedFiles(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("hard-link count validation is not exposed by os.FileInfo on Windows")
+	}
+	rootPath := t.TempDir()
+	sharePath := makeStorageDirectories(t, rootPath)
+	firstName := strings.Repeat("a", 32)
+	secondName := strings.Repeat("b", 32)
+	if err := os.WriteFile(filepath.Join(sharePath, firstName), []byte("x"), 0o600); err != nil {
+		t.Fatalf("Write stored file: %v", err)
+	}
+	if err := os.Link(filepath.Join(sharePath, firstName), filepath.Join(sharePath, secondName)); err != nil {
+		t.Fatalf("Link stored file: %v", err)
+	}
+	if _, err := NewStorage(rootPath); !errors.Is(err, ErrMultipleLinks) {
+		t.Fatalf("restart scan hard-link error = %v, want ErrMultipleLinks", err)
+	}
+
+	cleanStorage := newTestStorage(t)
+	reservation, err := cleanStorage.Reserve(t.Context(), testOwnerID, testShareID, 0)
+	if err != nil {
+		t.Fatalf("Reserve: %v", err)
+	}
+	reservation.Release()
+	cleanShare := storageTestSharePath(cleanStorage)
+	if err := os.WriteFile(filepath.Join(cleanShare, firstName), []byte("x"), 0o600); err != nil {
+		t.Fatalf("Write live stored file: %v", err)
+	}
+	if err := os.Link(filepath.Join(cleanShare, firstName), filepath.Join(cleanShare, secondName)); err != nil {
+		t.Fatalf("Link live stored file: %v", err)
+	}
+	if _, err := cleanStorage.Open(t.Context(), testOwnerID, testShareID, firstName); !errors.Is(err, ErrMultipleLinks) {
+		t.Fatalf("Open hard-link error = %v, want ErrMultipleLinks", err)
+	}
+	if err := cleanStorage.Remove(t.Context(), testOwnerID, testShareID, firstName); !errors.Is(err, ErrMultipleLinks) {
+		t.Fatalf("Remove hard-link error = %v, want ErrMultipleLinks", err)
+	}
+}
+
+func TestStorageOperationsAfterCloseFailSafely(t *testing.T) {
+	storage, err := NewStorage(filepath.Join(t.TempDir(), "staging"))
+	if err != nil {
+		t.Fatalf("NewStorage: %v", err)
+	}
+	reservation, err := storage.Reserve(t.Context(), testOwnerID, testShareID, 1)
+	if err != nil {
+		t.Fatalf("Reserve: %v", err)
+	}
+	if err := storage.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := storage.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+
+	validName := strings.Repeat("a", 32)
+	checks := []error{}
+	_, err = storage.Reserve(t.Context(), testOwnerID, testShareID, 1)
+	checks = append(checks, err)
+	_, err = storage.Store(t.Context(), testOwnerID, testShareID, 1, readCloser(strings.NewReader("x")))
+	checks = append(checks, err)
+	_, err = storage.StoreReserved(t.Context(), reservation, readCloser(strings.NewReader("x")))
+	checks = append(checks, err)
+	_, err = storage.Usage(t.Context(), testOwnerID, testShareID)
+	checks = append(checks, err)
+	_, err = storage.Open(t.Context(), testOwnerID, testShareID, validName)
+	checks = append(checks, err)
+	checks = append(checks, storage.Remove(t.Context(), testOwnerID, testShareID, validName))
+	_, err = storage.CleanupTemps(t.Context(), testOwnerID, testShareID)
+	checks = append(checks, err)
+	_, err = storage.BuildFileManifest(t.Context(), testOwnerID, testShareID, validName, testFileID, "x")
+	checks = append(checks, err)
+	for index, err := range checks {
+		if !errors.Is(err, ErrClosed) {
+			t.Errorf("operation %d error = %v, want ErrClosed", index, err)
+		}
+	}
+	if got := reservation.state.Load(); got != reservationReleased {
+		t.Fatalf("reservation state after closed StoreReserved = %d, want released", got)
+	}
+}
+
 func TestStorageRejectsUnsafeBoundaries(t *testing.T) {
 	storage := newTestStorage(t)
 	validName := strings.Repeat("a", 32)
@@ -128,6 +331,9 @@ func TestStorageRejectsSymlinkDirectoriesInsideAndOutsideRoot(t *testing.T) {
 	}
 
 	rootPath := t.TempDir()
+	if err := os.Chmod(rootPath, 0o700); err != nil {
+		t.Fatalf("Chmod root: %v", err)
+	}
 	storage, err := NewStorage(rootPath)
 	if err != nil {
 		t.Fatalf("NewStorage: %v", err)
@@ -314,7 +520,7 @@ func TestReservationCommitIsIdempotentAndStaysCharged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reserve: %v", err)
 	}
-	stored, err := storage.StoreReserved(t.Context(), reservation, strings.NewReader("x"))
+	stored, err := storage.StoreReserved(t.Context(), reservation, readCloser(strings.NewReader("x")))
 	if err != nil {
 		t.Fatalf("StoreReserved: %v", err)
 	}
@@ -334,7 +540,7 @@ func TestStorePublishesAtomicallyAndRemoveReleasesCommittedQuota(t *testing.T) {
 	storage := newTestStorage(t)
 	entered := make(chan struct{})
 	continueRename := make(chan struct{})
-	storage.hooks.beforeRename = func() {
+	storage.hooks.beforePublish = func() {
 		close(entered)
 		<-continueRename
 	}
@@ -345,7 +551,7 @@ func TestStorePublishesAtomicallyAndRemoveReleasesCommittedQuota(t *testing.T) {
 	}
 	resultCh := make(chan result, 1)
 	go func() {
-		file, err := storage.Store(t.Context(), testOwnerID, testShareID, 3, strings.NewReader("abc"))
+		file, err := storage.Store(t.Context(), testOwnerID, testShareID, 3, readCloser(strings.NewReader("abc")))
 		resultCh <- result{file: file, err: err}
 	}()
 	<-entered
@@ -407,18 +613,18 @@ func TestStoreFailuresRemoveTempsAndReleaseReservation(t *testing.T) {
 		name      string
 		ctx       func() context.Context
 		size      int64
-		reader    func() io.Reader
+		reader    func() io.ReadCloser
 		configure func(*Storage)
 	}{
-		{name: "partial", ctx: context.Background, size: 4, reader: func() io.Reader { return strings.NewReader("abc") }},
-		{name: "oversized", ctx: context.Background, size: 3, reader: func() io.Reader { return strings.NewReader("abcd") }},
-		{name: "reader_error", ctx: context.Background, size: 3, reader: func() io.Reader { return io.MultiReader(strings.NewReader("a"), errorReader{}) }},
-		{name: "canceled", ctx: canceledContext, size: 3, reader: func() io.Reader { return strings.NewReader("abc") }},
-		{name: "file_sync", ctx: context.Background, size: 3, reader: func() io.Reader { return strings.NewReader("abc") }, configure: func(s *Storage) { s.hooks.syncFile = func(*os.File) error { return errors.New("sync failed") } }},
-		{name: "rename", ctx: context.Background, size: 3, reader: func() io.Reader { return strings.NewReader("abc") }, configure: func(s *Storage) {
-			s.hooks.rename = func(*os.Root, string, string) error { return errors.New("rename failed") }
+		{name: "partial", ctx: context.Background, size: 4, reader: func() io.ReadCloser { return readCloser(strings.NewReader("abc")) }},
+		{name: "oversized", ctx: context.Background, size: 3, reader: func() io.ReadCloser { return readCloser(strings.NewReader("abcd")) }},
+		{name: "reader_error", ctx: context.Background, size: 3, reader: func() io.ReadCloser { return readCloser(io.MultiReader(strings.NewReader("a"), errorReader{})) }},
+		{name: "canceled", ctx: canceledContext, size: 3, reader: func() io.ReadCloser { return readCloser(strings.NewReader("abc")) }},
+		{name: "file_sync", ctx: context.Background, size: 3, reader: func() io.ReadCloser { return readCloser(strings.NewReader("abc")) }, configure: func(s *Storage) { s.hooks.syncFile = func(*os.File) error { return errors.New("sync failed") } }},
+		{name: "link", ctx: context.Background, size: 3, reader: func() io.ReadCloser { return readCloser(strings.NewReader("abc")) }, configure: func(s *Storage) {
+			s.hooks.link = func(*os.Root, string, string) error { return errors.New("link failed") }
 		}},
-		{name: "directory_sync", ctx: context.Background, size: 3, reader: func() io.Reader { return strings.NewReader("abc") }, configure: func(s *Storage) {
+		{name: "directory_sync", ctx: context.Background, size: 3, reader: func() io.ReadCloser { return readCloser(strings.NewReader("abc")) }, configure: func(s *Storage) {
 			s.hooks.syncDir = func(*os.File) error { return errors.New("directory sync failed") }
 		}},
 	}
@@ -456,6 +662,9 @@ func TestStoreCancellationAfterPartialReadRemovesTempAndQuota(t *testing.T) {
 	if _, err := storage.Store(ctx, testOwnerID, testShareID, 3, reader); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Store cancellation error = %v, want context.Canceled", err)
 	}
+	if !reader.closed.Load() {
+		t.Fatal("partially read source was not closed")
+	}
 	if got := requireUsage(t, storage); got != (QuotaUsage{}) {
 		t.Fatalf("usage after cancellation = %+v", got)
 	}
@@ -465,6 +674,107 @@ func TestStoreCancellationAfterPartialReadRemovesTempAndQuota(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Fatalf("canceled Store left entries: %v", entryNames(entries))
+	}
+}
+
+func TestStoreOverrunProbeNeverWritesOrHashesProbeByte(t *testing.T) {
+	storage := newTestStorage(t)
+	var observedSize int64
+	var observedHash string
+	storage.hooks.afterIngest = func(size int64, hash string) {
+		observedSize = size
+		observedHash = hash
+	}
+	reader := &recordingReadCloser{reader: strings.NewReader("abcd")}
+	if _, err := storage.Store(t.Context(), testOwnerID, testShareID, 3, reader); !errors.Is(err, ErrSizeMismatch) {
+		t.Fatalf("one-byte overrun error = %v, want ErrSizeMismatch", err)
+	}
+	if observedSize != 3 {
+		t.Fatalf("temporary size after overrun = %d, want 3", observedSize)
+	}
+	if observedHash != "6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d85" {
+		t.Fatalf("temporary hash after overrun = %q, want abc vector", observedHash)
+	}
+	if got := reader.readSizes; !reflect.DeepEqual(got, []int{3, 1}) {
+		t.Fatalf("reader buffer sizes = %v, want exact copy then one-byte probe", got)
+	}
+	if !reader.closed.Load() {
+		t.Fatal("overrun reader was not closed")
+	}
+}
+
+func TestStoreCancellationClosesBlockedReaderAndJoins(t *testing.T) {
+	storage := newTestStorage(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	reader := newBlockingReadCloser()
+	done := make(chan error, 1)
+	go func() {
+		_, err := storage.Store(ctx, testOwnerID, testShareID, 1, reader)
+		done <- err
+	}()
+	<-reader.started
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("blocked cancellation error = %v, want context.Canceled", err)
+	}
+	if !reader.closed.Load() {
+		t.Fatal("blocked reader Close was not observed")
+	}
+	if got := requireUsage(t, storage); got != (QuotaUsage{}) {
+		t.Fatalf("usage after blocked cancellation = %+v", got)
+	}
+}
+
+func TestStoreCancellationUnblocksPipeBody(t *testing.T) {
+	storage := newTestStorage(t)
+	pipeReader, pipeWriter := io.Pipe()
+	t.Cleanup(func() { _ = pipeWriter.Close() })
+	reader := &signalingReadCloser{ReadCloser: pipeReader, started: make(chan struct{})}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		_, err := storage.Store(ctx, testOwnerID, testShareID, 1, reader)
+		done <- err
+	}()
+	<-reader.started
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("pipe cancellation error = %v, want context.Canceled", err)
+	}
+	if got := requireUsage(t, storage); got != (QuotaUsage{}) {
+		t.Fatalf("usage after pipe cancellation = %+v", got)
+	}
+}
+
+func TestStoreRejectsPathologicalNoProgressAndClosesReader(t *testing.T) {
+	storage := newTestStorage(t)
+	reader := &noProgressReadCloser{}
+	if _, err := storage.Store(t.Context(), testOwnerID, testShareID, 1, reader); !errors.Is(err, io.ErrNoProgress) {
+		t.Fatalf("no-progress error = %v, want io.ErrNoProgress", err)
+	}
+	if reader.reads.Load() > maxConsecutiveEmptyReads {
+		t.Fatalf("no-progress reads = %d, max %d", reader.reads.Load(), maxConsecutiveEmptyReads)
+	}
+	if !reader.closed.Load() {
+		t.Fatal("no-progress reader was not closed")
+	}
+}
+
+func TestStoreClosesReaderOnSuccessAndAdmissionFailure(t *testing.T) {
+	storage := newTestStorage(t)
+	success := &recordingReadCloser{reader: strings.NewReader("x")}
+	if _, err := storage.Store(t.Context(), testOwnerID, testShareID, 1, success); err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+	if !success.closed.Load() {
+		t.Fatal("successful reader was not closed")
+	}
+	rejected := &recordingReadCloser{reader: strings.NewReader("x")}
+	if _, err := storage.Store(t.Context(), testOwnerID, testShareID, MaxFileBytes+1, rejected); !errors.Is(err, ErrFileTooLarge) {
+		t.Fatalf("admission error = %v, want ErrFileTooLarge", err)
+	}
+	if !rejected.closed.Load() {
+		t.Fatal("admission-rejected reader was not closed")
 	}
 }
 
@@ -482,7 +792,7 @@ func TestStoreRetriesExistingFinalNameWithoutOverwriting(t *testing.T) {
 	}
 	storage.random = bytes.NewReader(append(append(bytes.Repeat([]byte{0}, 16), bytes.Repeat([]byte{1}, 16)...), bytes.Repeat([]byte{2}, 16)...))
 
-	stored, err := storage.Store(t.Context(), testOwnerID, testShareID, 1, strings.NewReader("x"))
+	stored, err := storage.Store(t.Context(), testOwnerID, testShareID, 1, readCloser(strings.NewReader("x")))
 	if err != nil {
 		t.Fatalf("Store: %v", err)
 	}
@@ -498,17 +808,265 @@ func TestStoreRetriesExistingFinalNameWithoutOverwriting(t *testing.T) {
 	}
 }
 
+func TestStoreRejectsSymlinkFinalNameCollision(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation needs privileges on Windows")
+	}
+	storage := newTestStorage(t)
+	reservation, err := storage.Reserve(t.Context(), testOwnerID, testShareID, 0)
+	if err != nil {
+		t.Fatalf("Reserve: %v", err)
+	}
+	reservation.Release()
+	finalName := strings.Repeat("01", randomNameBytes)
+	target := filepath.Join(t.TempDir(), "target")
+	if err := os.WriteFile(target, []byte("untouched"), 0o600); err != nil {
+		t.Fatalf("Write target: %v", err)
+	}
+	if err := os.Symlink(target, filepath.Join(storageTestSharePath(storage), finalName)); err != nil {
+		t.Fatalf("Symlink final collision: %v", err)
+	}
+	storage.random = bytes.NewReader(append(bytes.Repeat([]byte{0}, randomNameBytes), bytes.Repeat([]byte{1}, randomNameBytes)...))
+	if _, err := storage.Store(t.Context(), testOwnerID, testShareID, 1, readCloser(strings.NewReader("x"))); !errors.Is(err, ErrSymlink) {
+		t.Fatalf("symlink final collision error = %v, want ErrSymlink", err)
+	}
+	content, err := os.ReadFile(target)
+	if err != nil || string(content) != "untouched" {
+		t.Fatalf("symlink target content=%q error=%v", content, err)
+	}
+}
+
+func TestIndependentStorageHandlesPublishNoReplace(t *testing.T) {
+	rootPath := filepath.Join(t.TempDir(), "staging")
+	first, err := NewStorage(rootPath)
+	if err != nil {
+		t.Fatalf("NewStorage first: %v", err)
+	}
+	defer first.Close()
+	second, err := NewStorage(rootPath)
+	if err != nil {
+		t.Fatalf("NewStorage second: %v", err)
+	}
+	defer second.Close()
+
+	finalBytes := bytes.Repeat([]byte{0xff}, randomNameBytes)
+	first.random = bytes.NewReader(append(bytes.Repeat([]byte{0x01}, randomNameBytes), finalBytes...))
+	second.random = bytes.NewReader(append(bytes.Repeat([]byte{0x02}, randomNameBytes), finalBytes...))
+	ready := make(chan struct{}, 2)
+	start := make(chan struct{})
+	barrier := func() {
+		ready <- struct{}{}
+		<-start
+	}
+	first.hooks.beforePublish = barrier
+	second.hooks.beforePublish = barrier
+
+	type result struct {
+		storage *Storage
+		content string
+		file    StoredFile
+		err     error
+	}
+	results := make(chan result, 2)
+	go func() {
+		file, err := first.Store(t.Context(), testOwnerID, testShareID, 3, readCloser(strings.NewReader("one")))
+		results <- result{storage: first, content: "one", file: file, err: err}
+	}()
+	go func() {
+		file, err := second.Store(t.Context(), testOwnerID, testShareID, 3, readCloser(strings.NewReader("two")))
+		results <- result{storage: second, content: "two", file: file, err: err}
+	}()
+	<-ready
+	<-ready
+	close(start)
+	firstResult := <-results
+	secondResult := <-results
+
+	all := []result{firstResult, secondResult}
+	var winner *result
+	for index := range all {
+		if all[index].err == nil {
+			if winner != nil {
+				t.Fatal("both independent Storage handles published the same final name")
+			}
+			winner = &all[index]
+		}
+	}
+	if winner == nil {
+		t.Fatalf("both publications failed: %v, %v", firstResult.err, secondResult.err)
+	}
+	wantName := strings.Repeat("ff", randomNameBytes)
+	if winner.file.StorageName != wantName {
+		t.Fatalf("winner storage name = %q, want %q", winner.file.StorageName, wantName)
+	}
+	content, err := os.ReadFile(filepath.Join(rootPath, testOwnerID, testShareID, wantName))
+	if err != nil {
+		t.Fatalf("ReadFile winner: %v", err)
+	}
+	if string(content) != winner.content {
+		t.Fatalf("winner content = %q, want %q", content, winner.content)
+	}
+	for index := range all {
+		usage, err := all[index].storage.Usage(t.Context(), testOwnerID, testShareID)
+		if err != nil {
+			t.Fatalf("Usage: %v", err)
+		}
+		if &all[index] == winner {
+			if usage != (QuotaUsage{OwnerBytes: 3, ShareBytes: 3, ShareFiles: 1}) {
+				t.Fatalf("winner usage = %+v", usage)
+			}
+		} else if usage != (QuotaUsage{}) {
+			t.Fatalf("loser usage = %+v", usage)
+		}
+	}
+	entries, err := os.ReadDir(filepath.Join(rootPath, testOwnerID, testShareID))
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	if got := entryNames(entries); len(got) != 1 || got[0] != wantName {
+		t.Fatalf("publication entries = %v, want only %q", got, wantName)
+	}
+}
+
+func TestPostPublishRollbackFailureRetainsQuotaAndReturnsCleanupName(t *testing.T) {
+	rootPath := filepath.Join(t.TempDir(), "staging")
+	storage, err := NewStorage(rootPath)
+	if err != nil {
+		t.Fatalf("NewStorage: %v", err)
+	}
+	finalName := strings.Repeat("02", randomNameBytes)
+	storage.random = bytes.NewReader(append(bytes.Repeat([]byte{0x01}, randomNameBytes), bytes.Repeat([]byte{0x02}, randomNameBytes)...))
+	storage.hooks.syncDir = func(*os.File) error { return errors.New("sync failed") }
+	storage.hooks.remove = func(root *os.Root, name string) error {
+		if name == finalName {
+			return errors.New("rollback removal failed")
+		}
+		return root.Remove(name)
+	}
+
+	stored, err := storage.Store(t.Context(), testOwnerID, testShareID, 3, readCloser(strings.NewReader("abc")))
+	if err == nil {
+		t.Fatal("Store unexpectedly succeeded")
+	}
+	if stored.StorageName != finalName {
+		t.Fatalf("cleanup storage name = %q, want %q", stored.StorageName, finalName)
+	}
+	if got := requireUsage(t, storage); got != (QuotaUsage{OwnerBytes: 3, ShareBytes: 3, ShareFiles: 1}) {
+		t.Fatalf("usage after incomplete rollback = %+v", got)
+	}
+	if content, readErr := os.ReadFile(filepath.Join(rootPath, testOwnerID, testShareID, finalName)); readErr != nil || string(content) != "abc" {
+		t.Fatalf("retained final content=%q error=%v", content, readErr)
+	}
+	if err := storage.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopened, err := NewStorage(rootPath)
+	if err != nil {
+		t.Fatalf("reopen Storage: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	if got := requireUsage(t, reopened); got != (QuotaUsage{OwnerBytes: 3, ShareBytes: 3, ShareFiles: 1}) {
+		t.Fatalf("reconciled usage = %+v", got)
+	}
+	if err := reopened.Remove(t.Context(), testOwnerID, testShareID, finalName); err != nil {
+		t.Fatalf("Remove retained final: %v", err)
+	}
+	if err := reopened.Remove(t.Context(), testOwnerID, testShareID, finalName); err != nil {
+		t.Fatalf("idempotent second Remove: %v", err)
+	}
+	if got := requireUsage(t, reopened); got != (QuotaUsage{}) {
+		t.Fatalf("usage after cleanup = %+v", got)
+	}
+}
+
+func TestRemoveMissingCommittedFileReleasesQuotaIdempotently(t *testing.T) {
+	storage := newTestStorage(t)
+	stored, err := storage.Store(t.Context(), testOwnerID, testShareID, 3, readCloser(strings.NewReader("abc")))
+	if err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+	if err := os.Remove(filepath.Join(storageTestSharePath(storage), stored.StorageName)); err != nil {
+		t.Fatalf("external Remove: %v", err)
+	}
+	for range 2 {
+		if err := storage.Remove(t.Context(), testOwnerID, testShareID, stored.StorageName); err != nil {
+			t.Fatalf("Remove missing committed file: %v", err)
+		}
+	}
+	if got := requireUsage(t, storage); got != (QuotaUsage{}) {
+		t.Fatalf("usage after missing-file reconciliation = %+v", got)
+	}
+}
+
+func TestRemoveMissingShareReleasesMatchingCommittedQuota(t *testing.T) {
+	storage := newTestStorage(t)
+	stored, err := storage.Store(t.Context(), testOwnerID, testShareID, 3, readCloser(strings.NewReader("abc")))
+	if err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+	if err := os.RemoveAll(storageTestSharePath(storage)); err != nil {
+		t.Fatalf("RemoveAll share fixture: %v", err)
+	}
+	if err := storage.Remove(t.Context(), testOwnerID, testShareID, stored.StorageName); err != nil {
+		t.Fatalf("Remove missing share: %v", err)
+	}
+	if got := requireUsage(t, storage); got != (QuotaUsage{}) {
+		t.Fatalf("usage after missing-share reconciliation = %+v", got)
+	}
+}
+
+func TestRemoveErrorRetainsCommittedQuota(t *testing.T) {
+	storage := newTestStorage(t)
+	stored, err := storage.Store(t.Context(), testOwnerID, testShareID, 3, readCloser(strings.NewReader("abc")))
+	if err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+	storage.hooks.remove = func(*os.Root, string) error { return errors.New("remove failed") }
+	if err := storage.Remove(t.Context(), testOwnerID, testShareID, stored.StorageName); err == nil {
+		t.Fatal("Remove unexpectedly succeeded")
+	}
+	if got := requireUsage(t, storage); got != (QuotaUsage{OwnerBytes: 3, ShareBytes: 3, ShareFiles: 1}) {
+		t.Fatalf("usage after remove error = %+v", got)
+	}
+	storage.hooks.remove = (*os.Root).Remove
+	if err := storage.Remove(t.Context(), testOwnerID, testShareID, stored.StorageName); err != nil {
+		t.Fatalf("cleanup Remove: %v", err)
+	}
+}
+
 func TestStoreAllowsUnsupportedDirectorySync(t *testing.T) {
 	storage := newTestStorage(t)
 	storage.hooks.syncDir = func(*os.File) error {
 		return fmt.Errorf("directory sync: %w", errors.ErrUnsupported)
 	}
-	stored, err := storage.Store(t.Context(), testOwnerID, testShareID, 1, strings.NewReader("x"))
+	stored, err := storage.Store(t.Context(), testOwnerID, testShareID, 1, readCloser(strings.NewReader("x")))
 	if err != nil {
 		t.Fatalf("Store with unsupported directory sync: %v", err)
 	}
 	if err := storage.Remove(t.Context(), testOwnerID, testShareID, stored.StorageName); err != nil {
 		t.Fatalf("Remove with unsupported directory sync: %v", err)
+	}
+}
+
+func TestDirectorySyncErrorClassification(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "nil", err: nil, want: false},
+		{name: "unsupported", err: errors.ErrUnsupported, want: true},
+		{name: "wrapped_unsupported", err: fmt.Errorf("sync: %w", errors.ErrUnsupported), want: true},
+		{name: "invalid", err: fs.ErrInvalid, want: true},
+		{name: "wrapped_invalid", err: fmt.Errorf("sync: %w", fs.ErrInvalid), want: true},
+		{name: "io_error", err: errors.New("I/O failure"), want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isUnsupportedDirectorySync(tc.err); got != tc.want {
+				t.Fatalf("isUnsupportedDirectorySync(%v) = %t, want %t", tc.err, got, tc.want)
+			}
+		})
 	}
 }
 
@@ -552,13 +1110,53 @@ func TestCleanupTempsIsScopedAndRejectsSymlinks(t *testing.T) {
 	}
 }
 
+func TestCleanupTempsRejectsUnsafeModesAndHardLinks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Go FileMode and hard-link count do not represent Windows ACL/link state")
+	}
+	for _, tc := range []struct {
+		name  string
+		setup func(*testing.T, string, string)
+		want  error
+	}{
+		{name: "permissive", want: ErrPermissions, setup: func(t *testing.T, sharePath, tempName string) {
+			if err := os.WriteFile(filepath.Join(sharePath, tempName), []byte("x"), 0o644); err != nil {
+				t.Fatalf("WriteFile permissive temp: %v", err)
+			}
+		}},
+		{name: "hard_link", want: ErrMultipleLinks, setup: func(t *testing.T, sharePath, tempName string) {
+			first := filepath.Join(sharePath, tempName)
+			if err := os.WriteFile(first, []byte("x"), 0o600); err != nil {
+				t.Fatalf("WriteFile temp: %v", err)
+			}
+			if err := os.Link(first, filepath.Join(sharePath, tempNamePrefix+strings.Repeat("f", 32))); err != nil {
+				t.Fatalf("Link temp: %v", err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			storage := newTestStorage(t)
+			reservation, err := storage.Reserve(t.Context(), testOwnerID, testShareID, 0)
+			if err != nil {
+				t.Fatalf("Reserve: %v", err)
+			}
+			reservation.Release()
+			tempName := tempNamePrefix + strings.Repeat("e", 32)
+			tc.setup(t, storageTestSharePath(storage), tempName)
+			if _, err := storage.CleanupTemps(t.Context(), testOwnerID, testShareID); !errors.Is(err, tc.want) {
+				t.Fatalf("CleanupTemps error = %v, want %v", err, tc.want)
+			}
+		})
+	}
+}
+
 func TestNewStorageRebuildsCommittedQuotaUntilExplicitRemoval(t *testing.T) {
-	rootPath := t.TempDir()
+	rootPath := filepath.Join(t.TempDir(), "staging")
 	storage, err := NewStorage(rootPath)
 	if err != nil {
 		t.Fatalf("NewStorage: %v", err)
 	}
-	stored, err := storage.Store(t.Context(), testOwnerID, testShareID, 3, strings.NewReader("abc"))
+	stored, err := storage.Store(t.Context(), testOwnerID, testShareID, 3, readCloser(strings.NewReader("abc")))
 	if err != nil {
 		_ = storage.Close()
 		t.Fatalf("Store: %v", err)
@@ -585,7 +1183,7 @@ func TestNewStorageRebuildsCommittedQuotaUntilExplicitRemoval(t *testing.T) {
 
 func newTestStorage(t *testing.T) *Storage {
 	t.Helper()
-	storage, err := NewStorage(t.TempDir())
+	storage, err := NewStorage(filepath.Join(t.TempDir(), "staging"))
 	if err != nil {
 		t.Fatalf("NewStorage: %v", err)
 	}
@@ -610,12 +1208,32 @@ func storageTestSharePath(storage *Storage) string {
 	return filepath.Join(storage.root.Name(), testOwnerID, testShareID)
 }
 
+func makeStorageDirectories(t *testing.T, rootPath string) string {
+	t.Helper()
+	if err := os.Chmod(rootPath, 0o700); err != nil {
+		t.Fatalf("Chmod root: %v", err)
+	}
+	ownerPath := filepath.Join(rootPath, testOwnerID)
+	sharePath := filepath.Join(ownerPath, testShareID)
+	if err := os.Mkdir(ownerPath, 0o700); err != nil {
+		t.Fatalf("Mkdir owner: %v", err)
+	}
+	if err := os.Mkdir(sharePath, 0o700); err != nil {
+		t.Fatalf("Mkdir share: %v", err)
+	}
+	return sharePath
+}
+
 func entryNames(entries []os.DirEntry) []string {
 	names := make([]string, len(entries))
 	for index, entry := range entries {
 		names[index] = entry.Name()
 	}
 	return names
+}
+
+func readCloser(reader io.Reader) io.ReadCloser {
+	return io.NopCloser(reader)
 }
 
 func canceledContext() context.Context {
@@ -633,6 +1251,7 @@ func (errorReader) Read([]byte) (int, error) {
 type cancelAfterFirstRead struct {
 	cancel context.CancelFunc
 	read   bool
+	closed atomic.Bool
 }
 
 func (r *cancelAfterFirstRead) Read(buffer []byte) (int, error) {
@@ -643,4 +1262,75 @@ func (r *cancelAfterFirstRead) Read(buffer []byte) (int, error) {
 	buffer[0] = 'x'
 	r.cancel()
 	return 1, nil
+}
+
+func (r *cancelAfterFirstRead) Close() error {
+	r.closed.Store(true)
+	return nil
+}
+
+type recordingReadCloser struct {
+	reader    io.Reader
+	readSizes []int
+	closed    atomic.Bool
+}
+
+func (r *recordingReadCloser) Read(buffer []byte) (int, error) {
+	r.readSizes = append(r.readSizes, len(buffer))
+	return r.reader.Read(buffer)
+}
+
+func (r *recordingReadCloser) Close() error {
+	r.closed.Store(true)
+	return nil
+}
+
+type blockingReadCloser struct {
+	started   chan struct{}
+	unblocked chan struct{}
+	startOnce sync.Once
+	closeOnce sync.Once
+	closed    atomic.Bool
+}
+
+func newBlockingReadCloser() *blockingReadCloser {
+	return &blockingReadCloser{started: make(chan struct{}), unblocked: make(chan struct{})}
+}
+
+func (r *blockingReadCloser) Read([]byte) (int, error) {
+	r.startOnce.Do(func() { close(r.started) })
+	<-r.unblocked
+	return 0, errors.New("reader closed")
+}
+
+func (r *blockingReadCloser) Close() error {
+	r.closed.Store(true)
+	r.closeOnce.Do(func() { close(r.unblocked) })
+	return nil
+}
+
+type noProgressReadCloser struct {
+	reads  atomic.Int32
+	closed atomic.Bool
+}
+
+type signalingReadCloser struct {
+	io.ReadCloser
+	started chan struct{}
+	once    sync.Once
+}
+
+func (r *signalingReadCloser) Read(buffer []byte) (int, error) {
+	r.once.Do(func() { close(r.started) })
+	return r.ReadCloser.Read(buffer)
+}
+
+func (r *noProgressReadCloser) Read([]byte) (int, error) {
+	r.reads.Add(1)
+	return 0, nil
+}
+
+func (r *noProgressReadCloser) Close() error {
+	r.closed.Store(true)
+	return nil
 }
