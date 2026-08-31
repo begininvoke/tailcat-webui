@@ -1,6 +1,6 @@
 import { DeleteOutlined, LinkOutlined, PlayCircleOutlined, PlusOutlined, PoweroffOutlined, SettingOutlined } from '@ant-design/icons'
 import { Alert, App, Button, Card, Col, Descriptions, Divider, Drawer, Empty, Flex, Form, Grid, Input, InputNumber, List, Popconfirm, Radio, Row, Space, Switch, Table, Tabs, Tag, Typography, type TableProps } from 'antd'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useSearchParams } from 'react-router-dom'
 import { useAuth } from '../app/auth'
@@ -9,7 +9,8 @@ import { PageHeader } from '../components/PageHeader'
 import { ResourceState } from '../components/ResourceState'
 import { RuntimeState } from '../components/RuntimeState'
 import { useAsyncResource } from '../hooks/useAsyncResource'
-import { api, type AllowedClient, type ExitRule, type PortMapping, type Server } from '../services/api'
+import { api, type ExitRule, type Server } from '../services/api'
+import { beginServerSettingsLoad, completeServerSettingsLoad, emptyServerSettings, failServerSettingsLoad, isValidCIDR, type ServerSettingsData } from './serverPolicy'
 
 interface ServerFormValues {
   name: string; key_mode: 'ephemeral' | 'saved'; region: string; derp_map_url?: string; exit_node_enabled: boolean; start: boolean
@@ -32,12 +33,9 @@ export default function ServersPage() {
   const [submitting, setSubmitting] = useState(false)
   const [busyID, setBusyID] = useState('')
   const [mappingServer, setMappingServer] = useState<Server | null>(null)
-  const [mappings, setMappings] = useState<PortMapping[]>([])
-  const [allowedClients, setAllowedClients] = useState<AllowedClient[]>([])
-  const [exitRules, setExitRules] = useState<ExitRule[]>([])
-  const [settingsLoading, setSettingsLoading] = useState(false)
-  const [settingsError, setSettingsError] = useState(false)
+  const [settings, setSettings] = useState(emptyServerSettings)
   const [exitNodeUpdating, setExitNodeUpdating] = useState(false)
+  const settingsRequest = useRef(0)
   const [mappingForm] = Form.useForm<MappingFormValues>()
   const [allowedForm] = Form.useForm<AllowedClientFormValues>()
   const [exitRuleForm] = Form.useForm<ExitRuleFormValues>()
@@ -74,70 +72,103 @@ export default function ServersPage() {
   }
 
   const openMappings = async (server: Server) => {
-    setMappingServer(server); setSettingsLoading(true); setSettingsError(false)
+    const requestID = ++settingsRequest.current
+    setMappingServer(server); setSettings(beginServerSettingsLoad(server.id, requestID))
     try {
       const [nextMappings, nextAllowed, nextExitRules] = await Promise.all([api.mappings(server.id), api.allowedClients(server.id), api.exitRules(server.id)])
-      setMappings(nextMappings); setAllowedClients(nextAllowed); setExitRules(nextExitRules)
-    } catch { setSettingsError(true); void message.error(t('feedback.loadFailed')) }
-    finally { setSettingsLoading(false) }
+      if (settingsRequest.current !== requestID) return
+      setSettings((current) => completeServerSettingsLoad(current, requestID, { mappings: nextMappings, allowedClients: nextAllowed, exitRules: nextExitRules }))
+    } catch {
+      if (settingsRequest.current !== requestID) return
+      setSettings((current) => failServerSettingsLoad(current, requestID)); void message.error(t('feedback.loadFailed'))
+    }
+  }
+
+  const closeSettings = () => {
+    const requestID = ++settingsRequest.current
+    setMappingServer(null); setSettings(emptyServerSettings(requestID))
+  }
+
+  const updateSettings = (serverID: string, requestID: number, data: Partial<ServerSettingsData>) => {
+    setSettings((current) => current.serverID === serverID && current.requestID === requestID ? { ...current, ...data } : current)
   }
 
   const createMapping = async (values: MappingFormValues) => {
     if (!mappingServer) return
+    const serverID = mappingServer.id
+    const requestID = settings.requestID
     setSubmitting(true)
     try {
-      await api.createMapping(mappingServer.id, { ...values, target_host: values.target_host || '', target_port: values.target_port || 0 })
-      mappingForm.resetFields(); setMappings(await api.mappings(mappingServer.id)); await resource.refresh()
+      await api.createMapping(serverID, { ...values, target_host: values.target_host || '', target_port: values.target_port || 0 })
+      mappingForm.resetFields(); updateSettings(serverID, requestID, { mappings: await api.mappings(serverID) }); await resource.refresh()
     } catch { void message.error(t('feedback.createFailed')) } finally { setSubmitting(false) }
   }
 
   const deleteMapping = async (id: string) => {
     if (!mappingServer) return
-    try { await api.deleteMapping(id); setMappings(await api.mappings(mappingServer.id)); await resource.refresh() }
+    const serverID = mappingServer.id
+    const requestID = settings.requestID
+    try { await api.deleteMapping(id); updateSettings(serverID, requestID, { mappings: await api.mappings(serverID) }); await resource.refresh() }
     catch { void message.error(t('feedback.deleteFailed')) }
   }
 
   const createAllowedClient = async (values: AllowedClientFormValues) => {
     if (!mappingServer) return
+    const serverID = mappingServer.id
+    const requestID = settings.requestID
     setSubmitting(true)
     try {
-      await api.createAllowedClient(mappingServer.id, values)
-      allowedForm.resetFields(); setAllowedClients(await api.allowedClients(mappingServer.id)); await resource.refresh()
+      await api.createAllowedClient(serverID, values)
+      allowedForm.resetFields(); updateSettings(serverID, requestID, { allowedClients: await api.allowedClients(serverID) }); await resource.refresh()
     } catch { void message.error(t('feedback.createFailed')) } finally { setSubmitting(false) }
   }
 
   const deleteAllowedClient = async (id: string) => {
     if (!mappingServer) return
-    try { await api.deleteAllowedClient(id); setAllowedClients(await api.allowedClients(mappingServer.id)); await resource.refresh() }
+    const serverID = mappingServer.id
+    const requestID = settings.requestID
+    try { await api.deleteAllowedClient(id); updateSettings(serverID, requestID, { allowedClients: await api.allowedClients(serverID) }); await resource.refresh() }
     catch { void message.error(t('feedback.deleteFailed')) }
   }
 
   const createExitRule = async (values: ExitRuleFormValues) => {
     if (!mappingServer) return
+    const serverID = mappingServer.id
+    const requestID = settings.requestID
     setSubmitting(true)
     try {
-      await api.createExitRule(mappingServer.id, { ...values, enabled: true })
-      exitRuleForm.resetFields(); setExitRules(await api.exitRules(mappingServer.id)); await resource.refresh()
+      await api.createExitRule(serverID, { ...values, enabled: true })
+      exitRuleForm.resetFields(); updateSettings(serverID, requestID, { exitRules: await api.exitRules(serverID) }); await resource.refresh()
     } catch { void message.error(t('servers.exitRuleCreateFailed')) } finally { setSubmitting(false) }
   }
 
   const deleteExitRule = async (id: string) => {
     if (!mappingServer) return
+    const serverID = mappingServer.id
+    const requestID = settings.requestID
     try {
       await api.deleteExitRule(id)
-      setExitRules(await api.exitRules(mappingServer.id)); await resource.refresh()
+      updateSettings(serverID, requestID, { exitRules: await api.exitRules(serverID) }); await resource.refresh()
     } catch { void message.error(t('servers.exitRuleDeleteFailed')) }
   }
 
   const setExitNodeEnabled = async (enabled: boolean) => {
     if (!mappingServer) return
+    const requestID = settingsRequest.current
+    const serverID = mappingServer.id
     setExitNodeUpdating(true)
     try {
-      setMappingServer(await api.setExitNodeEnabled(mappingServer.id, enabled)); await resource.refresh()
-    } catch { void message.error(t('servers.exitNodeUpdateFailed')) } finally { setExitNodeUpdating(false) }
+      const nextServer = await api.setExitNodeEnabled(serverID, enabled)
+      if (settingsRequest.current !== requestID) return
+      setMappingServer(nextServer); await resource.refresh()
+    } catch {
+      if (settingsRequest.current === requestID) void message.error(t('servers.exitNodeUpdateFailed'))
+    } finally {
+      if (settingsRequest.current === requestID) setExitNodeUpdating(false)
+    }
   }
 
-  const hasEnabledExitRule = exitRules.some((rule) => rule.enabled)
+  const hasEnabledExitRule = settings.exitRules.some((rule) => rule.enabled)
   const exitRuleColumns: TableProps<ExitRule>['columns'] = [
     { title: t('servers.exitRulePrefix'), dataIndex: 'prefix', render: (prefix: string) => <code className="exit-rule-prefix">{prefix}</code> },
     { title: t('servers.startPort'), dataIndex: 'start_port', responsive: ['sm'] },
@@ -189,14 +220,14 @@ export default function ServersPage() {
         </Form>
       </Drawer>
 
-      <Drawer title={mappingServer ? `${mappingServer.name} · ${t('servers.settings')}` : t('servers.settings')} width={640} placement={screens.md ? 'right' : 'bottom'} height={screens.md ? undefined : '92dvh'} open={Boolean(mappingServer)} onClose={() => setMappingServer(null)} destroyOnHidden>
-        {settingsError && <Alert type="error" showIcon message={t('feedback.loadFailed')} className="drawer-alert" />}
+      <Drawer title={mappingServer ? `${mappingServer.name} · ${t('servers.settings')}` : t('servers.settings')} width={640} placement={screens.md ? 'right' : 'bottom'} height={screens.md ? undefined : '92dvh'} open={Boolean(mappingServer)} onClose={closeSettings} destroyOnHidden>
+        {settings.error && <Alert type="error" showIcon message={t('feedback.loadFailed')} className="drawer-alert" />}
         <Tabs className="server-settings-tabs" items={[
           {
             key: 'mappings', label: t('servers.mappings'), children: <>
               <Typography.Paragraph type="secondary">{t('servers.mappingsHint')}</Typography.Paragraph>
               {mappingServer?.runtime_state === 'running' && <Alert type="warning" showIcon message={t('servers.mappingsHint')} className="drawer-alert" />}
-              <List loading={settingsLoading} dataSource={mappings} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} /> }} renderItem={(mapping) => (
+              <List loading={settings.loading} dataSource={settings.mappings} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} /> }} renderItem={(mapping) => (
                 <List.Item actions={[<Popconfirm key="delete" title={t('common.delete')} onConfirm={() => void deleteMapping(mapping.id)}><Button type="text" danger icon={<DeleteOutlined />} aria-label={t('common.delete')} /></Popconfirm>]}>
                   <List.Item.Meta avatar={<LinkOutlined />} title={`${mapping.listen_port} · ${mapping.name}`} description={mapping.kind === 'no_auth_ssh' ? t('servers.ssh') : `${mapping.target_host}:${mapping.target_port}`} />
                 </List.Item>
@@ -217,7 +248,7 @@ export default function ServersPage() {
           {
             key: 'allowlist', label: t('servers.allowlist'), children: <>
               <Typography.Paragraph type="secondary">{t('servers.allowlistHint')}</Typography.Paragraph>
-              <List loading={settingsLoading} dataSource={allowedClients} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} /> }} renderItem={(client) => (
+              <List loading={settings.loading} dataSource={settings.allowedClients} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} /> }} renderItem={(client) => (
                 <List.Item actions={[<Popconfirm key="delete" title={t('common.delete')} onConfirm={() => void deleteAllowedClient(client.id)}><Button type="text" danger icon={<DeleteOutlined />} aria-label={t('common.delete')} /></Popconfirm>]}>
                   <List.Item.Meta title={client.name} description={<Typography.Text className="mono-value" ellipsis>{client.public_key}</Typography.Text>} />
                 </List.Item>
@@ -241,9 +272,9 @@ export default function ServersPage() {
               </Flex>
               {!mappingServer?.exit_node_enabled && !hasEnabledExitRule && <Alert type="info" showIcon message={t('servers.exitNodeDisabledHint')} className="drawer-alert" />}
               {screens.md ? (
-                <Table<ExitRule> className="exit-rule-table" rowKey="id" size="small" loading={settingsLoading} pagination={false} dataSource={exitRules} columns={exitRuleColumns} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={<><Typography.Text strong>{t('servers.exitRulesEmpty')}</Typography.Text><Typography.Paragraph type="secondary">{t('servers.exitRulesEmptyDescription')}</Typography.Paragraph></>} /> }} />
+                <Table<ExitRule> className="exit-rule-table" rowKey="id" size="small" loading={settings.loading} pagination={false} dataSource={settings.exitRules} columns={exitRuleColumns} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={<><Typography.Text strong>{t('servers.exitRulesEmpty')}</Typography.Text><Typography.Paragraph type="secondary">{t('servers.exitRulesEmptyDescription')}</Typography.Paragraph></>} /> }} />
               ) : (
-                <List loading={settingsLoading} dataSource={exitRules} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={<><Typography.Text strong>{t('servers.exitRulesEmpty')}</Typography.Text><Typography.Paragraph type="secondary">{t('servers.exitRulesEmptyDescription')}</Typography.Paragraph></>} /> }} renderItem={(rule) => (
+                <List loading={settings.loading} dataSource={settings.exitRules} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={<><Typography.Text strong>{t('servers.exitRulesEmpty')}</Typography.Text><Typography.Paragraph type="secondary">{t('servers.exitRulesEmptyDescription')}</Typography.Paragraph></>} /> }} renderItem={(rule) => (
                   <List.Item className="exit-rule-card" actions={[<Popconfirm key="delete" title={t('servers.deleteExitRuleTitle')} description={t('servers.deleteExitRuleDescription')} okText={t('common.delete')} cancelText={t('common.cancel')} okButtonProps={{ danger: true }} onConfirm={() => void deleteExitRule(rule.id)}><Button type="text" danger icon={<DeleteOutlined />} aria-label={t('common.delete')} /></Popconfirm>]}>
                     <List.Item.Meta title={<code className="exit-rule-prefix">{rule.prefix}</code>} description={<Flex gap={8} wrap="wrap"><Typography.Text>{rule.start_port === rule.end_port ? rule.start_port : `${rule.start_port}–${rule.end_port}`}</Typography.Text><Tag color={rule.enabled ? 'success' : 'default'}>{rule.enabled ? t('servers.ruleEnabled') : t('servers.ruleDisabled')}</Tag></Flex>} />
                   </List.Item>
@@ -251,12 +282,7 @@ export default function ServersPage() {
               )}
               <Divider>{t('servers.addExitRule')}</Divider>
               <Form form={exitRuleForm} layout="vertical" initialValues={{ start_port: 1, end_port: 65535 }} onFinish={(values) => void createExitRule(values)}>
-                <Form.Item name="prefix" label={t('servers.exitRulePrefix')} rules={[{ required: true, message: t('validation.required') }, { validator: (_, value: string | undefined) => {
-                  const [address, length] = value?.trim().split('/') ?? []
-                  const bits = Number(length)
-                  const maxBits = address?.includes(':') ? 128 : 32
-                  return address && Number.isInteger(bits) && bits >= 0 && bits <= maxBits ? Promise.resolve() : Promise.reject(new Error(t('servers.exitRulePrefixInvalid')))
-                } }]}><Input className="mono-input" placeholder="10.0.0.0/8" /></Form.Item>
+                <Form.Item name="prefix" label={t('servers.exitRulePrefix')} rules={[{ required: true, message: t('validation.required') }, { validator: (_, value: string | undefined) => isValidCIDR(value ?? '') ? Promise.resolve() : Promise.reject(new Error(t('servers.exitRulePrefixInvalid'))) }]}><Input className="mono-input" placeholder="10.0.0.0/8" /></Form.Item>
                 <Row gutter={16}>
                   <Col xs={24} sm={12}><Form.Item name="start_port" label={t('servers.startPort')} rules={[{ required: true, message: t('validation.port') }]}><InputNumber min={1} max={65535} className="full-width" /></Form.Item></Col>
                   <Col xs={24} sm={12}><Form.Item name="end_port" label={t('servers.endPort')} dependencies={['start_port']} rules={[{ required: true, message: t('validation.port') }, ({ getFieldValue }) => ({ validator: (_, value: number | null) => value !== null && value >= getFieldValue('start_port') ? Promise.resolve() : Promise.reject(new Error(t('servers.exitRulePortRange'))) })]}><InputNumber min={1} max={65535} className="full-width" /></Form.Item></Col>
