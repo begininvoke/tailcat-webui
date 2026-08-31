@@ -20,6 +20,7 @@ import (
 const (
 	maxActiveRunsPerOwner  = 2
 	retainedRunsPerOwner   = 100
+	auditReconcilePageSize = 100
 	retentionAge           = 30 * 24 * time.Hour
 	lifecycleRetryAttempts = 3
 	lifecycleRetryDelay    = 10 * time.Millisecond
@@ -122,10 +123,45 @@ func NewService(ctx context.Context, db *ent.Client, dialer ClientDialer, audito
 		active: make(map[string]*activeRun), clientRuns: make(map[string]string), ownerRuns: make(map[string]int),
 	}
 	service.pendingCond = sync.NewCond(&service.mu)
+	if err := service.reconcileAudits(ctx); err != nil {
+		return nil, err
+	}
 	if err := service.recover(ctx); err != nil {
 		return nil, err
 	}
 	return service, nil
+}
+
+// reconcileAudits repairs missing lifecycle audit entries from the durable
+// summary before the service admits new work. Diagnostic rows contain every
+// non-sensitive field needed to reconstruct deterministic, idempotent audit
+// entries, so no separate outbox schema is required.
+func (s *Service) reconcileAudits(ctx context.Context) error {
+	cursor := ""
+	for {
+		query := s.db.DiagnosticRun.Query().Order(ent.Asc(diagnosticrun.FieldID)).Limit(auditReconcilePageSize)
+		if cursor != "" {
+			query.Where(diagnosticrun.IDGT(cursor))
+		}
+		rows, err := query.All(ctx)
+		if err != nil {
+			return fmt.Errorf("list diagnostic audit reconciliation page: %w", err)
+		}
+		for _, row := range rows {
+			if err := s.recordLifecycle(ctx, row.UserID, row.ClientID, row.ID, RunStatusRunning); err != nil {
+				return fmt.Errorf("reconcile diagnostic start audit for run %s: %w", row.ID, err)
+			}
+			if row.Status != diagnosticrun.StatusRunning {
+				if err := s.recordLifecycle(ctx, row.UserID, row.ClientID, row.ID, RunStatus(row.Status)); err != nil {
+					return fmt.Errorf("reconcile diagnostic terminal audit for run %s: %w", row.ID, err)
+				}
+			}
+		}
+		if len(rows) < auditReconcilePageSize {
+			return nil
+		}
+		cursor = rows[len(rows)-1].ID
+	}
 }
 
 func (s *Service) List(ctx context.Context, ownerID string) ([]RunView, error) {

@@ -186,6 +186,27 @@ func TestServiceStartDoesNotDialWhenAuditCannotBeRecorded(t *testing.T) {
 	if !errors.Is(closeErr, errInjectedLifecycle) {
 		t.Errorf("Close error = %v, want unresolved audit failure", closeErr)
 	}
+	healthyAudit, err := audit.NewService(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reconciled, err := NewService(t.Context(), db, blockedDialer(t), healthyAudit, eventPublisherFunc(func(string, string, events.RuntimePhase, EventPayload) {}), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("reconcile failed start lifecycle: %v", err)
+	}
+	t.Cleanup(func() { _ = reconciled.Close() })
+	row = db.DiagnosticRun.GetX(t.Context(), row.ID)
+	if row.Status != diagnosticrun.StatusInterrupted || row.FinishedAt == nil {
+		t.Fatalf("reconciled failed start row = %+v", row)
+	}
+	audits := db.AuditEvent.Query().AllX(t.Context())
+	if len(audits) != 2 || audits[0].ResourceID != row.ID || audits[1].ResourceID != row.ID {
+		t.Fatalf("reconciled failed start audits = %+v", audits)
+	}
+	actions := map[string]bool{audits[0].Action: true, audits[1].Action: true}
+	if !actions["diagnostic.start"] || !actions["diagnostic.interrupted"] {
+		t.Fatalf("reconciled failed start actions = %+v", actions)
+	}
 }
 
 func TestServiceRetriesTransientTerminalPersistenceFailure(t *testing.T) {
@@ -352,8 +373,53 @@ func TestServiceSurfacesPermanentTerminalAuditFailureFromClose(t *testing.T) {
 	if got := db.AuditEvent.Query().CountX(t.Context()); got != 1 {
 		t.Fatalf("durable audit rows = %d, want only start", got)
 	}
-	if row := db.DiagnosticRun.GetX(t.Context(), run.ID); row.Status == diagnosticrun.StatusRunning || row.FinishedAt == nil {
-		t.Fatalf("terminal row was not persisted before audit failure: %+v", row)
+	terminalRow := db.DiagnosticRun.GetX(t.Context(), run.ID)
+	if terminalRow.Status == diagnosticrun.StatusRunning || terminalRow.FinishedAt == nil {
+		t.Fatalf("terminal row was not persisted before audit failure: %+v", terminalRow)
+	}
+	_, reconciliationErr := NewService(t.Context(), db, blockedDialer(t), recorder, eventPublisherFunc(func(string, string, events.RuntimePhase, EventPayload) {}), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if !errors.Is(reconciliationErr, errInjectedLifecycle) {
+		t.Fatalf("NewService with unavailable auditor error = %v", reconciliationErr)
+	}
+	if got := terminalCalls.Load(); got != 6 {
+		t.Fatalf("terminal audit attempts after startup reconciliation = %d, want 6", got)
+	}
+	if got := db.AuditEvent.Query().CountX(t.Context()); got != 1 {
+		t.Fatalf("audit rows after unavailable reconciliation = %d, want only start", got)
+	}
+	if preserved := db.DiagnosticRun.GetX(t.Context(), run.ID); preserved.Status != terminalRow.Status || preserved.FinishedAt == nil {
+		t.Fatalf("terminal row changed during failed reconciliation: %+v", preserved)
+	}
+
+	healthyAudit, err := audit.NewService(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reconciled, err := NewService(t.Context(), db, blockedDialer(t), healthyAudit, eventPublisherFunc(func(string, string, events.RuntimePhase, EventPayload) {}), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("healthy startup reconciliation: %v", err)
+	}
+	if err := reconciled.Close(); err != nil {
+		t.Fatal(err)
+	}
+	audits := db.AuditEvent.Query().AllX(t.Context())
+	if len(audits) != 2 {
+		t.Fatalf("audits after healthy reconciliation = %+v", audits)
+	}
+	wantTerminalAction := "diagnostic." + terminalRow.Status.String()
+	actions := map[string]bool{audits[0].Action: true, audits[1].Action: true}
+	if !actions["diagnostic.start"] || !actions[wantTerminalAction] {
+		t.Fatalf("reconciled terminal actions = %+v, want %q", actions, wantTerminalAction)
+	}
+	secondRestart, err := NewService(t.Context(), db, blockedDialer(t), healthyAudit, eventPublisherFunc(func(string, string, events.RuntimePhase, EventPayload) {}), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("second startup reconciliation: %v", err)
+	}
+	if err := secondRestart.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := db.AuditEvent.Query().CountX(t.Context()); got != 2 {
+		t.Fatalf("audit rows after second restart = %d, want 2", got)
 	}
 }
 
@@ -656,7 +722,7 @@ func TestServiceStartupInterruptsStaleRunningRows(t *testing.T) {
 	if recovered.Status != diagnosticrun.StatusInterrupted || recovered.FinishedAt == nil || recovered.ErrorCode != diagnosticrun.ErrorCodeDiagnosticIo {
 		t.Fatalf("recovered row = %+v", recovered)
 	}
-	if len(entries) != 1 || entries[0].Action != "diagnostic.interrupted" || entries[0].Detail != "client_id="+client.ID {
+	if len(entries) != 2 || entries[0].Action != "diagnostic.start" || entries[1].Action != "diagnostic.interrupted" || entries[0].Detail != "client_id="+client.ID || entries[1].Detail != "client_id="+client.ID {
 		t.Fatalf("recovery audits = %+v", entries)
 	}
 	if len(payloads) != 1 || payloads[0].Status != RunStatusInterrupted || payloads[0].ClientID != client.ID {
