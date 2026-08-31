@@ -277,6 +277,133 @@ func TestStorageOperationsAfterCloseFailSafely(t *testing.T) {
 	}
 }
 
+func TestCloseCancelsBlockedUploadAndWaitsForCleanup(t *testing.T) {
+	rootPath := filepath.Join(t.TempDir(), "staging")
+	storage, err := NewStorage(rootPath)
+	if err != nil {
+		t.Fatalf("NewStorage: %v", err)
+	}
+	reader := newBlockingReadCloser()
+	storeDone := make(chan error, 1)
+	go func() {
+		_, err := storage.Store(t.Context(), testOwnerID, testShareID, 1, reader)
+		storeDone <- err
+	}()
+	<-reader.started
+	if err := storage.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	select {
+	case err := <-storeDone:
+		if !errors.Is(err, ErrClosed) {
+			t.Fatalf("blocked Store error = %v, want ErrClosed", err)
+		}
+	case <-time.After(time.Second):
+		_ = reader.Close()
+		<-storeDone
+		t.Fatal("Close returned without canceling and joining blocked Store")
+	}
+	reopened, err := NewStorage(rootPath)
+	if err != nil {
+		t.Fatalf("reopen Storage: %v", err)
+	}
+	defer reopened.Close()
+	if got := requireUsage(t, reopened); got != (QuotaUsage{}) {
+		t.Fatalf("usage after Close cancellation = %+v", got)
+	}
+	entries, err := os.ReadDir(filepath.Join(rootPath, testOwnerID, testShareID))
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("Close cancellation left entries: %v", entryNames(entries))
+	}
+}
+
+func TestCloseWaitsForEnteredPublishAndPreventsPostCloseMutation(t *testing.T) {
+	rootPath := filepath.Join(t.TempDir(), "staging")
+	storage, err := NewStorage(rootPath)
+	if err != nil {
+		t.Fatalf("NewStorage: %v", err)
+	}
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	storage.hooks.beforePublish = func() {
+		close(entered)
+		<-release
+	}
+	storeDone := make(chan error, 1)
+	go func() {
+		_, err := storage.Store(t.Context(), testOwnerID, testShareID, 3, readCloser(strings.NewReader("abc")))
+		storeDone <- err
+	}()
+	<-entered
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- storage.Close() }()
+	for !storage.closed.Load() {
+		runtime.Gosched()
+	}
+	select {
+	case err := <-closeDone:
+		close(release)
+		<-storeDone
+		t.Fatalf("Close returned before entered Store exited: %v", err)
+	default:
+	}
+	close(release)
+	if err := <-storeDone; !errors.Is(err, ErrClosed) {
+		t.Fatalf("entered Store error = %v, want ErrClosed", err)
+	}
+	if err := <-closeDone; err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	reopened, err := NewStorage(rootPath)
+	if err != nil {
+		t.Fatalf("reopen Storage: %v", err)
+	}
+	defer reopened.Close()
+	if got := requireUsage(t, reopened); got != (QuotaUsage{}) {
+		t.Fatalf("usage after entered-operation Close = %+v", got)
+	}
+	entries, err := os.ReadDir(filepath.Join(rootPath, testOwnerID, testShareID))
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("post-Close publication entries: %v", entryNames(entries))
+	}
+}
+
+func TestOpenReturnsIndependentReadOnlyHandleAcrossStorageClose(t *testing.T) {
+	storage, err := NewStorage(filepath.Join(t.TempDir(), "staging"))
+	if err != nil {
+		t.Fatalf("NewStorage: %v", err)
+	}
+	stored, err := storage.Store(t.Context(), testOwnerID, testShareID, 3, readCloser(strings.NewReader("abc")))
+	if err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+	handle, err := storage.Open(t.Context(), testOwnerID, testShareID, stored.StorageName)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if err := storage.Close(); err != nil {
+		_ = handle.Close()
+		t.Fatalf("Storage Close: %v", err)
+	}
+	content, err := io.ReadAll(handle)
+	if err != nil {
+		_ = handle.Close()
+		t.Fatalf("Read after Storage Close: %v", err)
+	}
+	if string(content) != "abc" {
+		t.Fatalf("content after Storage Close = %q", content)
+	}
+	if err := handle.Close(); err != nil {
+		t.Fatalf("ReadHandle Close: %v", err)
+	}
+}
+
 func TestStorageRejectsUnsafeBoundaries(t *testing.T) {
 	storage := newTestStorage(t)
 	validName := strings.Repeat("a", 32)
@@ -911,12 +1038,8 @@ func TestIndependentStorageHandlesPublishNoReplace(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Usage: %v", err)
 		}
-		if &all[index] == winner {
-			if usage != (QuotaUsage{OwnerBytes: 3, ShareBytes: 3, ShareFiles: 1}) {
-				t.Fatalf("winner usage = %+v", usage)
-			}
-		} else if usage != (QuotaUsage{}) {
-			t.Fatalf("loser usage = %+v", usage)
+		if usage != (QuotaUsage{OwnerBytes: 3, ShareBytes: 3, ShareFiles: 1}) {
+			t.Fatalf("shared usage from handle %d = %+v", index, usage)
 		}
 	}
 	entries, err := os.ReadDir(filepath.Join(rootPath, testOwnerID, testShareID))
@@ -926,6 +1049,272 @@ func TestIndependentStorageHandlesPublishNoReplace(t *testing.T) {
 	if got := entryNames(entries); len(got) != 1 || got[0] != wantName {
 		t.Fatalf("publication entries = %v, want only %q", got, wantName)
 	}
+}
+
+func TestIndependentStorageHandlesShareQuotaAdmission(t *testing.T) {
+	rootPath := filepath.Join(t.TempDir(), "staging")
+	first, err := NewStorage(rootPath)
+	if err != nil {
+		t.Fatalf("NewStorage first: %v", err)
+	}
+	defer first.Close()
+	second, err := NewStorage(rootPath)
+	if err != nil {
+		t.Fatalf("NewStorage second: %v", err)
+	}
+	defer second.Close()
+	firstReservation, err := first.Reserve(t.Context(), testOwnerID, testShareID, MaxFileBytes)
+	if err != nil {
+		t.Fatalf("first Reserve: %v", err)
+	}
+	defer firstReservation.Release()
+	secondReservation, err := second.Reserve(t.Context(), testOwnerID, testShareID, MaxFileBytes)
+	if err != nil {
+		t.Fatalf("second Reserve: %v", err)
+	}
+	defer secondReservation.Release()
+	if _, err := first.Reserve(t.Context(), testOwnerID, testShareID, 1); !errors.Is(err, ErrQuotaExceeded) {
+		t.Fatalf("cross-handle over-share error = %v, want ErrQuotaExceeded", err)
+	}
+	if got := requireUsage(t, second); got != (QuotaUsage{OwnerBytes: MaxShareBytes, ShareBytes: MaxShareBytes, ShareFiles: 2}) {
+		t.Fatalf("shared usage = %+v", got)
+	}
+}
+
+func TestIndependentStorageHandlesShareFileCountQuota(t *testing.T) {
+	rootPath := filepath.Join(t.TempDir(), "staging")
+	first, err := NewStorage(rootPath)
+	if err != nil {
+		t.Fatalf("NewStorage first: %v", err)
+	}
+	defer first.Close()
+	second, err := NewStorage(rootPath)
+	if err != nil {
+		t.Fatalf("NewStorage second: %v", err)
+	}
+	defer second.Close()
+	reservations := make([]*Reservation, 0, MaxFilesPerShare)
+	for index := range MaxFilesPerShare {
+		storage := first
+		if index%2 == 1 {
+			storage = second
+		}
+		reservation, err := storage.Reserve(t.Context(), testOwnerID, testShareID, 0)
+		if err != nil {
+			t.Fatalf("Reserve file %d: %v", index, err)
+		}
+		reservations = append(reservations, reservation)
+	}
+	if _, err := second.Reserve(t.Context(), testOwnerID, testShareID, 0); !errors.Is(err, ErrQuotaExceeded) {
+		t.Fatalf("cross-handle file-count error = %v, want ErrQuotaExceeded", err)
+	}
+	for _, reservation := range reservations {
+		reservation.Release()
+	}
+}
+
+func TestIndependentStorageHandlesShareConcurrentOwnerQuota(t *testing.T) {
+	rootPath := filepath.Join(t.TempDir(), "staging")
+	first, err := NewStorage(rootPath)
+	if err != nil {
+		t.Fatalf("NewStorage first: %v", err)
+	}
+	defer first.Close()
+	second, err := NewStorage(rootPath)
+	if err != nil {
+		t.Fatalf("NewStorage second: %v", err)
+	}
+	defer second.Close()
+
+	const attempts = 32
+	start := make(chan struct{})
+	reservations := make(chan *Reservation, attempts)
+	errorsCh := make(chan error, attempts)
+	var wg sync.WaitGroup
+	for index := range attempts {
+		storage := first
+		if index%2 == 1 {
+			storage = second
+		}
+		shareID := fmt.Sprintf("01900000-0000-7000-8000-%012d", index+100)
+		wg.Go(func() {
+			<-start
+			reservation, err := storage.Reserve(t.Context(), testOwnerID, shareID, MaxFileBytes/2)
+			if err != nil {
+				errorsCh <- err
+				return
+			}
+			reservations <- reservation
+		})
+	}
+	close(start)
+	wg.Wait()
+	close(reservations)
+	close(errorsCh)
+	admitted := 0
+	for reservation := range reservations {
+		admitted++
+		reservation.Release()
+	}
+	if want := int(MaxOwnerBytes / (MaxFileBytes / 2)); admitted != want {
+		t.Fatalf("cross-handle admitted %d, want %d", admitted, want)
+	}
+	for err := range errorsCh {
+		if !errors.Is(err, ErrQuotaExceeded) {
+			t.Errorf("rejection error = %v, want ErrQuotaExceeded", err)
+		}
+	}
+}
+
+func TestIndependentStorageHandlesShareCommitRemovalAndCloseLifecycle(t *testing.T) {
+	rootPath := filepath.Join(t.TempDir(), "staging")
+	first, err := NewStorage(rootPath)
+	if err != nil {
+		t.Fatalf("NewStorage first: %v", err)
+	}
+	second, err := NewStorage(rootPath)
+	if err != nil {
+		_ = first.Close()
+		t.Fatalf("NewStorage second: %v", err)
+	}
+	stored, err := first.Store(t.Context(), testOwnerID, testShareID, 3, readCloser(strings.NewReader("abc")))
+	if err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+	if got := requireUsage(t, second); got != (QuotaUsage{OwnerBytes: 3, ShareBytes: 3, ShareFiles: 1}) {
+		t.Fatalf("second-handle committed usage = %+v", got)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("Close first: %v", err)
+	}
+	if got := requireUsage(t, second); got != (QuotaUsage{OwnerBytes: 3, ShareBytes: 3, ShareFiles: 1}) {
+		t.Fatalf("usage after first close = %+v", got)
+	}
+	if err := second.Remove(t.Context(), testOwnerID, testShareID, stored.StorageName); err != nil {
+		t.Fatalf("second Remove: %v", err)
+	}
+	if err := second.Close(); err != nil {
+		t.Fatalf("Close second: %v", err)
+	}
+
+	reopened, err := NewStorage(rootPath)
+	if err != nil {
+		t.Fatalf("reopen Storage: %v", err)
+	}
+	defer reopened.Close()
+	if got := requireUsage(t, reopened); got != (QuotaUsage{}) {
+		t.Fatalf("reopened usage after shared removal = %+v", got)
+	}
+}
+
+func TestSharedQuotaConcurrentCloseAndRestart(t *testing.T) {
+	rootPath := filepath.Join(t.TempDir(), "staging")
+	handles := make([]*Storage, 8)
+	for index := range handles {
+		storage, err := NewStorage(rootPath)
+		if err != nil {
+			t.Fatalf("NewStorage %d: %v", index, err)
+		}
+		handles[index] = storage
+	}
+	stored, err := handles[0].Store(t.Context(), testOwnerID, testShareID, 3, readCloser(strings.NewReader("abc")))
+	if err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+	var wg sync.WaitGroup
+	errorsCh := make(chan error, len(handles))
+	for _, storage := range handles {
+		wg.Go(func() { errorsCh <- storage.Close() })
+	}
+	wg.Wait()
+	close(errorsCh)
+	for err := range errorsCh {
+		if err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	}
+	reopened, err := NewStorage(rootPath)
+	if err != nil {
+		t.Fatalf("reopen Storage: %v", err)
+	}
+	defer reopened.Close()
+	if got := requireUsage(t, reopened); got != (QuotaUsage{OwnerBytes: 3, ShareBytes: 3, ShareFiles: 1}) {
+		t.Fatalf("restarted usage after concurrent close = %+v", got)
+	}
+	if err := reopened.Remove(t.Context(), testOwnerID, testShareID, stored.StorageName); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+}
+
+func TestClosingOneHandleReleasesItsPendingSharedReservations(t *testing.T) {
+	rootPath := filepath.Join(t.TempDir(), "staging")
+	first, err := NewStorage(rootPath)
+	if err != nil {
+		t.Fatalf("NewStorage first: %v", err)
+	}
+	second, err := NewStorage(rootPath)
+	if err != nil {
+		_ = first.Close()
+		t.Fatalf("NewStorage second: %v", err)
+	}
+	defer second.Close()
+	reservation, err := first.Reserve(t.Context(), testOwnerID, testShareID, MaxFileBytes)
+	if err != nil {
+		t.Fatalf("Reserve: %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("Close first: %v", err)
+	}
+	if got := reservation.state.Load(); got != reservationReleased {
+		t.Fatalf("reservation state after owner Close = %d, want released", got)
+	}
+	if got := requireUsage(t, second); got != (QuotaUsage{}) {
+		t.Fatalf("shared usage after reservation-owner Close = %+v", got)
+	}
+}
+
+func TestRootIdentityQuotaRegistryDoesNotMergeReplacementDirectory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("deterministic replacement of an open directory is not portable on Windows")
+	}
+	parent := t.TempDir()
+	rootPath := filepath.Join(parent, "staging")
+	anchoredPath := filepath.Join(parent, "anchored")
+	first, err := NewStorage(rootPath)
+	if err != nil {
+		t.Fatalf("NewStorage first: %v", err)
+	}
+	defer first.Close()
+	if err := os.Rename(rootPath, anchoredPath); err != nil {
+		t.Fatalf("Rename root: %v", err)
+	}
+	if err := os.Mkdir(rootPath, 0o700); err != nil {
+		t.Fatalf("Mkdir replacement: %v", err)
+	}
+	second, err := NewStorage(rootPath)
+	if err != nil {
+		t.Fatalf("NewStorage replacement: %v", err)
+	}
+	defer second.Close()
+
+	reservations := make([]*Reservation, 0, 2)
+	for range 2 {
+		reservation, err := first.Reserve(t.Context(), testOwnerID, testShareID, MaxFileBytes)
+		if err != nil {
+			t.Fatalf("first-root Reserve: %v", err)
+		}
+		reservations = append(reservations, reservation)
+	}
+	defer func() {
+		for _, reservation := range reservations {
+			reservation.Release()
+		}
+	}()
+	separate, err := second.Reserve(t.Context(), testOwnerID, testShareID, MaxFileBytes)
+	if err != nil {
+		t.Fatalf("replacement root was incorrectly quota-merged: %v", err)
+	}
+	separate.Release()
 }
 
 func TestPostPublishRollbackFailureRetainsQuotaAndReturnsCleanupName(t *testing.T) {
@@ -977,6 +1366,104 @@ func TestPostPublishRollbackFailureRetainsQuotaAndReturnsCleanupName(t *testing.
 	}
 	if got := requireUsage(t, reopened); got != (QuotaUsage{}) {
 		t.Fatalf("usage after cleanup = %+v", got)
+	}
+}
+
+func TestCleanupTempsRecoversVerifiedPublishedPairAfterPersistentUnlinkFailure(t *testing.T) {
+	storage, _, tempName, finalName := makeFailedTempFinalPair(t)
+	if _, err := storage.CleanupTemps(t.Context(), testOwnerID, testShareID); err == nil {
+		t.Fatal("CleanupTemps unexpectedly bypassed persistent unlink failure")
+	}
+	if got := requireUsage(t, storage); got != (QuotaUsage{OwnerBytes: 3, ShareBytes: 3, ShareFiles: 1}) {
+		t.Fatalf("usage during persistent unlink failure = %+v", got)
+	}
+	for _, name := range []string{tempName, finalName} {
+		if _, err := os.Lstat(filepath.Join(storageTestSharePath(storage), name)); err != nil {
+			t.Fatalf("pair entry %q missing after failed cleanup: %v", name, err)
+		}
+	}
+
+	storage.hooks.remove = (*os.Root).Remove
+	removed, err := storage.CleanupTemps(t.Context(), testOwnerID, testShareID)
+	if err != nil {
+		t.Fatalf("CleanupTemps recovery: %v", err)
+	}
+	if removed != 1 {
+		t.Fatalf("CleanupTemps removed %d entries, want temp alias only", removed)
+	}
+	if _, err := os.Lstat(filepath.Join(storageTestSharePath(storage), tempName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("temp alias still exists: %v", err)
+	}
+	handle, err := storage.Open(t.Context(), testOwnerID, testShareID, finalName)
+	if err != nil {
+		t.Fatalf("Open recovered final: %v", err)
+	}
+	if err := handle.Close(); err != nil {
+		t.Fatalf("Close recovered final: %v", err)
+	}
+	if got := requireUsage(t, storage); got != (QuotaUsage{OwnerBytes: 3, ShareBytes: 3, ShareFiles: 1}) {
+		t.Fatalf("usage after pair recovery = %+v", got)
+	}
+}
+
+func TestRestartRecoversVerifiedTempFinalPairAndChargesOnce(t *testing.T) {
+	storage, rootPath, tempName, finalName := makeFailedTempFinalPair(t)
+	if err := storage.Close(); err != nil {
+		t.Fatalf("Close failed Storage: %v", err)
+	}
+	reopened, err := NewStorage(rootPath)
+	if err != nil {
+		t.Fatalf("NewStorage recovery: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	if _, err := os.Lstat(filepath.Join(rootPath, testOwnerID, testShareID, tempName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("restart left temp alias: %v", err)
+	}
+	if got := requireUsage(t, reopened); got != (QuotaUsage{OwnerBytes: 3, ShareBytes: 3, ShareFiles: 1}) {
+		t.Fatalf("restart pair usage = %+v", got)
+	}
+	if err := reopened.Remove(t.Context(), testOwnerID, testShareID, finalName); err != nil {
+		t.Fatalf("Remove recovered final: %v", err)
+	}
+}
+
+func TestRemoveRecoversVerifiedTempFinalPairThenRemovesBoth(t *testing.T) {
+	storage, _, tempName, finalName := makeFailedTempFinalPair(t)
+	storage.hooks.remove = (*os.Root).Remove
+	if err := storage.Remove(t.Context(), testOwnerID, testShareID, finalName); err != nil {
+		t.Fatalf("Remove pair: %v", err)
+	}
+	for _, name := range []string{tempName, finalName} {
+		if _, err := os.Lstat(filepath.Join(storageTestSharePath(storage), name)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("pair entry %q remains: %v", name, err)
+		}
+	}
+	if got := requireUsage(t, storage); got != (QuotaUsage{}) {
+		t.Fatalf("usage after pair removal = %+v", got)
+	}
+}
+
+func TestRecoveryRejectsAmbiguousThreeLinkPair(t *testing.T) {
+	storage := newTestStorage(t)
+	reservation, err := storage.Reserve(t.Context(), testOwnerID, testShareID, 0)
+	if err != nil {
+		t.Fatalf("Reserve: %v", err)
+	}
+	reservation.Release()
+	sharePath := storageTestSharePath(storage)
+	tempName := tempNamePrefix + strings.Repeat("a", 32)
+	finalName := strings.Repeat("b", 32)
+	thirdName := strings.Repeat("c", 32)
+	if err := os.WriteFile(filepath.Join(sharePath, tempName), []byte("x"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	for _, name := range []string{finalName, thirdName} {
+		if err := os.Link(filepath.Join(sharePath, tempName), filepath.Join(sharePath, name)); err != nil {
+			t.Fatalf("Link %s: %v", name, err)
+		}
+	}
+	if _, err := storage.CleanupTemps(t.Context(), testOwnerID, testShareID); !errors.Is(err, ErrMultipleLinks) {
+		t.Fatalf("ambiguous cleanup error = %v, want ErrMultipleLinks", err)
 	}
 }
 
@@ -1222,6 +1709,36 @@ func makeStorageDirectories(t *testing.T, rootPath string) string {
 		t.Fatalf("Mkdir share: %v", err)
 	}
 	return sharePath
+}
+
+func makeFailedTempFinalPair(t *testing.T) (*Storage, string, string, string) {
+	t.Helper()
+	rootPath := filepath.Join(t.TempDir(), "staging")
+	storage, err := NewStorage(rootPath)
+	if err != nil {
+		t.Fatalf("NewStorage: %v", err)
+	}
+	t.Cleanup(func() { _ = storage.Close() })
+	tempName := tempNamePrefix + strings.Repeat("01", randomNameBytes)
+	finalName := strings.Repeat("02", randomNameBytes)
+	storage.random = bytes.NewReader(append(bytes.Repeat([]byte{0x01}, randomNameBytes), bytes.Repeat([]byte{0x02}, randomNameBytes)...))
+	storage.hooks.remove = func(_ *os.Root, name string) error {
+		if name == tempName || name == finalName {
+			return errors.New("persistent unlink failure")
+		}
+		return errors.New("unexpected unlink target")
+	}
+	stored, err := storage.Store(t.Context(), testOwnerID, testShareID, 3, readCloser(strings.NewReader("abc")))
+	if err == nil {
+		t.Fatal("Store unexpectedly succeeded")
+	}
+	if stored.StorageName != finalName {
+		t.Fatalf("retained storage name = %q, want %q", stored.StorageName, finalName)
+	}
+	if got := requireUsage(t, storage); got != (QuotaUsage{OwnerBytes: 3, ShareBytes: 3, ShareFiles: 1}) {
+		t.Fatalf("retained pair usage = %+v", got)
+	}
+	return storage, rootPath, tempName, finalName
 }
 
 func entryNames(entries []os.DirEntry) []string {

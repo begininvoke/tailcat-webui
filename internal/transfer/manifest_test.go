@@ -274,3 +274,49 @@ func TestStorageAndManifestOutputPassTask10ScalarValidators(t *testing.T) {
 		}
 	}
 }
+
+func TestStorageCloseWaitsForEnteredManifestAndCancelsIt(t *testing.T) {
+	rootPath := filepath.Join(t.TempDir(), "staging")
+	storage, err := NewStorage(rootPath)
+	if err != nil {
+		t.Fatalf("NewStorage: %v", err)
+	}
+	content := bytes.Repeat([]byte{0x7a}, int(BlockSize+1))
+	stored, err := storage.Store(t.Context(), testOwnerID, testShareID, int64(len(content)), readCloser(bytes.NewReader(content)))
+	if err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	storage.manifestHooks.afterReadBlock = func(index int) {
+		if index == 0 {
+			close(entered)
+			<-release
+		}
+	}
+	manifestDone := make(chan error, 1)
+	go func() {
+		_, err := storage.BuildFileManifest(t.Context(), testOwnerID, testShareID, stored.StorageName, testFileID, "close.bin")
+		manifestDone <- err
+	}()
+	<-entered
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- storage.Close() }()
+	for !storage.closed.Load() {
+		runtime.Gosched()
+	}
+	select {
+	case err := <-closeDone:
+		close(release)
+		<-manifestDone
+		t.Fatalf("Close returned before manifest exited: %v", err)
+	default:
+	}
+	close(release)
+	if err := <-manifestDone; !errors.Is(err, ErrClosed) {
+		t.Fatalf("manifest error = %v, want ErrClosed", err)
+	}
+	if err := <-closeDone; err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}

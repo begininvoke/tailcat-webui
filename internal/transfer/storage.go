@@ -59,6 +59,33 @@ type StoredFile struct {
 	BLAKE3      string
 }
 
+// ReadHandle is an independently owned, read-only staged-file handle. It
+// remains readable after Storage.Close and must be closed by its caller. Its
+// narrow API intentionally exposes no mutation or publication methods.
+type ReadHandle struct {
+	file *os.File
+}
+
+func (h *ReadHandle) Read(buffer []byte) (int, error) {
+	return h.file.Read(buffer)
+}
+
+func (h *ReadHandle) ReadAt(buffer []byte, offset int64) (int, error) {
+	return h.file.ReadAt(buffer, offset)
+}
+
+func (h *ReadHandle) Seek(offset int64, whence int) (int64, error) {
+	return h.file.Seek(offset, whence)
+}
+
+func (h *ReadHandle) Stat() (os.FileInfo, error) {
+	return h.file.Stat()
+}
+
+func (h *ReadHandle) Close() error {
+	return h.file.Close()
+}
+
 // QuotaUsage is a point-in-time view of owner and share quota consumption.
 // Reserved and committed files are both included until released or removed.
 type QuotaUsage struct {
@@ -85,16 +112,23 @@ type constructorHooks struct {
 type Storage struct {
 	root *os.Root
 
-	quota quotaLedger
+	quota       *quotaLedger
+	sharedQuota *sharedQuotaLedger
 
 	random        io.Reader
 	nameMu        sync.Mutex
 	hooks         storageHooks
 	manifestHooks manifestHooks
+	reservationMu sync.Mutex
+	reservations  map[*Reservation]struct{}
 
-	closeOnce sync.Once
-	closeErr  error
-	closed    atomic.Bool
+	lifecycleCtx    context.Context
+	cancelLifecycle context.CancelCauseFunc
+	lifecycleMu     sync.Mutex
+	active          sync.WaitGroup
+	closeOnce       sync.Once
+	closeErr        error
+	closed          atomic.Bool
 }
 
 type quotaKey struct {
@@ -117,6 +151,19 @@ type quotaLedger struct {
 	mu        sync.Mutex
 	owners    map[string]*ownerUsage
 	committed map[quotaKey]int64
+}
+
+type sharedQuotaLedger struct {
+	identity os.FileInfo
+	quota    quotaLedger
+	refs     int
+	ready    chan struct{}
+	initErr  error
+}
+
+var sharedQuotaRegistry struct {
+	sync.Mutex
+	ledgers []*sharedQuotaLedger
 }
 
 const (
@@ -159,6 +206,9 @@ func newStorage(rootPath string, constructorHooks constructorHooks) (*Storage, e
 	if info.Mode()&os.ModeSymlink != 0 {
 		return nil, fmt.Errorf("%w: staging root", ErrSymlink)
 	}
+	if err := validatePlatformFileInfo(info); err != nil {
+		return nil, fmt.Errorf("inspect staging root platform attributes: %w", err)
+	}
 	if !info.IsDir() {
 		return nil, fmt.Errorf("%w: staging root is not a directory", ErrInvalidPath)
 	}
@@ -173,56 +223,121 @@ func newStorage(rootPath string, constructorHooks constructorHooks) (*Storage, e
 	if err != nil {
 		return nil, fmt.Errorf("open staging root: %w", err)
 	}
-	if err := validateRootAnchor(rootPath, root, info); err != nil {
+	rootIdentity, err := validateRootAnchor(rootPath, root, info)
+	if err != nil {
 		_ = root.Close()
 		return nil, err
 	}
+	sharedQuota, initializeQuota := acquireSharedQuota(rootIdentity)
+	lifecycleCtx, cancelLifecycle := context.WithCancelCause(context.Background())
 	storage := &Storage{
-		root:   root,
-		random: rand.Reader,
-		quota: quotaLedger{
-			owners:    make(map[string]*ownerUsage),
-			committed: make(map[quotaKey]int64),
-		},
+		root:            root,
+		random:          rand.Reader,
+		quota:           &sharedQuota.quota,
+		sharedQuota:     sharedQuota,
+		lifecycleCtx:    lifecycleCtx,
+		cancelLifecycle: cancelLifecycle,
+		reservations:    make(map[*Reservation]struct{}),
 	}
 	storage.hooks.syncFile = (*os.File).Sync
 	storage.hooks.syncDir = syncDirectory
 	storage.hooks.link = (*os.Root).Link
 	storage.hooks.remove = (*os.Root).Remove
-	if err := storage.rebuildQuota(); err != nil {
+	if initializeQuota {
+		finishSharedQuotaInitialization(sharedQuota, storage.rebuildQuota())
+	}
+	if err := waitSharedQuotaInitialization(sharedQuota); err != nil {
 		_ = root.Close()
+		releaseSharedQuota(sharedQuota)
 		return nil, err
 	}
 	return storage, nil
 }
 
-func validateRootAnchor(rootPath string, root *os.Root, initial os.FileInfo) error {
+func validateRootAnchor(rootPath string, root *os.Root, initial os.FileInfo) (os.FileInfo, error) {
 	anchor, err := root.Open(".")
 	if err != nil {
-		return fmt.Errorf("open staging root anchor: %w", err)
+		return nil, fmt.Errorf("open staging root anchor: %w", err)
 	}
 	anchorInfo, statErr := anchor.Stat()
+	platformErr := validateOpenedDirectory(anchor)
 	closeErr := anchor.Close()
 	current, currentErr := os.Lstat(rootPath)
-	if statErr != nil || closeErr != nil || currentErr != nil {
-		return errors.Join(statErr, closeErr, currentErr)
+	if statErr != nil || platformErr != nil || closeErr != nil || currentErr != nil {
+		return nil, errors.Join(statErr, platformErr, closeErr, currentErr)
 	}
 	if current.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("%w: configured root became a symlink", ErrRootChanged)
+		return nil, fmt.Errorf("%w: configured root became a symlink", ErrRootChanged)
+	}
+	if err := validatePlatformFileInfo(current); err != nil {
+		return nil, fmt.Errorf("reinspect staging root platform attributes: %w", err)
 	}
 	if !anchorInfo.IsDir() || !current.IsDir() || !os.SameFile(initial, anchorInfo) || !os.SameFile(anchorInfo, current) {
-		return ErrRootChanged
+		return nil, ErrRootChanged
 	}
 	if err := validatePrivateDirectory(anchorInfo); err != nil {
-		return fmt.Errorf("opened staging root: %w", err)
+		return nil, fmt.Errorf("opened staging root: %w", err)
 	}
-	return nil
+	return anchorInfo, nil
+}
+
+func acquireSharedQuota(identity os.FileInfo) (*sharedQuotaLedger, bool) {
+	sharedQuotaRegistry.Lock()
+	defer sharedQuotaRegistry.Unlock()
+	for _, shared := range sharedQuotaRegistry.ledgers {
+		if os.SameFile(identity, shared.identity) {
+			shared.refs++
+			return shared, false
+		}
+	}
+	shared := &sharedQuotaLedger{
+		identity: identity,
+		quota: quotaLedger{
+			owners:    make(map[string]*ownerUsage),
+			committed: make(map[quotaKey]int64),
+		},
+		refs:  1,
+		ready: make(chan struct{}),
+	}
+	sharedQuotaRegistry.ledgers = append(sharedQuotaRegistry.ledgers, shared)
+	return shared, true
+}
+
+func finishSharedQuotaInitialization(shared *sharedQuotaLedger, err error) {
+	sharedQuotaRegistry.Lock()
+	shared.initErr = err
+	close(shared.ready)
+	sharedQuotaRegistry.Unlock()
+}
+
+func waitSharedQuotaInitialization(shared *sharedQuotaLedger) error {
+	<-shared.ready
+	sharedQuotaRegistry.Lock()
+	defer sharedQuotaRegistry.Unlock()
+	return shared.initErr
+}
+
+func releaseSharedQuota(shared *sharedQuotaLedger) {
+	if shared == nil {
+		return
+	}
+	sharedQuotaRegistry.Lock()
+	defer sharedQuotaRegistry.Unlock()
+	shared.refs--
+	if shared.refs != 0 {
+		return
+	}
+	for index, candidate := range sharedQuotaRegistry.ledgers {
+		if candidate == shared {
+			sharedQuotaRegistry.ledgers = append(sharedQuotaRegistry.ledgers[:index], sharedQuotaRegistry.ledgers[index+1:]...)
+			return
+		}
+	}
 }
 
 func validatePrivateDirectory(info os.FileInfo) error {
-	// Windows FileMode permission bits do not describe the directory ACL. The
-	// rooted handle and reparse checks still apply; ACL provisioning remains a
-	// configured-root invariant outside Go's portable os API.
+	// Windows FileMode permission bits do not describe the directory ACL;
+	// validateOpenedDirectory performs the conservative handle/DACL check there.
 	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o700 {
 		return ErrPermissions
 	}
@@ -234,11 +349,60 @@ func (s *Storage) Close() error {
 	if s == nil || s.root == nil {
 		return nil
 	}
-	s.closed.Store(true)
+	s.lifecycleMu.Lock()
+	if !s.closed.Load() {
+		s.cancelLifecycle(ErrClosed)
+		s.closed.Store(true)
+	}
+	s.lifecycleMu.Unlock()
+	s.active.Wait()
+	s.releasePendingReservations()
 	s.closeOnce.Do(func() {
 		s.closeErr = s.root.Close()
+		releaseSharedQuota(s.sharedQuota)
 	})
 	return s.closeErr
+}
+
+func (s *Storage) beginOperation(ctx context.Context) (context.Context, func(), error) {
+	if ctx == nil {
+		return nil, nil, fmt.Errorf("%w: nil context", ErrInvalidPath)
+	}
+	s.lifecycleMu.Lock()
+	if s.closed.Load() {
+		s.lifecycleMu.Unlock()
+		return nil, nil, ErrClosed
+	}
+	s.active.Add(1)
+	s.lifecycleMu.Unlock()
+
+	operationCtx, cancel := context.WithCancelCause(ctx)
+	stopLifecycleCancel := context.AfterFunc(s.lifecycleCtx, func() {
+		cancel(ErrClosed)
+	})
+	var endOnce sync.Once
+	end := func() {
+		endOnce.Do(func() {
+			stopLifecycleCancel()
+			cancel(nil)
+			s.active.Done()
+		})
+	}
+	return operationCtx, end, nil
+}
+
+func contextError(ctx context.Context) error {
+	if cause := context.Cause(ctx); cause != nil {
+		return cause
+	}
+	return ctx.Err()
+}
+
+func (s *Storage) operationError(ctx context.Context) error {
+	if cause := context.Cause(s.lifecycleCtx); cause != nil {
+		return cause
+	}
+	return contextError(ctx)
 }
 
 func (s *Storage) ensureOpen() error {
@@ -248,13 +412,43 @@ func (s *Storage) ensureOpen() error {
 	return nil
 }
 
+func (s *Storage) trackReservation(reservation *Reservation) {
+	s.reservationMu.Lock()
+	s.reservations[reservation] = struct{}{}
+	s.reservationMu.Unlock()
+}
+
+func (s *Storage) untrackReservation(reservation *Reservation) {
+	s.reservationMu.Lock()
+	delete(s.reservations, reservation)
+	s.reservationMu.Unlock()
+}
+
+func (s *Storage) releasePendingReservations() {
+	s.reservationMu.Lock()
+	reservations := make([]*Reservation, 0, len(s.reservations))
+	for reservation := range s.reservations {
+		reservations = append(reservations, reservation)
+	}
+	s.reservationMu.Unlock()
+	for _, reservation := range reservations {
+		reservation.Release()
+	}
+}
+
 // Reserve atomically admits a prospective file against file, share, owner,
 // and per-share file-count limits.
 func (s *Storage) Reserve(ctx context.Context, ownerID, shareID string, size int64) (*Reservation, error) {
-	if err := s.ensureOpen(); err != nil {
+	operationCtx, end, err := s.beginOperation(ctx)
+	if err != nil {
 		return nil, err
 	}
-	if err := ctx.Err(); err != nil {
+	defer end()
+	return s.reserve(operationCtx, ownerID, shareID, size)
+}
+
+func (s *Storage) reserve(ctx context.Context, ownerID, shareID string, size int64) (*Reservation, error) {
+	if err := contextError(ctx); err != nil {
 		return nil, err
 	}
 	if size < 0 {
@@ -289,7 +483,9 @@ func (s *Storage) Reserve(ctx context.Context, ownerID, shareID string, size int
 	owner.bytes += size
 	share.bytes += size
 	share.files++
-	return &Reservation{storage: s, ownerID: ownerID, shareID: shareID, size: size}, nil
+	reservation := &Reservation{storage: s, ownerID: ownerID, shareID: shareID, size: size}
+	s.trackReservation(reservation)
+	return reservation, nil
 }
 
 // Release returns a pending reservation to all quota levels. Committed
@@ -304,14 +500,17 @@ func (r *Reservation) Release() {
 		return
 	}
 	r.storage.quota.release(r.ownerID, r.shareID, r.size)
+	r.storage.untrackReservation(r)
 }
 
 // Usage returns current admitted bytes and file count.
 func (s *Storage) Usage(ctx context.Context, ownerID, shareID string) (QuotaUsage, error) {
-	if err := s.ensureOpen(); err != nil {
+	operationCtx, end, err := s.beginOperation(ctx)
+	if err != nil {
 		return QuotaUsage{}, err
 	}
-	if err := ctx.Err(); err != nil {
+	defer end()
+	if err := contextError(operationCtx); err != nil {
 		return QuotaUsage{}, err
 	}
 	if err := validateEntityID(ownerID); err != nil {
@@ -338,19 +537,45 @@ func (s *Storage) Usage(ctx context.Context, ownerID, shareID string) (QuotaUsag
 // src and closes it on every return; Close must unblock Read, as net/http
 // request bodies and io.PipeReader do.
 func (s *Storage) Store(ctx context.Context, ownerID, shareID string, size int64, src io.ReadCloser) (StoredFile, error) {
-	reservation, err := s.Reserve(ctx, ownerID, shareID, size)
+	operationCtx, end, err := s.beginOperation(ctx)
 	if err != nil {
 		if src != nil {
 			_ = src.Close()
 		}
 		return StoredFile{}, err
 	}
-	return s.StoreReserved(ctx, reservation, src)
+	defer end()
+	reservation, err := s.reserve(operationCtx, ownerID, shareID, size)
+	if err != nil {
+		if src != nil {
+			_ = src.Close()
+		}
+		return StoredFile{}, err
+	}
+	return s.storeReserved(operationCtx, reservation, src)
 }
 
 // StoreReserved streams a pending reservation into a private temporary file,
 // durably publishes it under a random basename, and commits the reservation.
+// If a post-publication failure cannot roll the final link back, it returns a
+// nonzero StoredFile with the error and keeps quota charged; the caller must
+// pass that opaque StorageName to Remove for cleanup.
 func (s *Storage) StoreReserved(ctx context.Context, reservation *Reservation, src io.ReadCloser) (stored StoredFile, retErr error) {
+	operationCtx, end, err := s.beginOperation(ctx)
+	if err != nil {
+		if src != nil {
+			_ = src.Close()
+		}
+		if reservation != nil && reservation.storage == s {
+			reservation.Release()
+		}
+		return StoredFile{}, err
+	}
+	defer end()
+	return s.storeReserved(operationCtx, reservation, src)
+}
+
+func (s *Storage) storeReserved(ctx context.Context, reservation *Reservation, src io.ReadCloser) (stored StoredFile, retErr error) {
 	if src == nil {
 		if reservation != nil {
 			reservation.Release()
@@ -378,11 +603,7 @@ func (s *Storage) StoreReserved(ctx context.Context, reservation *Reservation, s
 	if reservation.state.Load() != reservationPending {
 		return StoredFile{}, ErrReservationUsed
 	}
-	if err := s.ensureOpen(); err != nil {
-		reservation.Release()
-		return StoredFile{}, err
-	}
-	if err := ctx.Err(); err != nil {
+	if err := contextError(ctx); err != nil {
 		reservation.Release()
 		return StoredFile{}, err
 	}
@@ -434,7 +655,7 @@ func (s *Storage) StoreReserved(ctx context.Context, reservation *Reservation, s
 	}
 	stopContextClose()
 	closeSource()
-	if err := ctx.Err(); err != nil {
+	if err := contextError(ctx); err != nil {
 		return StoredFile{}, err
 	}
 	if ingestErr != nil {
@@ -456,7 +677,7 @@ func (s *Storage) StoreReserved(ctx context.Context, reservation *Reservation, s
 	}
 	fileOpen = false
 
-	finalName, err := s.publishNoReplace(shareRoot, tempName)
+	finalName, err := s.publishNoReplace(ctx, shareRoot, tempName)
 	if err != nil {
 		return StoredFile{}, fmt.Errorf("publish staged file: %w", err)
 	}
@@ -492,11 +713,21 @@ func (s *Storage) StoreReserved(ctx context.Context, reservation *Reservation, s
 }
 
 // Open opens one Storage-generated regular file without exposing its host path.
-func (s *Storage) Open(ctx context.Context, ownerID, shareID, storageName string) (*os.File, error) {
-	if err := s.ensureOpen(); err != nil {
+func (s *Storage) Open(ctx context.Context, ownerID, shareID, storageName string) (*ReadHandle, error) {
+	operationCtx, end, err := s.beginOperation(ctx)
+	if err != nil {
 		return nil, err
 	}
-	if err := ctx.Err(); err != nil {
+	defer end()
+	file, err := s.open(operationCtx, ownerID, shareID, storageName)
+	if err != nil {
+		return nil, err
+	}
+	return &ReadHandle{file: file}, nil
+}
+
+func (s *Storage) open(ctx context.Context, ownerID, shareID, storageName string) (*os.File, error) {
+	if err := contextError(ctx); err != nil {
 		return nil, err
 	}
 	if err := validateStorageName(storageName); err != nil {
@@ -514,6 +745,10 @@ func (s *Storage) Open(ctx context.Context, ownerID, shareID, storageName string
 	file, err := shareRoot.Open(storageName)
 	if err != nil {
 		return nil, fmt.Errorf("open staged file: %w", err)
+	}
+	if err := validateOpenedRegularFile(file, 1); err != nil {
+		_ = file.Close()
+		return nil, err
 	}
 	after, err := file.Stat()
 	if err != nil {
@@ -533,10 +768,12 @@ func (s *Storage) Open(ctx context.Context, ownerID, shareID, storageName string
 
 // Remove deletes one regular staged file and releases its committed quota.
 func (s *Storage) Remove(ctx context.Context, ownerID, shareID, storageName string) error {
-	if err := s.ensureOpen(); err != nil {
+	operationCtx, end, err := s.beginOperation(ctx)
+	if err != nil {
 		return err
 	}
-	if err := ctx.Err(); err != nil {
+	defer end()
+	if err := contextError(operationCtx); err != nil {
 		return err
 	}
 	if err := validateStorageName(storageName); err != nil {
@@ -551,7 +788,7 @@ func (s *Storage) Remove(ctx context.Context, ownerID, shareID, storageName stri
 		return err
 	}
 	defer shareRoot.Close()
-	if _, err := safeRegularInfo(shareRoot, storageName); err != nil {
+	if _, err := s.prepareFinalEntry(shareRoot, storageName); err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			s.quota.remove(ownerID, shareID, storageName)
 			return nil
@@ -574,10 +811,12 @@ func (s *Storage) Remove(ctx context.Context, ownerID, shareID, storageName stri
 
 // CleanupTemps removes only internal temporary files in one validated share.
 func (s *Storage) CleanupTemps(ctx context.Context, ownerID, shareID string) (int, error) {
-	if err := s.ensureOpen(); err != nil {
+	operationCtx, end, err := s.beginOperation(ctx)
+	if err != nil {
 		return 0, err
 	}
-	if err := ctx.Err(); err != nil {
+	defer end()
+	if err := contextError(operationCtx); err != nil {
 		return 0, err
 	}
 	shareRoot, err := s.openShare(ownerID, shareID, false)
@@ -599,7 +838,7 @@ func (s *Storage) CleanupTemps(ctx context.Context, ownerID, shareID string) (in
 	}
 	removed := 0
 	for _, entry := range entries {
-		if err := ctx.Err(); err != nil {
+		if err := contextError(operationCtx); err != nil {
 			return removed, err
 		}
 		if !isTempName(entry.Name()) {
@@ -617,6 +856,17 @@ func (s *Storage) CleanupTemps(ctx context.Context, ownerID, shareID string) (in
 		}
 		if !info.Mode().IsRegular() {
 			return removed, fmt.Errorf("%w: temporary file", ErrNotRegular)
+		}
+		links, available, linkErr := rootedFileLinkCount(shareRoot, entry.Name(), info)
+		if linkErr != nil {
+			return removed, linkErr
+		}
+		if available && links == 2 {
+			if _, err := s.recoverTempAlias(shareRoot, entry.Name()); err != nil {
+				return removed, err
+			}
+			removed++
+			continue
 		}
 		if err := validateStoredFileInfo(info); err != nil {
 			return removed, err
@@ -674,6 +924,9 @@ func openChildDirectory(parent *os.Root, name string, create bool) (*os.Root, er
 	if info.Mode()&os.ModeSymlink != 0 {
 		return nil, ErrSymlink
 	}
+	if err := validatePlatformFileInfo(info); err != nil {
+		return nil, err
+	}
 	if !info.IsDir() {
 		return nil, ErrInvalidPath
 	}
@@ -690,12 +943,16 @@ func openChildDirectory(parent *os.Root, name string, create bool) (*os.Root, er
 		return nil, err
 	}
 	anchorInfo, statErr := anchor.Stat()
+	platformErr := validateOpenedDirectory(anchor)
 	closeErr := anchor.Close()
 	current, currentErr := parent.Lstat(name)
-	if statErr != nil || closeErr != nil || currentErr != nil || current.Mode()&os.ModeSymlink != 0 || !current.IsDir() || !os.SameFile(info, anchorInfo) || !os.SameFile(anchorInfo, current) {
+	if statErr != nil || platformErr != nil || closeErr != nil || currentErr != nil || current.Mode()&os.ModeSymlink != 0 || !current.IsDir() || !os.SameFile(info, anchorInfo) || !os.SameFile(anchorInfo, current) {
 		_ = child.Close()
 		if statErr != nil {
 			return nil, statErr
+		}
+		if platformErr != nil {
+			return nil, platformErr
 		}
 		if closeErr != nil {
 			return nil, closeErr
@@ -707,6 +964,10 @@ func openChildDirectory(parent *os.Root, name string, create bool) (*os.Root, er
 			return nil, ErrSymlink
 		}
 		return nil, ErrInvalidPath
+	}
+	if err := validatePlatformFileInfo(current); err != nil {
+		_ = child.Close()
+		return nil, err
 	}
 	if err := validatePrivateDirectory(anchorInfo); err != nil {
 		_ = child.Close()
@@ -726,7 +987,7 @@ func (s *Storage) createTemp(root *os.Root) (string, *os.File, error) {
 			info, statErr := file.Stat()
 			var validationErr error
 			if statErr == nil {
-				validationErr = validateStoredFileInfo(info)
+				validationErr = errors.Join(validateStoredFileInfo(info), validateOpenedRegularFile(file, 1))
 			}
 			if statErr != nil || validationErr != nil {
 				_ = file.Close()
@@ -742,14 +1003,20 @@ func (s *Storage) createTemp(root *os.Root) (string, *os.File, error) {
 	return "", nil, ErrNameCollision
 }
 
-func (s *Storage) publishNoReplace(root *os.Root, tempName string) (string, error) {
+func (s *Storage) publishNoReplace(ctx context.Context, root *os.Root, tempName string) (string, error) {
 	for range maxNameAttempts {
+		if err := s.operationError(ctx); err != nil {
+			return "", err
+		}
 		name, err := s.randomName("")
 		if err != nil {
 			return "", err
 		}
 		if s.hooks.beforePublish != nil {
 			s.hooks.beforePublish()
+		}
+		if err := s.operationError(ctx); err != nil {
+			return "", err
 		}
 		err = s.hooks.link(root, tempName, name)
 		if err == nil {
@@ -859,6 +1126,45 @@ func (s *Storage) rebuildQuota() error {
 				_ = ownerRoot.Close()
 				return fmt.Errorf("scan staged files: %w", err)
 			}
+			recoveredAlias := false
+			for _, fileEntry := range files {
+				if !isTempName(fileEntry.Name()) {
+					continue
+				}
+				info, err := privateRegularInfo(shareRoot, fileEntry.Name())
+				if err != nil {
+					_ = shareRoot.Close()
+					_ = ownerRoot.Close()
+					return err
+				}
+				links, available, linkErr := rootedFileLinkCount(shareRoot, fileEntry.Name(), info)
+				if linkErr != nil {
+					_ = shareRoot.Close()
+					_ = ownerRoot.Close()
+					return linkErr
+				}
+				if available && links == 2 {
+					if _, err := s.recoverTempAlias(shareRoot, fileEntry.Name()); err != nil {
+						_ = shareRoot.Close()
+						_ = ownerRoot.Close()
+						return err
+					}
+					recoveredAlias = true
+				}
+			}
+			if recoveredAlias {
+				if err := s.syncShareDirectory(shareRoot); err != nil {
+					_ = shareRoot.Close()
+					_ = ownerRoot.Close()
+					return fmt.Errorf("sync recovered share directory: %w", err)
+				}
+				files, err = readRootDirectory(shareRoot)
+				if err != nil {
+					_ = shareRoot.Close()
+					_ = ownerRoot.Close()
+					return fmt.Errorf("rescan recovered staged files: %w", err)
+				}
+			}
 			for _, fileEntry := range files {
 				name := fileEntry.Name()
 				if isTempName(name) {
@@ -933,6 +1239,24 @@ func syncDirectory(directory *os.File) error {
 }
 
 func safeRegularInfo(root *os.Root, name string) (os.FileInfo, error) {
+	info, err := privateRegularInfo(root, name)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateStoredFileInfo(info); err != nil {
+		return nil, err
+	}
+	links, available, err := rootedFileLinkCount(root, name, info)
+	if err != nil {
+		return nil, err
+	}
+	if available && links != 1 {
+		return nil, ErrMultipleLinks
+	}
+	return info, nil
+}
+
+func privateRegularInfo(root *os.Root, name string) (os.FileInfo, error) {
 	info, err := root.Lstat(name)
 	if err != nil {
 		return nil, fmt.Errorf("inspect staged file: %w", err)
@@ -940,13 +1264,115 @@ func safeRegularInfo(root *os.Root, name string) (os.FileInfo, error) {
 	if info.Mode()&os.ModeSymlink != 0 {
 		return nil, fmt.Errorf("%w: staged file", ErrSymlink)
 	}
+	if err := validatePlatformFileInfo(info); err != nil {
+		return nil, err
+	}
 	if !info.Mode().IsRegular() {
 		return nil, fmt.Errorf("%w: staged file", ErrNotRegular)
 	}
-	if err := validateStoredFileInfo(info); err != nil {
-		return nil, err
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+		return nil, ErrPermissions
 	}
 	return info, nil
+}
+
+func (s *Storage) prepareFinalEntry(root *os.Root, finalName string) (os.FileInfo, error) {
+	info, err := privateRegularInfo(root, finalName)
+	if err != nil {
+		return nil, err
+	}
+	links, available, err := rootedFileLinkCount(root, finalName, info)
+	if err != nil {
+		return nil, err
+	}
+	if !available || links == 1 {
+		return safeRegularInfo(root, finalName)
+	}
+	if links != 2 {
+		return nil, ErrMultipleLinks
+	}
+	tempName, verifiedFinal, err := verifiedTempFinalPair(root, finalName)
+	if err != nil || verifiedFinal != finalName {
+		return nil, errors.Join(ErrMultipleLinks, err)
+	}
+	if err := s.hooks.remove(root, tempName); err != nil {
+		return nil, fmt.Errorf("remove temporary alias: %w", err)
+	}
+	if err := s.syncShareDirectory(root); err != nil {
+		return nil, fmt.Errorf("sync temporary-alias removal: %w", err)
+	}
+	return safeRegularInfo(root, finalName)
+}
+
+func (s *Storage) recoverTempAlias(root *os.Root, tempName string) (string, error) {
+	verifiedTemp, finalName, err := verifiedTempFinalPair(root, tempName)
+	if err != nil || verifiedTemp != tempName {
+		return "", errors.Join(ErrMultipleLinks, err)
+	}
+	if err := s.hooks.remove(root, tempName); err != nil {
+		return "", fmt.Errorf("remove temporary alias: %w", err)
+	}
+	if _, err := safeRegularInfo(root, finalName); err != nil {
+		return "", fmt.Errorf("validate recovered final: %w", err)
+	}
+	return finalName, nil
+}
+
+func verifiedTempFinalPair(root *os.Root, memberName string) (string, string, error) {
+	member, err := privateRegularInfo(root, memberName)
+	if err != nil {
+		return "", "", err
+	}
+	links, available, err := rootedFileLinkCount(root, memberName, member)
+	if err != nil {
+		return "", "", err
+	}
+	if !available || links != 2 {
+		return "", "", ErrMultipleLinks
+	}
+	entries, err := readRootDirectory(root)
+	if err != nil {
+		return "", "", err
+	}
+	aliases := make([]string, 0, 2)
+	for _, entry := range entries {
+		info, err := root.Lstat(entry.Name())
+		if err != nil {
+			return "", "", err
+		}
+		if os.SameFile(member, info) {
+			aliases = append(aliases, entry.Name())
+		}
+	}
+	if len(aliases) != 2 {
+		return "", "", ErrMultipleLinks
+	}
+	var tempName, finalName string
+	for _, name := range aliases {
+		info, err := privateRegularInfo(root, name)
+		if err != nil {
+			return "", "", err
+		}
+		aliasLinks, available, err := rootedFileLinkCount(root, name, info)
+		if err != nil {
+			return "", "", err
+		}
+		if !available || aliasLinks != 2 {
+			return "", "", ErrMultipleLinks
+		}
+		switch {
+		case isTempName(name) && tempName == "":
+			tempName = name
+		case !isTempName(name) && validateStorageName(name) == nil && finalName == "":
+			finalName = name
+		default:
+			return "", "", ErrMultipleLinks
+		}
+	}
+	if tempName == "" || finalName == "" {
+		return "", "", ErrMultipleLinks
+	}
+	return tempName, finalName, nil
 }
 
 func validateStoredFileInfo(info os.FileInfo) error {
@@ -1039,6 +1465,7 @@ func (r *Reservation) commit(storageName string) error {
 	r.storage.quota.mu.Lock()
 	defer r.storage.quota.mu.Unlock()
 	r.storage.quota.committed[quotaKey{ownerID: r.ownerID, shareID: r.shareID, storageName: storageName}] = r.size
+	r.storage.untrackReservation(r)
 	return nil
 }
 
@@ -1109,7 +1536,7 @@ func copyExactAndProbe(ctx context.Context, dst io.Writer, src io.Reader, size i
 	var written int64
 	emptyReads := 0
 	for remaining > 0 {
-		if err := ctx.Err(); err != nil {
+		if err := contextError(ctx); err != nil {
 			return written, err
 		}
 		readBuffer := buffer[:min(int64(len(buffer)), remaining)]
@@ -1135,7 +1562,7 @@ func copyExactAndProbe(ctx context.Context, dst io.Writer, src io.Reader, size i
 			}
 		}
 		if readErr != nil {
-			if err := ctx.Err(); err != nil {
+			if err := contextError(ctx); err != nil {
 				return written, err
 			}
 			if errors.Is(readErr, io.EOF) {
@@ -1151,7 +1578,7 @@ func copyExactAndProbe(ctx context.Context, dst io.Writer, src io.Reader, size i
 	emptyReads = 0
 	var probe [1]byte
 	for {
-		if err := ctx.Err(); err != nil {
+		if err := contextError(ctx); err != nil {
 			return written, err
 		}
 		read, readErr := src.Read(probe[:])
@@ -1165,7 +1592,7 @@ func copyExactAndProbe(ctx context.Context, dst io.Writer, src io.Reader, size i
 			return written, ErrSizeMismatch
 		}
 		if readErr != nil {
-			if err := ctx.Err(); err != nil {
+			if err := contextError(ctx); err != nil {
 				return written, err
 			}
 			if errors.Is(readErr, io.EOF) {

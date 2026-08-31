@@ -1,4 +1,4 @@
-//go:build !unix
+//go:build !unix && !windows
 
 package transfer
 
@@ -9,3 +9,13 @@ func fileLinkCount(os.FileInfo) (uint64, bool) {
 	// trustworthy link count, so callers retain the other rooted identity checks.
 	return 0, false
 }
+
+func rootedFileLinkCount(*os.Root, string, os.FileInfo) (uint64, bool, error) {
+	return 0, false, nil
+}
+
+func validatePlatformFileInfo(os.FileInfo) error { return nil }
+
+func validateOpenedRegularFile(*os.File, uint64) error { return nil }
+
+func validateOpenedDirectory(*os.File) error { return nil }

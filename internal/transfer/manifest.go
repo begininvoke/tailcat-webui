@@ -102,10 +102,16 @@ type blockResult struct {
 // BuildFileManifest hashes one validated Storage-owned file without accepting
 // or returning a host filesystem path.
 func (s *Storage) BuildFileManifest(ctx context.Context, ownerID, shareID, storageName, fileID, virtualPath string) (_ FileManifest, retErr error) {
-	if err := s.ensureOpen(); err != nil {
+	operationCtx, end, err := s.beginOperation(ctx)
+	if err != nil {
 		return FileManifest{}, err
 	}
-	if err := ctx.Err(); err != nil {
+	defer end()
+	return s.buildFileManifest(operationCtx, ownerID, shareID, storageName, fileID, virtualPath)
+}
+
+func (s *Storage) buildFileManifest(ctx context.Context, ownerID, shareID, storageName, fileID, virtualPath string) (_ FileManifest, retErr error) {
+	if err := contextError(ctx); err != nil {
 		return FileManifest{}, err
 	}
 	if err := validateEntityID(fileID); err != nil {
@@ -114,7 +120,7 @@ func (s *Storage) BuildFileManifest(ctx context.Context, ownerID, shareID, stora
 	if err := validateVirtualPath(virtualPath); err != nil {
 		return FileManifest{}, err
 	}
-	file, err := s.Open(ctx, ownerID, shareID, storageName)
+	file, err := s.open(ctx, ownerID, shareID, storageName)
 	if err != nil {
 		return FileManifest{}, err
 	}
@@ -126,6 +132,9 @@ func (s *Storage) BuildFileManifest(ctx context.Context, ownerID, shareID, stora
 
 	fileManifest, sourceInfo, err := buildFileManifest(ctx, file, fileID, virtualPath, s.manifestHooks)
 	if err != nil {
+		return FileManifest{}, err
+	}
+	if err := s.operationError(ctx); err != nil {
 		return FileManifest{}, err
 	}
 	shareRoot, err := s.openShare(ownerID, shareID, false)
@@ -142,6 +151,9 @@ func (s *Storage) BuildFileManifest(ctx context.Context, ownerID, shareID, stora
 	}
 	if !os.SameFile(sourceInfo, current) || current.Size() != fileManifest.size || !current.ModTime().Equal(fileManifest.mtime) {
 		return FileManifest{}, ErrFileChanged
+	}
+	if err := s.operationError(ctx); err != nil {
+		return FileManifest{}, err
 	}
 	return fileManifest, nil
 }
