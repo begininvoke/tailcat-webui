@@ -145,6 +145,7 @@ code, pre, .mono-value, .mono-input input, .mono-input textarea { font-family: u
 .operation-progress { min-width: 0; }
 .operation-progress-summary { margin-bottom: 8px; }
 .operation-progress .ant-progress { margin-bottom: 8px; }
+.operation-progress-bar .ant-progress-bg { transition: none !important; }
 .operation-progress .ant-descriptions { margin-top: 8px; }
 .operation-progress-error { margin-top: 8px; }
 .operation-progress-limits { margin-top: 8px; }
@@ -189,6 +190,8 @@ code, pre, .mono-value, .mono-input input, .mono-input textarea { font-family: u
   .diagnostics-list .ant-list-item { display: block; }
   .diagnostics-list .ant-list-item-action { margin-inline-start: 0; margin-top: 12px; }
   .diagnostics-list .ant-list-item-action > li > .ant-btn { min-width: 44px; min-height: 44px; }
+  .diagnostic-kind-select { display: flex; flex-wrap: wrap; gap: 8px; }
+  .diagnostic-kind-select .ant-radio-button-wrapper { min-height: 44px; line-height: 42px; margin-inline-start: 0 !important; }
   .diagnostic-card .operation-progress .ant-descriptions-item-label,
   .diagnostic-card .operation-progress .ant-descriptions-item-content { padding-bottom: 4px; }
 }

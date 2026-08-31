@@ -57,7 +57,7 @@ export function OperationProgress({ run, progress, compact = false }: { run: Dia
       <DiagnosticPathTag path={run.path} />
       {phase && <Typography.Text aria-live="polite">{phase}</Typography.Text>}
     </Flex>}
-    {isRunning && <Progress percent={percent} status="active" aria-label={t('diagnostics.progressLabel', { percent })} format={() => `${percent}%`} />}
+    {isRunning && <Progress className="operation-progress-bar" percent={percent} status="normal" aria-label={t('diagnostics.progressLabel', { percent })} format={() => `${percent}%`} />}
     {metrics.length > 0 && <Descriptions size="small" column={compact ? 1 : { xs: 1, sm: 2 }} items={metrics} />}
     {run.error_code && <Alert className="operation-progress-error" type="error" showIcon message={t(`diagnostics.${run.error_code}`)} />}
     {!compact && run.kind === 'throughput' && <Space className="operation-progress-limits" size={8} wrap><Typography.Text type="secondary">{t('diagnostics.perDirection')}</Typography.Text><Typography.Text className="tabular-figure" type="secondary">{formatBytes(run.upload_bytes + run.download_bytes, locale)}</Typography.Text></Space>}

@@ -12,5 +12,9 @@ describe('OperationProgress', () => {
     expect(screen.getByRole('progressbar', { name: 'Diagnostic progress: 42%' })).not.toBeNull()
     expect(screen.getByText('42% complete')).not.toBeNull()
     expect(screen.getByText('Direct')).not.toBeNull()
+
+    const progress = screen.getByRole('progressbar', { name: 'Diagnostic progress: 42%' })
+    expect(progress.className).toContain('ant-progress-status-normal')
+    expect(progress.className).not.toMatch(/active|processing/)
   })
 })

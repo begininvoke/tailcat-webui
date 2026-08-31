@@ -1,6 +1,6 @@
 import { CodeOutlined, DeleteOutlined, ExperimentOutlined, PlusOutlined, RadarChartOutlined } from '@ant-design/icons'
 import { Alert, App, Button, Card, Col, Descriptions, Divider, Drawer, Empty, Flex, Form, Grid, Input, InputNumber, List, Popconfirm, Radio, Row, Space, Switch, Table, Tabs, Tag, Tooltip, Typography, type TableProps } from 'antd'
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useSearchParams } from 'react-router-dom'
 import { PageHeader } from '../components/PageHeader'
@@ -13,6 +13,12 @@ import { APIError, api, type Client, type DiagnosticRun, type StartDiagnosticInp
 
 interface ClientFormValues { name: string; server: string; derp_map_url?: string; save_identity: boolean }
 interface DiagnosticFormValues { client_id: string; kind: 'ping' | 'throughput'; duration_ms: number; bytes: number }
+
+const diagnosticRefreshDelayMS = 100
+
+function integerInRange(minimum: number, maximum: number, message: string) {
+  return (_: unknown, value: unknown) => typeof value === 'number' && Number.isInteger(value) && value >= minimum && value <= maximum ? Promise.resolve() : Promise.reject(new Error(message))
+}
 
 function formatDate(value: string | undefined, locale: string) {
   if (!value) return '—'
@@ -45,6 +51,8 @@ export default function ClientsPage() {
   const [diagnosticBusyID, setDiagnosticBusyID] = useState('')
   const [diagnosticError, setDiagnosticError] = useState('')
   const [liveUpdates, setLiveUpdates] = useState<Record<string, DiagnosticEventPayload>>({})
+  const diagnosticSequences = useRef(new Map<string, number>())
+  const diagnosticRefreshTimer = useRef<number | null>(null)
   const [toolsOpen, setToolsOpen] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [busyID, setBusyID] = useState('')
@@ -60,6 +68,12 @@ export default function ClientsPage() {
   const [diagnosticForm] = Form.useForm<DiagnosticFormValues>()
   const resource = useAsyncResource(api.clients)
   const diagnostics = useAsyncResource(api.diagnostics, { refreshOnRuntime: false })
+  const setDiagnosticsData = diagnostics.setData
+  const diagnosticsRefresh = useRef(diagnostics.refresh)
+  useEffect(() => { diagnosticsRefresh.current = diagnostics.refresh }, [diagnostics.refresh])
+  useEffect(() => () => {
+    if (diagnosticRefreshTimer.current !== null) window.clearTimeout(diagnosticRefreshTimer.current)
+  }, [])
   const closeCreate = () => {
     setCreateOpen(false)
     if (params.has('new')) { params.delete('new'); setParams(params, { replace: true }) }
@@ -115,11 +129,21 @@ export default function ClientsPage() {
     setTunnelInput('')
   }
 
+  const queueDiagnosticRefresh = useCallback(() => {
+    if (diagnosticRefreshTimer.current !== null) return
+    diagnosticRefreshTimer.current = window.setTimeout(() => {
+      diagnosticRefreshTimer.current = null
+      diagnosticsRefresh.current({ silent: true })
+    }, diagnosticRefreshDelayMS)
+  }, [])
   const onDiagnostic = useCallback((event: DiagnosticRuntimeEvent) => {
+    const previousSequence = diagnosticSequences.current.get(event.resource_id)
+    if (previousSequence !== undefined && event.sequence <= previousSequence) return
+    diagnosticSequences.current.set(event.resource_id, event.sequence)
     setLiveUpdates((current) => ({ ...current, [event.resource_id]: event.payload }))
-    diagnostics.setData((current) => current?.map((run) => run.id === event.resource_id && run.client_id === event.payload.client_id ? patchRun(run, event.payload) : run) ?? current)
-    void diagnostics.refresh({ silent: true })
-  }, [diagnostics])
+    setDiagnosticsData((current) => current?.map((run) => run.id === event.resource_id && run.client_id === event.payload.client_id ? patchRun(run, event.payload) : run) ?? current)
+    queueDiagnosticRefresh()
+  }, [queueDiagnosticRefresh, setDiagnosticsData])
   useDiagnosticEvents(onDiagnostic)
 
   const startDiagnostic = async (values: DiagnosticFormValues) => {
@@ -227,9 +251,9 @@ export default function ClientsPage() {
         {diagnosticError && <Alert className="drawer-alert" type="error" showIcon message={diagnosticError} action={<Button size="small" onClick={() => diagnosticForm.submit()}>{t('common.retry')}</Button>} />}
         <Form form={diagnosticForm} layout="vertical" initialValues={{ client_id: resource.data?.[0]?.id, kind: 'ping', duration_ms: 1000, bytes: 1048576 }} onFinish={(values) => void startDiagnostic(values)} onValuesChange={(changed: Partial<DiagnosticFormValues>) => { if (changed.kind === 'ping') diagnosticForm.setFieldValue('bytes', 0); if (changed.kind === 'throughput' && diagnosticForm.getFieldValue('bytes') === 0) diagnosticForm.setFieldValue('bytes', 1048576) }}>
           <Form.Item name="client_id" label={t('diagnostics.client')} rules={[{ required: true, message: t('validation.required') }]}><Radio.Group className="diagnostic-client-select" options={resource.data?.map((client) => ({ value: client.id, label: client.name })) ?? []} /></Form.Item>
-          <Form.Item name="kind" label={t('diagnostics.kind')} rules={[{ required: true, message: t('validation.required') }]}><Radio.Group optionType="button" buttonStyle="solid" options={[{ value: 'ping', label: t('diagnostics.ping') }, { value: 'throughput', label: t('diagnostics.throughput') }]} /></Form.Item>
-          <Form.Item name="duration_ms" label={t('diagnostics.duration')} extra={t('diagnostics.durationHelp')} rules={[{ required: true, message: t('validation.required') }]}><InputNumber min={1} max={5000} precision={0} className="full-width" /></Form.Item>
-          <Form.Item noStyle shouldUpdate={(previous, current) => previous.kind !== current.kind}>{({ getFieldValue }) => getFieldValue('kind') === 'throughput' ? <Form.Item name="bytes" label={t('diagnostics.bytes')} extra={t('diagnostics.bytesHelp')} rules={[{ required: true, message: t('validation.required') }]}><InputNumber min={1} max={33554432} precision={0} className="full-width" /></Form.Item> : null}</Form.Item>
+          <Form.Item name="kind" label={t('diagnostics.kind')} rules={[{ required: true, message: t('validation.required') }]}><Radio.Group className="diagnostic-kind-select" optionType="button" buttonStyle="solid" options={[{ value: 'ping', label: t('diagnostics.ping') }, { value: 'throughput', label: t('diagnostics.throughput') }]} /></Form.Item>
+          <Form.Item name="duration_ms" label={t('diagnostics.duration')} extra={t('diagnostics.durationHelp')} rules={[{ required: true, message: t('validation.required') }, { validator: integerInRange(1, 5000, t('diagnostics.durationInvalid')) }]}><InputNumber step={1} className="full-width" /></Form.Item>
+          <Form.Item noStyle shouldUpdate={(previous, current) => previous.kind !== current.kind}>{({ getFieldValue }) => getFieldValue('kind') === 'throughput' ? <Form.Item name="bytes" label={t('diagnostics.bytes')} extra={t('diagnostics.bytesHelp')} rules={[{ required: true, message: t('validation.required') }, { validator: integerInRange(1, 33554432, t('diagnostics.bytesInvalid')) }]}><InputNumber step={1} className="full-width" /></Form.Item> : null}</Form.Item>
         </Form>
       </Drawer>
 
