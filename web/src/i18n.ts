@@ -12,7 +12,7 @@ const resources = {
         add: 'Add', create: 'Create', cancel: 'Cancel', delete: 'Delete', start: 'Start', stop: 'Stop', close: 'Close',
         copy: 'Copy', copied: 'Copied', ping: 'Ping', open: 'Open', name: 'Name', status: 'Status', actions: 'Actions',
         loading: 'Loading', retry: 'Try again', optional: 'Optional', save: 'Save', running: 'Running', stopped: 'Stopped',
-        idle: 'Idle', ready: 'Ready', unavailable: 'Unavailable', more: 'More', never: 'Never', back: 'Back',
+        idle: 'Idle', starting: 'Starting', connecting: 'Connecting', ready: 'Ready', stopping: 'Stopping', error: 'Error', interrupted: 'Interrupted', unavailable: 'Unavailable', more: 'More', never: 'Never', back: 'Back',
         skip: 'Skip to main content', copyFailed: 'Copy failed. Select and copy the value manually.',
       },
       auth: {
@@ -75,7 +75,7 @@ const resources = {
         add: '添加', create: '创建', cancel: '取消', delete: '删除', start: '启动', stop: '停止', close: '关闭',
         copy: '复制', copied: '已复制', ping: '测试连接', open: '打开', name: '名称', status: '状态', actions: '操作',
         loading: '正在加载', retry: '重试', optional: '可选', save: '保存', running: '运行中', stopped: '已停止',
-        idle: '未连接', ready: '就绪', unavailable: '不可用', more: '更多', never: '从未', back: '返回',
+        idle: '未连接', starting: '正在启动', connecting: '正在连接', ready: '就绪', stopping: '正在停止', error: '错误', interrupted: '已中断', unavailable: '不可用', more: '更多', never: '从未', back: '返回',
         skip: '跳到主要内容', copyFailed: '复制失败，请手动选择并复制。',
       },
       auth: {

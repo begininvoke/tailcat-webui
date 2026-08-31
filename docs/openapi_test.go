@@ -2,6 +2,7 @@ package docs
 
 import (
 	"os"
+	"slices"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -18,6 +19,7 @@ func TestOpenAPIIsValidYAMLWithPaths(t *testing.T) {
 		Components struct {
 			Schemas map[string]struct {
 				Properties map[string]any `yaml:"properties"`
+				Enum       []string       `yaml:"enum"`
 			} `yaml:"schemas"`
 		} `yaml:"components"`
 	}
@@ -37,6 +39,14 @@ func TestOpenAPIIsValidYAMLWithPaths(t *testing.T) {
 			if document.Components.Schemas[schema].Properties[field] == nil {
 				t.Errorf("OpenAPI schema %s.%s is missing", schema, field)
 			}
+		}
+	}
+	if got, want := document.Components.Schemas["RuntimePhase"].Enum, []string{"idle", "starting", "connecting", "ready", "running", "stopping", "stopped", "error", "interrupted"}; !slices.Equal(got, want) {
+		t.Errorf("RuntimePhase enum = %v, want %v", got, want)
+	}
+	for _, field := range []string{"version", "type", "resource_kind", "resource_id", "operation_id", "phase", "sequence", "at", "payload"} {
+		if document.Components.Schemas["RuntimeEvent"].Properties[field] == nil {
+			t.Errorf("OpenAPI schema RuntimeEvent.%s is missing", field)
 		}
 	}
 }

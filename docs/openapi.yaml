@@ -279,7 +279,7 @@ paths:
         '200':
           description: Server-sent runtime events
           content:
-            text/event-stream: { schema: { type: string } }
+            text/event-stream: { schema: { $ref: '#/components/schemas/RuntimeEvent' } }
 components:
   securitySchemes:
     cookieAuth:
@@ -326,7 +326,7 @@ components:
         name: { type: string }
         key_mode: { type: string, enum: [ephemeral, saved] }
         region: { type: string }
-        runtime_state: { type: string, enum: [running, stopped] }
+        runtime_state: { $ref: '#/components/schemas/RuntimePhase' }
         connection_token: { type: string, description: Present only while running }
         public_key: { type: string }
         exit_node_enabled: { type: boolean }
@@ -342,7 +342,7 @@ components:
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
-        runtime_state: { type: string, enum: [idle, ready] }
+        runtime_state: { $ref: '#/components/schemas/RuntimePhase' }
         token_hint: { type: string }
         public_key: { type: string }
         last_ping_ms: { type: integer }
@@ -377,6 +377,23 @@ components:
     RouteList:
       type: object
       properties: { items: { type: array, items: { $ref: '#/components/schemas/Route' } } }
+    RuntimePhase:
+      type: string
+      enum: [idle, starting, connecting, ready, running, stopping, stopped, error, interrupted]
+    RuntimeEvent:
+      type: object
+      additionalProperties: false
+      required: [version, type, resource_kind, resource_id, phase, sequence, at]
+      properties:
+        version: { type: integer }
+        type: { type: string }
+        resource_kind: { type: string }
+        resource_id: { type: string, format: uuid }
+        operation_id: { type: string, format: uuid }
+        phase: { $ref: '#/components/schemas/RuntimePhase' }
+        sequence: { type: integer, minimum: 1 }
+        at: { type: string, format: date-time }
+        payload: {}
     Error:
       type: object
       required: [error]

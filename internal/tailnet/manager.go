@@ -38,49 +38,63 @@ var (
 	ErrRestartRequired = errors.New("Tailcat server must be stopped before changing this resource")
 )
 
+type RuntimePhase = events.RuntimePhase
+
+const (
+	RuntimePhaseIdle        = events.RuntimePhaseIdle
+	RuntimePhaseStarting    = events.RuntimePhaseStarting
+	RuntimePhaseConnecting  = events.RuntimePhaseConnecting
+	RuntimePhaseReady       = events.RuntimePhaseReady
+	RuntimePhaseRunning     = events.RuntimePhaseRunning
+	RuntimePhaseStopping    = events.RuntimePhaseStopping
+	RuntimePhaseStopped     = events.RuntimePhaseStopped
+	RuntimePhaseError       = events.RuntimePhaseError
+	RuntimePhaseInterrupted = events.RuntimePhaseInterrupted
+)
+
 type Event struct {
-	UserID       string    `json:"user_id"`
-	ResourceKind string    `json:"resource_kind"`
-	ResourceID   string    `json:"resource_id"`
-	State        string    `json:"state"`
-	Message      string    `json:"message,omitempty"`
-	At           time.Time `json:"at"`
+	UserID       string       `json:"user_id"`
+	ResourceKind string       `json:"resource_kind"`
+	ResourceID   string       `json:"resource_id"`
+	State        RuntimePhase `json:"state"`
+	Message      string       `json:"message,omitempty"`
+	At           time.Time    `json:"at"`
 }
 
 type EventRecorder func(context.Context, Event) error
 
 type ServerView struct {
-	ID               string    `json:"id"`
-	Name             string    `json:"name"`
-	KeyMode          string    `json:"key_mode"`
-	Region           string    `json:"region"`
-	DERPMapURL       string    `json:"derp_map_url,omitempty"`
-	ExitNodeEnabled  bool      `json:"exit_node_enabled"`
-	DesiredRunning   bool      `json:"desired_running"`
-	RuntimeState     string    `json:"runtime_state"`
-	ConnectionToken  string    `json:"connection_token,omitempty"`
-	PublicKey        string    `json:"public_key,omitempty"`
-	StartedAt        time.Time `json:"started_at,omitzero"`
-	MappingCount     int       `json:"mapping_count"`
-	AllowedKeyCount  int       `json:"allowed_key_count"`
-	AllowlistEnabled bool      `json:"allowlist_enabled"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	ID               string       `json:"id"`
+	Name             string       `json:"name"`
+	KeyMode          string       `json:"key_mode"`
+	Region           string       `json:"region"`
+	DERPMapURL       string       `json:"derp_map_url,omitempty"`
+	ExitNodeEnabled  bool         `json:"exit_node_enabled"`
+	DesiredRunning   bool         `json:"desired_running"`
+	RuntimeState     RuntimePhase `json:"runtime_state"`
+	ConnectionToken  string       `json:"connection_token,omitempty"`
+	PublicKey        string       `json:"public_key,omitempty"`
+	StartedAt        time.Time    `json:"started_at,omitzero"`
+	MappingCount     int          `json:"mapping_count"`
+	AllowedKeyCount  int          `json:"allowed_key_count"`
+	AllowlistEnabled bool         `json:"allowlist_enabled"`
+	CreatedAt        time.Time    `json:"created_at"`
+	UpdatedAt        time.Time    `json:"updated_at"`
 }
 
 type ClientView struct {
-	ID           string     `json:"id"`
-	Name         string     `json:"name"`
-	DERPMapURL   string     `json:"derp_map_url,omitempty"`
-	SavedKey     bool       `json:"saved_key"`
-	TokenHint    string     `json:"token_hint"`
-	RuntimeState string     `json:"runtime_state"`
-	PublicKey    string     `json:"public_key,omitempty"`
-	LastPingMS   *int64     `json:"last_ping_ms,omitempty"`
-	LastPath     string     `json:"last_path,omitempty"`
-	LastPingAt   *time.Time `json:"last_ping_at,omitempty"`
-	CreatedAt    time.Time  `json:"created_at"`
-	UpdatedAt    time.Time  `json:"updated_at"`
+	ID           string       `json:"id"`
+	Name         string       `json:"name"`
+	DERPMapURL   string       `json:"derp_map_url,omitempty"`
+	SavedKey     bool         `json:"saved_key"`
+	TokenHint    string       `json:"token_hint"`
+	RuntimeState RuntimePhase `json:"runtime_state"`
+	PublicKey    string       `json:"public_key,omitempty"`
+	LastPingMS   *int64       `json:"last_ping_ms,omitempty"`
+	LastPath     string       `json:"last_path,omitempty"`
+	LastPingAt   *time.Time   `json:"last_ping_at,omitempty"`
+	CreatedAt    time.Time    `json:"created_at"`
+	UpdatedAt    time.Time    `json:"updated_at"`
 }
 
 type PortMappingView struct {
@@ -145,7 +159,7 @@ type runningServer struct {
 type runningClient struct {
 	client *tailcat.Client
 	userID string
-	state  string
+	state  RuntimePhase
 }
 
 type operationLock struct {
@@ -214,7 +228,8 @@ type Manager struct {
 	recordEvent      EventRecorder
 	logger           *slog.Logger
 	eventsMu         sync.Mutex
-	userEvents       map[string]*events.Broker[Event]
+	userEvents       map[string]*events.Broker[events.Envelope]
+	eventSequences   map[string]uint64
 	mu               sync.RWMutex
 	quotaMu          sync.Mutex
 	opMu             sync.Mutex
@@ -240,17 +255,22 @@ func NewManager(db *ent.Client, box *secrets.Box, mappingPolicy, exitPolicy *Tar
 		allowedDERPHosts: allowedHosts,
 		unsafeSSH:        unsafeSSH,
 		recordEvent:      recorder,
-		userEvents:       make(map[string]*events.Broker[Event]),
+		userEvents:       make(map[string]*events.Broker[events.Envelope]),
+		eventSequences:   make(map[string]uint64),
 		servers:          make(map[string]*runningServer), clients: make(map[string]*runningClient), serverOps: make(map[string]*operationLock), clientOps: make(map[string]*operationLock), starting: make(map[string]string),
 	}, nil
 }
 
-func (m *Manager) Events(userID string) *events.Broker[Event] {
+func (m *Manager) Events(userID string) *events.Broker[events.Envelope] {
 	m.eventsMu.Lock()
 	defer m.eventsMu.Unlock()
+	return m.eventsForUserLocked(userID)
+}
+
+func (m *Manager) eventsForUserLocked(userID string) *events.Broker[events.Envelope] {
 	broker := m.userEvents[userID]
 	if broker == nil {
-		broker = events.NewBroker[Event]()
+		broker = events.NewBroker[events.Envelope]()
 		m.userEvents[userID] = broker
 	}
 	return broker
@@ -260,6 +280,7 @@ func (m *Manager) ReleaseEvents(userID string) {
 	m.eventsMu.Lock()
 	defer m.eventsMu.Unlock()
 	delete(m.userEvents, userID)
+	delete(m.eventSequences, userID)
 }
 
 func (m *Manager) Restore(ctx context.Context) error {
@@ -277,7 +298,7 @@ func (m *Manager) Restore(ctx context.Context) error {
 			case sem <- struct{}{}:
 				defer func() { <-sem }()
 			case <-ctx.Done():
-				m.publish(row.UserID, "server", row.ID, "error", "restore deadline exceeded")
+				m.publish(row.UserID, "server", row.ID, RuntimePhaseError, "restore deadline exceeded")
 				errsMu.Lock()
 				errs = append(errs, fmt.Errorf("restore server %s: %w", row.ID, ctx.Err()))
 				errsMu.Unlock()
@@ -286,7 +307,7 @@ func (m *Manager) Restore(ctx context.Context) error {
 			instanceCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 			defer cancel()
 			if _, err := m.StartServer(instanceCtx, row.UserID, row.ID); err != nil {
-				m.publish(row.UserID, "server", row.ID, "error", "restore failed")
+				m.publish(row.UserID, "server", row.ID, RuntimePhaseError, "restore failed")
 				errsMu.Lock()
 				errs = append(errs, fmt.Errorf("restore server %s: %w", row.ID, err))
 				errsMu.Unlock()
@@ -341,7 +362,7 @@ func (m *Manager) ListServers(ctx context.Context, userID string) ([]ServerView,
 		runtime := m.servers[row.ID]
 		m.mu.RUnlock()
 		if runtime != nil {
-			view.RuntimeState = "running"
+			view.RuntimeState = RuntimePhaseRunning
 			view.ConnectionToken = runtime.token
 			view.PublicKey = runtime.publicKey
 			view.StartedAt = runtime.startedAt
@@ -467,10 +488,10 @@ func (m *Manager) StartServer(ctx context.Context, userID, id string) (ServerVie
 	m.mu.Lock()
 	m.servers[id] = runtime
 	m.mu.Unlock()
-	m.publish(userID, "server", id, "running", "")
+	m.publish(userID, "server", id, RuntimePhaseRunning, "")
 	view := serverView(row)
 	view.DesiredRunning = true
-	view.RuntimeState = "running"
+	view.RuntimeState = RuntimePhaseRunning
 	view.ConnectionToken = runtime.token
 	view.PublicKey = runtime.publicKey
 	view.StartedAt = runtime.startedAt
@@ -510,7 +531,7 @@ func (m *Manager) stopServerLocked(ctx context.Context, userID, id string) error
 	if err := runtime.shutdown(shutdownCtx); err != nil {
 		return fmt.Errorf("stop Tailcat server: %w", err)
 	}
-	m.publish(userID, "server", id, "stopped", "")
+	m.publish(userID, "server", id, RuntimePhaseStopped, "")
 	return nil
 }
 
@@ -529,7 +550,7 @@ func (m *Manager) DeleteServer(ctx context.Context, userID, id string) error {
 	if count == 0 {
 		return ErrNotFound
 	}
-	m.publish(userID, "server", id, "deleted", "")
+	m.publish(userID, "server", id, RuntimePhaseStopped, "")
 	return nil
 }
 
@@ -852,7 +873,7 @@ func (m *Manager) DeleteClient(ctx context.Context, userID, id string) error {
 	if err := m.db.TailClient.DeleteOneID(id).Exec(ctx); err != nil {
 		return fmt.Errorf("delete Tailcat client: %w", err)
 	}
-	m.publish(userID, "client", id, "deleted", "")
+	m.publish(userID, "client", id, RuntimePhaseStopped, "")
 	return nil
 }
 
@@ -863,8 +884,8 @@ func (m *Manager) PingClient(ctx context.Context, userID, id string) (ClientView
 	}
 	result, err := client.DiscoPing(ctx)
 	if err != nil {
-		m.setClientState(id, "error")
-		m.publish(userID, "client", id, "error", "ping failed")
+		m.setClientState(id, RuntimePhaseError)
+		m.publish(userID, "client", id, RuntimePhaseError, "ping failed")
 		return ClientView{}, fmt.Errorf("ping Tailcat server: %w", err)
 	}
 	path := "derp"
@@ -880,10 +901,10 @@ func (m *Manager) PingClient(ctx context.Context, userID, id string) (ClientView
 		return ClientView{}, fmt.Errorf("store ping result: %w", err)
 	}
 	view := clientView(row)
-	m.setClientState(id, "ready")
-	view.RuntimeState = "ready"
+	m.setClientState(id, RuntimePhaseReady)
+	view.RuntimeState = RuntimePhaseReady
 	view.PublicKey = client.PublicKey().String()
-	m.publish(userID, "client", id, "ready", path)
+	m.publish(userID, "client", id, RuntimePhaseReady, path)
 	return view, nil
 }
 
@@ -897,10 +918,10 @@ func (m *Manager) DialPort(ctx context.Context, userID, id string, port uint16) 
 	}
 	connection, err := client.DialTCPPort(ctx, port)
 	if err != nil {
-		m.setClientState(id, "error")
+		m.setClientState(id, RuntimePhaseError)
 		return nil, err
 	}
-	m.setClientState(id, "ready")
+	m.setClientState(id, RuntimePhaseReady)
 	return connection, nil
 }
 
@@ -922,10 +943,10 @@ func (m *Manager) Dial(ctx context.Context, userID, id, address string) (net.Con
 	}
 	connection, err := client.Dial(ctx, "tcp", net.JoinHostPort(host, port))
 	if err != nil {
-		m.setClientState(id, "error")
+		m.setClientState(id, RuntimePhaseError)
 		return nil, err
 	}
-	m.setClientState(id, "ready")
+	m.setClientState(id, RuntimePhaseReady)
 	return connection, nil
 }
 
@@ -1292,20 +1313,26 @@ func tokenHint(raw string) string {
 }
 
 func serverView(row *ent.TailServer) ServerView {
-	return ServerView{ID: row.ID, Name: row.Name, KeyMode: string(row.KeyMode), Region: row.Region, DERPMapURL: row.DerpMapURL, ExitNodeEnabled: row.ExitNodeEnabled, AllowlistEnabled: row.AllowlistEnabled, DesiredRunning: row.DesiredRunning, RuntimeState: "stopped", CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt}
+	return ServerView{ID: row.ID, Name: row.Name, KeyMode: string(row.KeyMode), Region: row.Region, DERPMapURL: row.DerpMapURL, ExitNodeEnabled: row.ExitNodeEnabled, AllowlistEnabled: row.AllowlistEnabled, DesiredRunning: row.DesiredRunning, RuntimeState: RuntimePhaseStopped, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt}
 }
 
 func clientView(row *ent.TailClient) ClientView {
-	return ClientView{ID: row.ID, Name: row.Name, DERPMapURL: row.DerpMapURL, SavedKey: len(row.KeyCipher) > 0, TokenHint: row.TokenHint, RuntimeState: "idle", LastPingMS: row.LastPingMs, LastPath: row.LastPath, LastPingAt: row.LastPingAt, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt}
+	return ClientView{ID: row.ID, Name: row.Name, DERPMapURL: row.DerpMapURL, SavedKey: len(row.KeyCipher) > 0, TokenHint: row.TokenHint, RuntimeState: RuntimePhaseIdle, LastPingMS: row.LastPingMs, LastPath: row.LastPath, LastPingAt: row.LastPingAt, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt}
 }
 
 func mappingView(row *ent.PortMapping) PortMappingView {
 	return PortMappingView{ID: row.ID, ServerID: row.ServerID, Name: row.Name, Kind: string(row.Kind), ListenPort: row.ListenPort, TargetHost: row.TargetHost, TargetPort: row.TargetPort, Enabled: row.Enabled, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt}
 }
 
-func (m *Manager) publish(userID, kind, id, state, message string) {
-	event := Event{UserID: userID, ResourceKind: kind, ResourceID: id, State: state, Message: message, At: time.Now()}
-	m.Events(userID).Publish(event)
+func (m *Manager) publish(userID, kind, id string, phase RuntimePhase, message string) {
+	at := time.Now()
+	m.eventsMu.Lock()
+	broker := m.eventsForUserLocked(userID)
+	m.eventSequences[userID]++
+	sequence := m.eventSequences[userID]
+	m.eventsMu.Unlock()
+	broker.Publish(events.Envelope{Version: 1, Type: "runtime", ResourceKind: kind, ResourceID: id, Phase: phase, Sequence: sequence, At: at})
+	event := Event{UserID: userID, ResourceKind: kind, ResourceID: id, State: phase, Message: message, At: at}
 	if m.recordEvent != nil {
 		auditCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
@@ -1315,7 +1342,7 @@ func (m *Manager) publish(userID, kind, id, state, message string) {
 	}
 }
 
-func (m *Manager) setClientState(id, state string) {
+func (m *Manager) setClientState(id string, state RuntimePhase) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if runtime := m.clients[id]; runtime != nil {

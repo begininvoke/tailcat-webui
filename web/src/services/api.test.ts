@@ -1,9 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { api, APIError } from './api'
+import { api, APIError, runtimePhases } from './api'
 
 afterEach(() => vi.unstubAllGlobals())
 
 describe('API client', () => {
+	it('exports the exhaustive runtime phase vocabulary', () => {
+		expect(runtimePhases).toEqual(['idle', 'starting', 'connecting', 'ready', 'running', 'stopping', 'stopped', 'error', 'interrupted'])
+	})
+
   it('unwraps collection responses', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ items: [{ id: 'server-1', name: 'Studio' }] }), { status: 200, headers: { 'Content-Type': 'application/json' } })))
     const servers = await api.servers()

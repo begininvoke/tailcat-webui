@@ -1,15 +1,22 @@
 export interface PublicConfig { auth_mode: 'oidc' | 'demo'; unsafe_ssh: boolean; version: string }
 export interface User { id: string; email?: string; display_name?: string; avatar_url?: string }
+export const runtimePhases = ['idle', 'starting', 'connecting', 'ready', 'running', 'stopping', 'stopped', 'error', 'interrupted'] as const
+export type RuntimePhase = typeof runtimePhases[number]
+
+export interface RuntimeEvent {
+  version: number; type: string; resource_kind: string; resource_id: string; operation_id?: string;
+  phase: RuntimePhase; sequence: number; at: string; payload?: unknown;
+}
 
 export interface Server {
   id: string; name: string; key_mode: 'ephemeral' | 'saved'; region: string; derp_map_url?: string;
-  exit_node_enabled: boolean; allowlist_enabled: boolean; desired_running: boolean; runtime_state: 'running' | 'stopped'; connection_token?: string;
+  exit_node_enabled: boolean; allowlist_enabled: boolean; desired_running: boolean; runtime_state: RuntimePhase; connection_token?: string;
   public_key?: string; started_at?: string; mapping_count: number; allowed_key_count: number; created_at: string; updated_at: string;
 }
 
 export interface Client {
   id: string; name: string; derp_map_url?: string; saved_key: boolean; token_hint: string;
-  runtime_state: 'idle' | 'ready' | 'error'; public_key?: string; last_ping_ms?: number; last_path?: 'direct' | 'derp' | 'peer-relay';
+  runtime_state: RuntimePhase; public_key?: string; last_ping_ms?: number; last_path?: 'direct' | 'derp' | 'peer-relay';
   last_ping_at?: string; created_at: string; updated_at: string;
 }
 
