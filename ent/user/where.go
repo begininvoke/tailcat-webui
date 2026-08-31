@@ -581,6 +581,29 @@ func HasServersWith(preds ...predicate.TailServer) predicate.User {
 	})
 }
 
+// HasExitRules applies the HasEdge predicate on the "exit_rules" edge.
+func HasExitRules() predicate.User {
+	return predicate.User(func(s *sql.Selector) {
+		step := sqlgraph.NewStep(
+			sqlgraph.From(Table, FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, ExitRulesTable, ExitRulesColumn),
+		)
+		sqlgraph.HasNeighbors(s, step)
+	})
+}
+
+// HasExitRulesWith applies the HasEdge predicate on the "exit_rules" edge with a given conditions (other predicates).
+func HasExitRulesWith(preds ...predicate.ExitRule) predicate.User {
+	return predicate.User(func(s *sql.Selector) {
+		step := newExitRulesStep()
+		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
+			for _, p := range preds {
+				p(s)
+			}
+		})
+	})
+}
+
 // HasClients applies the HasEdge predicate on the "clients" edge.
 func HasClients() predicate.User {
 	return predicate.User(func(s *sql.Selector) {

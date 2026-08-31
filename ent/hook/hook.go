@@ -33,6 +33,18 @@ func (f AuditEventFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, 
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.AuditEventMutation", m)
 }
 
+// The ExitRuleFunc type is an adapter to allow the use of ordinary
+// function as ExitRule mutator.
+type ExitRuleFunc func(context.Context, *ent.ExitRuleMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f ExitRuleFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.ExitRuleMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.ExitRuleMutation", m)
+}
+
 // The LoginFlowFunc type is an adapter to allow the use of ordinary
 // function as LoginFlow mutator.
 type LoginFlowFunc func(context.Context, *ent.LoginFlowMutation) (ent.Value, error)

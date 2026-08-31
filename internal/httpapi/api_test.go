@@ -2,6 +2,8 @@ package httpapi
 
 import (
 	"context"
+	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -9,9 +11,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ca-x/tailcat-webui/ent/enttest"
 	"github.com/ca-x/tailcat-webui/internal/auth"
 	"github.com/ca-x/tailcat-webui/internal/config"
+	"github.com/ca-x/tailcat-webui/internal/secrets"
+	"github.com/ca-x/tailcat-webui/internal/tailnet"
 	"github.com/labstack/echo/v5"
+
+	_ "github.com/lib-x/entsqlite"
 )
 
 func TestTunnelLimitIsPerUser(t *testing.T) {
@@ -101,5 +108,36 @@ func TestTunnelRejectsCrossOriginBeforeDial(t *testing.T) {
 	}
 	if recorder.Code != http.StatusForbidden {
 		t.Fatalf("cross-origin WebSocket status = %d, want %d", recorder.Code, http.StatusForbidden)
+	}
+}
+
+func TestCreateExitRuleHandlerUsesAuthenticatedOwner(t *testing.T) {
+	db := enttest.Open(t, "sqlite3", "file:http-exit-rule?mode=memory&cache=shared&_pragma=foreign_keys(1)")
+	owner := db.User.Create().SetIssuer("test").SetSubject("http-exit-owner").SaveX(t.Context())
+	server := db.TailServer.Create().SetUserID(owner.ID).SetName("server").SaveX(t.Context())
+	box, err := secrets.NewBox(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := tailnet.NewManager(db, box, tailnet.NewTargetPolicy(nil), tailnet.NewTargetPolicy(nil), nil, false, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	api := &API{tailnet: manager}
+	request := httptest.NewRequest(http.MethodPost, "https://tailcat.example.com/api/v1/servers/"+server.ID+"/exit-rules", strings.NewReader(`{"prefix":"10.1.2.3/8","start_port":443,"end_port":443,"enabled":true}`))
+	request.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	recorder := httptest.NewRecorder()
+	ctx := echo.New().NewContext(request, recorder)
+	ctx.Set(principalKey, auth.Principal{ID: owner.ID})
+	ctx.SetPathValues(echo.PathValues{{Name: "id", Value: server.ID}})
+
+	if err := api.createExitRule(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("create exit rule status = %d, want %d", recorder.Code, http.StatusCreated)
+	}
+	if got := db.ExitRule.Query().OnlyX(t.Context()).Prefix; got != "10.0.0.0/8" {
+		t.Fatalf("stored prefix = %q, want 10.0.0.0/8", got)
 	}
 }

@@ -17,6 +17,7 @@ import (
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"github.com/ca-x/tailcat-webui/ent/allowedclient"
 	"github.com/ca-x/tailcat-webui/ent/auditevent"
+	"github.com/ca-x/tailcat-webui/ent/exitrule"
 	"github.com/ca-x/tailcat-webui/ent/loginflow"
 	"github.com/ca-x/tailcat-webui/ent/portmapping"
 	"github.com/ca-x/tailcat-webui/ent/publishedroute"
@@ -35,6 +36,8 @@ type Client struct {
 	AllowedClient *AllowedClientClient
 	// AuditEvent is the client for interacting with the AuditEvent builders.
 	AuditEvent *AuditEventClient
+	// ExitRule is the client for interacting with the ExitRule builders.
+	ExitRule *ExitRuleClient
 	// LoginFlow is the client for interacting with the LoginFlow builders.
 	LoginFlow *LoginFlowClient
 	// PortMapping is the client for interacting with the PortMapping builders.
@@ -62,6 +65,7 @@ func (c *Client) init() {
 	c.Schema = migrate.NewSchema(c.driver)
 	c.AllowedClient = NewAllowedClientClient(c.config)
 	c.AuditEvent = NewAuditEventClient(c.config)
+	c.ExitRule = NewExitRuleClient(c.config)
 	c.LoginFlow = NewLoginFlowClient(c.config)
 	c.PortMapping = NewPortMappingClient(c.config)
 	c.PublishedRoute = NewPublishedRouteClient(c.config)
@@ -163,6 +167,7 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 		config:         cfg,
 		AllowedClient:  NewAllowedClientClient(cfg),
 		AuditEvent:     NewAuditEventClient(cfg),
+		ExitRule:       NewExitRuleClient(cfg),
 		LoginFlow:      NewLoginFlowClient(cfg),
 		PortMapping:    NewPortMappingClient(cfg),
 		PublishedRoute: NewPublishedRouteClient(cfg),
@@ -191,6 +196,7 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 		config:         cfg,
 		AllowedClient:  NewAllowedClientClient(cfg),
 		AuditEvent:     NewAuditEventClient(cfg),
+		ExitRule:       NewExitRuleClient(cfg),
 		LoginFlow:      NewLoginFlowClient(cfg),
 		PortMapping:    NewPortMappingClient(cfg),
 		PublishedRoute: NewPublishedRouteClient(cfg),
@@ -227,8 +233,8 @@ func (c *Client) Close() error {
 // In order to add hooks to a specific client, call: `client.Node.Use(...)`.
 func (c *Client) Use(hooks ...Hook) {
 	for _, n := range []interface{ Use(...Hook) }{
-		c.AllowedClient, c.AuditEvent, c.LoginFlow, c.PortMapping, c.PublishedRoute,
-		c.Session, c.TailClient, c.TailServer, c.User,
+		c.AllowedClient, c.AuditEvent, c.ExitRule, c.LoginFlow, c.PortMapping,
+		c.PublishedRoute, c.Session, c.TailClient, c.TailServer, c.User,
 	} {
 		n.Use(hooks...)
 	}
@@ -238,8 +244,8 @@ func (c *Client) Use(hooks ...Hook) {
 // In order to add interceptors to a specific client, call: `client.Node.Intercept(...)`.
 func (c *Client) Intercept(interceptors ...Interceptor) {
 	for _, n := range []interface{ Intercept(...Interceptor) }{
-		c.AllowedClient, c.AuditEvent, c.LoginFlow, c.PortMapping, c.PublishedRoute,
-		c.Session, c.TailClient, c.TailServer, c.User,
+		c.AllowedClient, c.AuditEvent, c.ExitRule, c.LoginFlow, c.PortMapping,
+		c.PublishedRoute, c.Session, c.TailClient, c.TailServer, c.User,
 	} {
 		n.Intercept(interceptors...)
 	}
@@ -252,6 +258,8 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.AllowedClient.mutate(ctx, m)
 	case *AuditEventMutation:
 		return c.AuditEvent.mutate(ctx, m)
+	case *ExitRuleMutation:
+		return c.ExitRule.mutate(ctx, m)
 	case *LoginFlowMutation:
 		return c.LoginFlow.mutate(ctx, m)
 	case *PortMappingMutation:
@@ -566,6 +574,171 @@ func (c *AuditEventClient) mutate(ctx context.Context, m *AuditEventMutation) (V
 		return (&AuditEventDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
 	default:
 		return nil, fmt.Errorf("ent: unknown AuditEvent mutation op: %q", m.Op())
+	}
+}
+
+// ExitRuleClient is a client for the ExitRule schema.
+type ExitRuleClient struct {
+	config
+}
+
+// NewExitRuleClient returns a client for the ExitRule from the given config.
+func NewExitRuleClient(c config) *ExitRuleClient {
+	return &ExitRuleClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `exitrule.Hooks(f(g(h())))`.
+func (c *ExitRuleClient) Use(hooks ...Hook) {
+	c.hooks.ExitRule = append(c.hooks.ExitRule, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `exitrule.Intercept(f(g(h())))`.
+func (c *ExitRuleClient) Intercept(interceptors ...Interceptor) {
+	c.inters.ExitRule = append(c.inters.ExitRule, interceptors...)
+}
+
+// Create returns a builder for creating a ExitRule entity.
+func (c *ExitRuleClient) Create() *ExitRuleCreate {
+	mutation := newExitRuleMutation(c.config, OpCreate)
+	return &ExitRuleCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of ExitRule entities.
+func (c *ExitRuleClient) CreateBulk(builders ...*ExitRuleCreate) *ExitRuleCreateBulk {
+	return &ExitRuleCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *ExitRuleClient) MapCreateBulk(slice any, setFunc func(*ExitRuleCreate, int)) *ExitRuleCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &ExitRuleCreateBulk{err: fmt.Errorf("calling to ExitRuleClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*ExitRuleCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &ExitRuleCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for ExitRule.
+func (c *ExitRuleClient) Update() *ExitRuleUpdate {
+	mutation := newExitRuleMutation(c.config, OpUpdate)
+	return &ExitRuleUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *ExitRuleClient) UpdateOne(_m *ExitRule) *ExitRuleUpdateOne {
+	mutation := newExitRuleMutation(c.config, OpUpdateOne, withExitRule(_m))
+	return &ExitRuleUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *ExitRuleClient) UpdateOneID(id string) *ExitRuleUpdateOne {
+	mutation := newExitRuleMutation(c.config, OpUpdateOne, withExitRuleID(id))
+	return &ExitRuleUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for ExitRule.
+func (c *ExitRuleClient) Delete() *ExitRuleDelete {
+	mutation := newExitRuleMutation(c.config, OpDelete)
+	return &ExitRuleDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *ExitRuleClient) DeleteOne(_m *ExitRule) *ExitRuleDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *ExitRuleClient) DeleteOneID(id string) *ExitRuleDeleteOne {
+	builder := c.Delete().Where(exitrule.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &ExitRuleDeleteOne{builder}
+}
+
+// Query returns a query builder for ExitRule.
+func (c *ExitRuleClient) Query() *ExitRuleQuery {
+	return &ExitRuleQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeExitRule},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a ExitRule entity by its id.
+func (c *ExitRuleClient) Get(ctx context.Context, id string) (*ExitRule, error) {
+	return c.Query().Where(exitrule.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *ExitRuleClient) GetX(ctx context.Context, id string) *ExitRule {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// QueryOwner queries the owner edge of a ExitRule.
+func (c *ExitRuleClient) QueryOwner(_m *ExitRule) *UserQuery {
+	query := (&UserClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(exitrule.Table, exitrule.FieldID, id),
+			sqlgraph.To(user.Table, user.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, exitrule.OwnerTable, exitrule.OwnerColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryServer queries the server edge of a ExitRule.
+func (c *ExitRuleClient) QueryServer(_m *ExitRule) *TailServerQuery {
+	query := (&TailServerClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(exitrule.Table, exitrule.FieldID, id),
+			sqlgraph.To(tailserver.Table, tailserver.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, exitrule.ServerTable, exitrule.ServerColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// Hooks returns the client hooks.
+func (c *ExitRuleClient) Hooks() []Hook {
+	return c.hooks.ExitRule
+}
+
+// Interceptors returns the client interceptors.
+func (c *ExitRuleClient) Interceptors() []Interceptor {
+	return c.inters.ExitRule
+}
+
+func (c *ExitRuleClient) mutate(ctx context.Context, m *ExitRuleMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&ExitRuleCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&ExitRuleUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&ExitRuleUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&ExitRuleDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown ExitRule mutation op: %q", m.Op())
 	}
 }
 
@@ -1486,6 +1659,22 @@ func (c *TailServerClient) QueryAllowedClients(_m *TailServer) *AllowedClientQue
 	return query
 }
 
+// QueryExitRules queries the exit_rules edge of a TailServer.
+func (c *TailServerClient) QueryExitRules(_m *TailServer) *ExitRuleQuery {
+	query := (&ExitRuleClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(tailserver.Table, tailserver.FieldID, id),
+			sqlgraph.To(exitrule.Table, exitrule.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, tailserver.ExitRulesTable, tailserver.ExitRulesColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
 // Hooks returns the client hooks.
 func (c *TailServerClient) Hooks() []Hook {
 	return c.hooks.TailServer
@@ -1651,6 +1840,22 @@ func (c *UserClient) QueryServers(_m *User) *TailServerQuery {
 	return query
 }
 
+// QueryExitRules queries the exit_rules edge of a User.
+func (c *UserClient) QueryExitRules(_m *User) *ExitRuleQuery {
+	query := (&ExitRuleClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(user.Table, user.FieldID, id),
+			sqlgraph.To(exitrule.Table, exitrule.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, user.ExitRulesTable, user.ExitRulesColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
 // QueryClients queries the clients edge of a User.
 func (c *UserClient) QueryClients(_m *User) *TailClientQuery {
 	query := (&TailClientClient{config: c.config}).Query()
@@ -1727,11 +1932,11 @@ func (c *UserClient) mutate(ctx context.Context, m *UserMutation) (Value, error)
 // hooks and interceptors per client, for fast access.
 type (
 	hooks struct {
-		AllowedClient, AuditEvent, LoginFlow, PortMapping, PublishedRoute, Session,
-		TailClient, TailServer, User []ent.Hook
+		AllowedClient, AuditEvent, ExitRule, LoginFlow, PortMapping, PublishedRoute,
+		Session, TailClient, TailServer, User []ent.Hook
 	}
 	inters struct {
-		AllowedClient, AuditEvent, LoginFlow, PortMapping, PublishedRoute, Session,
-		TailClient, TailServer, User []ent.Interceptor
+		AllowedClient, AuditEvent, ExitRule, LoginFlow, PortMapping, PublishedRoute,
+		Session, TailClient, TailServer, User []ent.Interceptor
 	}
 )

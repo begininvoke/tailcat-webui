@@ -12,6 +12,7 @@ import (
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
 	"github.com/ca-x/tailcat-webui/ent/allowedclient"
+	"github.com/ca-x/tailcat-webui/ent/exitrule"
 	"github.com/ca-x/tailcat-webui/ent/portmapping"
 	"github.com/ca-x/tailcat-webui/ent/predicate"
 	"github.com/ca-x/tailcat-webui/ent/tailserver"
@@ -182,6 +183,21 @@ func (_u *TailServerUpdate) AddAllowedClients(v ...*AllowedClient) *TailServerUp
 	return _u.AddAllowedClientIDs(ids...)
 }
 
+// AddExitRuleIDs adds the "exit_rules" edge to the ExitRule entity by IDs.
+func (_u *TailServerUpdate) AddExitRuleIDs(ids ...string) *TailServerUpdate {
+	_u.mutation.AddExitRuleIDs(ids...)
+	return _u
+}
+
+// AddExitRules adds the "exit_rules" edges to the ExitRule entity.
+func (_u *TailServerUpdate) AddExitRules(v ...*ExitRule) *TailServerUpdate {
+	ids := make([]string, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddExitRuleIDs(ids...)
+}
+
 // Mutation returns the TailServerMutation object of the builder.
 func (_u *TailServerUpdate) Mutation() *TailServerMutation {
 	return _u.mutation
@@ -227,6 +243,27 @@ func (_u *TailServerUpdate) RemoveAllowedClients(v ...*AllowedClient) *TailServe
 		ids[i] = v[i].ID
 	}
 	return _u.RemoveAllowedClientIDs(ids...)
+}
+
+// ClearExitRules clears all "exit_rules" edges to the ExitRule entity.
+func (_u *TailServerUpdate) ClearExitRules() *TailServerUpdate {
+	_u.mutation.ClearExitRules()
+	return _u
+}
+
+// RemoveExitRuleIDs removes the "exit_rules" edge to ExitRule entities by IDs.
+func (_u *TailServerUpdate) RemoveExitRuleIDs(ids ...string) *TailServerUpdate {
+	_u.mutation.RemoveExitRuleIDs(ids...)
+	return _u
+}
+
+// RemoveExitRules removes "exit_rules" edges to ExitRule entities.
+func (_u *TailServerUpdate) RemoveExitRules(v ...*ExitRule) *TailServerUpdate {
+	ids := make([]string, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveExitRuleIDs(ids...)
 }
 
 // Save executes the query and returns the number of nodes affected by the update operation.
@@ -418,6 +455,51 @@ func (_u *TailServerUpdate) sqlSave(ctx context.Context) (_node int, err error) 
 		}
 		_spec.Edges.Add = append(_spec.Edges.Add, edge)
 	}
+	if _u.mutation.ExitRulesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   tailserver.ExitRulesTable,
+			Columns: []string{tailserver.ExitRulesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(exitrule.FieldID, field.TypeString),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedExitRulesIDs(); len(nodes) > 0 && !_u.mutation.ExitRulesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   tailserver.ExitRulesTable,
+			Columns: []string{tailserver.ExitRulesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(exitrule.FieldID, field.TypeString),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.ExitRulesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   tailserver.ExitRulesTable,
+			Columns: []string{tailserver.ExitRulesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(exitrule.FieldID, field.TypeString),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
 	if _node, err = sqlgraph.UpdateNodes(ctx, _u.driver, _spec); err != nil {
 		if _, ok := err.(*sqlgraph.NotFoundError); ok {
 			err = &NotFoundError{tailserver.Label}
@@ -590,6 +672,21 @@ func (_u *TailServerUpdateOne) AddAllowedClients(v ...*AllowedClient) *TailServe
 	return _u.AddAllowedClientIDs(ids...)
 }
 
+// AddExitRuleIDs adds the "exit_rules" edge to the ExitRule entity by IDs.
+func (_u *TailServerUpdateOne) AddExitRuleIDs(ids ...string) *TailServerUpdateOne {
+	_u.mutation.AddExitRuleIDs(ids...)
+	return _u
+}
+
+// AddExitRules adds the "exit_rules" edges to the ExitRule entity.
+func (_u *TailServerUpdateOne) AddExitRules(v ...*ExitRule) *TailServerUpdateOne {
+	ids := make([]string, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddExitRuleIDs(ids...)
+}
+
 // Mutation returns the TailServerMutation object of the builder.
 func (_u *TailServerUpdateOne) Mutation() *TailServerMutation {
 	return _u.mutation
@@ -635,6 +732,27 @@ func (_u *TailServerUpdateOne) RemoveAllowedClients(v ...*AllowedClient) *TailSe
 		ids[i] = v[i].ID
 	}
 	return _u.RemoveAllowedClientIDs(ids...)
+}
+
+// ClearExitRules clears all "exit_rules" edges to the ExitRule entity.
+func (_u *TailServerUpdateOne) ClearExitRules() *TailServerUpdateOne {
+	_u.mutation.ClearExitRules()
+	return _u
+}
+
+// RemoveExitRuleIDs removes the "exit_rules" edge to ExitRule entities by IDs.
+func (_u *TailServerUpdateOne) RemoveExitRuleIDs(ids ...string) *TailServerUpdateOne {
+	_u.mutation.RemoveExitRuleIDs(ids...)
+	return _u
+}
+
+// RemoveExitRules removes "exit_rules" edges to ExitRule entities.
+func (_u *TailServerUpdateOne) RemoveExitRules(v ...*ExitRule) *TailServerUpdateOne {
+	ids := make([]string, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveExitRuleIDs(ids...)
 }
 
 // Where appends a list predicates to the TailServerUpdate builder.
@@ -849,6 +967,51 @@ func (_u *TailServerUpdateOne) sqlSave(ctx context.Context) (_node *TailServer, 
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(allowedclient.FieldID, field.TypeString),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.ExitRulesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   tailserver.ExitRulesTable,
+			Columns: []string{tailserver.ExitRulesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(exitrule.FieldID, field.TypeString),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedExitRulesIDs(); len(nodes) > 0 && !_u.mutation.ExitRulesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   tailserver.ExitRulesTable,
+			Columns: []string{tailserver.ExitRulesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(exitrule.FieldID, field.TypeString),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.ExitRulesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   tailserver.ExitRulesTable,
+			Columns: []string{tailserver.ExitRulesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(exitrule.FieldID, field.TypeString),
 			},
 		}
 		for _, k := range nodes {

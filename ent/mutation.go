@@ -13,6 +13,7 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"github.com/ca-x/tailcat-webui/ent/allowedclient"
 	"github.com/ca-x/tailcat-webui/ent/auditevent"
+	"github.com/ca-x/tailcat-webui/ent/exitrule"
 	"github.com/ca-x/tailcat-webui/ent/loginflow"
 	"github.com/ca-x/tailcat-webui/ent/portmapping"
 	"github.com/ca-x/tailcat-webui/ent/predicate"
@@ -34,6 +35,7 @@ const (
 	// Node types.
 	TypeAllowedClient  = "AllowedClient"
 	TypeAuditEvent     = "AuditEvent"
+	TypeExitRule       = "ExitRule"
 	TypeLoginFlow      = "LoginFlow"
 	TypePortMapping    = "PortMapping"
 	TypePublishedRoute = "PublishedRoute"
@@ -1505,6 +1507,898 @@ func (m *AuditEventMutation) ResetEdge(name string) error {
 		return nil
 	}
 	return fmt.Errorf("unknown AuditEvent edge %s", name)
+}
+
+// ExitRuleMutation represents an operation that mutates the ExitRule nodes in the graph.
+type ExitRuleMutation struct {
+	config
+	op            Op
+	typ           string
+	id            *string
+	prefix        *string
+	start_port    *uint16
+	addstart_port *int16
+	end_port      *uint16
+	addend_port   *int16
+	enabled       *bool
+	created_at    *time.Time
+	updated_at    *time.Time
+	clearedFields map[string]struct{}
+	owner         *string
+	clearedowner  bool
+	server        *string
+	clearedserver bool
+	done          bool
+	oldValue      func(context.Context) (*ExitRule, error)
+	predicates    []predicate.ExitRule
+}
+
+var _ ent.Mutation = (*ExitRuleMutation)(nil)
+
+// exitruleOption allows management of the mutation configuration using functional options.
+type exitruleOption func(*ExitRuleMutation)
+
+// newExitRuleMutation creates new mutation for the ExitRule entity.
+func newExitRuleMutation(c config, op Op, opts ...exitruleOption) *ExitRuleMutation {
+	m := &ExitRuleMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeExitRule,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withExitRuleID sets the ID field of the mutation.
+func withExitRuleID(id string) exitruleOption {
+	return func(m *ExitRuleMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *ExitRule
+		)
+		m.oldValue = func(ctx context.Context) (*ExitRule, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().ExitRule.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withExitRule sets the old ExitRule of the mutation.
+func withExitRule(node *ExitRule) exitruleOption {
+	return func(m *ExitRuleMutation) {
+		m.oldValue = func(context.Context) (*ExitRule, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m ExitRuleMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m ExitRuleMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// SetID sets the value of the id field. Note that this
+// operation is only accepted on creation of ExitRule entities.
+func (m *ExitRuleMutation) SetID(id string) {
+	m.id = &id
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *ExitRuleMutation) ID() (id string, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *ExitRuleMutation) IDs(ctx context.Context) ([]string, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []string{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().ExitRule.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetUserID sets the "user_id" field.
+func (m *ExitRuleMutation) SetUserID(s string) {
+	m.owner = &s
+}
+
+// UserID returns the value of the "user_id" field in the mutation.
+func (m *ExitRuleMutation) UserID() (r string, exists bool) {
+	v := m.owner
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUserID returns the old "user_id" field's value of the ExitRule entity.
+// If the ExitRule object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ExitRuleMutation) OldUserID(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUserID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUserID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUserID: %w", err)
+	}
+	return oldValue.UserID, nil
+}
+
+// ResetUserID resets all changes to the "user_id" field.
+func (m *ExitRuleMutation) ResetUserID() {
+	m.owner = nil
+}
+
+// SetServerID sets the "server_id" field.
+func (m *ExitRuleMutation) SetServerID(s string) {
+	m.server = &s
+}
+
+// ServerID returns the value of the "server_id" field in the mutation.
+func (m *ExitRuleMutation) ServerID() (r string, exists bool) {
+	v := m.server
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldServerID returns the old "server_id" field's value of the ExitRule entity.
+// If the ExitRule object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ExitRuleMutation) OldServerID(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldServerID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldServerID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldServerID: %w", err)
+	}
+	return oldValue.ServerID, nil
+}
+
+// ResetServerID resets all changes to the "server_id" field.
+func (m *ExitRuleMutation) ResetServerID() {
+	m.server = nil
+}
+
+// SetPrefix sets the "prefix" field.
+func (m *ExitRuleMutation) SetPrefix(s string) {
+	m.prefix = &s
+}
+
+// Prefix returns the value of the "prefix" field in the mutation.
+func (m *ExitRuleMutation) Prefix() (r string, exists bool) {
+	v := m.prefix
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldPrefix returns the old "prefix" field's value of the ExitRule entity.
+// If the ExitRule object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ExitRuleMutation) OldPrefix(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldPrefix is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldPrefix requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldPrefix: %w", err)
+	}
+	return oldValue.Prefix, nil
+}
+
+// ResetPrefix resets all changes to the "prefix" field.
+func (m *ExitRuleMutation) ResetPrefix() {
+	m.prefix = nil
+}
+
+// SetStartPort sets the "start_port" field.
+func (m *ExitRuleMutation) SetStartPort(u uint16) {
+	m.start_port = &u
+	m.addstart_port = nil
+}
+
+// StartPort returns the value of the "start_port" field in the mutation.
+func (m *ExitRuleMutation) StartPort() (r uint16, exists bool) {
+	v := m.start_port
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldStartPort returns the old "start_port" field's value of the ExitRule entity.
+// If the ExitRule object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ExitRuleMutation) OldStartPort(ctx context.Context) (v uint16, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldStartPort is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldStartPort requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldStartPort: %w", err)
+	}
+	return oldValue.StartPort, nil
+}
+
+// AddStartPort adds u to the "start_port" field.
+func (m *ExitRuleMutation) AddStartPort(u int16) {
+	if m.addstart_port != nil {
+		*m.addstart_port += u
+	} else {
+		m.addstart_port = &u
+	}
+}
+
+// AddedStartPort returns the value that was added to the "start_port" field in this mutation.
+func (m *ExitRuleMutation) AddedStartPort() (r int16, exists bool) {
+	v := m.addstart_port
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetStartPort resets all changes to the "start_port" field.
+func (m *ExitRuleMutation) ResetStartPort() {
+	m.start_port = nil
+	m.addstart_port = nil
+}
+
+// SetEndPort sets the "end_port" field.
+func (m *ExitRuleMutation) SetEndPort(u uint16) {
+	m.end_port = &u
+	m.addend_port = nil
+}
+
+// EndPort returns the value of the "end_port" field in the mutation.
+func (m *ExitRuleMutation) EndPort() (r uint16, exists bool) {
+	v := m.end_port
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldEndPort returns the old "end_port" field's value of the ExitRule entity.
+// If the ExitRule object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ExitRuleMutation) OldEndPort(ctx context.Context) (v uint16, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldEndPort is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldEndPort requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldEndPort: %w", err)
+	}
+	return oldValue.EndPort, nil
+}
+
+// AddEndPort adds u to the "end_port" field.
+func (m *ExitRuleMutation) AddEndPort(u int16) {
+	if m.addend_port != nil {
+		*m.addend_port += u
+	} else {
+		m.addend_port = &u
+	}
+}
+
+// AddedEndPort returns the value that was added to the "end_port" field in this mutation.
+func (m *ExitRuleMutation) AddedEndPort() (r int16, exists bool) {
+	v := m.addend_port
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetEndPort resets all changes to the "end_port" field.
+func (m *ExitRuleMutation) ResetEndPort() {
+	m.end_port = nil
+	m.addend_port = nil
+}
+
+// SetEnabled sets the "enabled" field.
+func (m *ExitRuleMutation) SetEnabled(b bool) {
+	m.enabled = &b
+}
+
+// Enabled returns the value of the "enabled" field in the mutation.
+func (m *ExitRuleMutation) Enabled() (r bool, exists bool) {
+	v := m.enabled
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldEnabled returns the old "enabled" field's value of the ExitRule entity.
+// If the ExitRule object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ExitRuleMutation) OldEnabled(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldEnabled is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldEnabled requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldEnabled: %w", err)
+	}
+	return oldValue.Enabled, nil
+}
+
+// ResetEnabled resets all changes to the "enabled" field.
+func (m *ExitRuleMutation) ResetEnabled() {
+	m.enabled = nil
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (m *ExitRuleMutation) SetCreatedAt(t time.Time) {
+	m.created_at = &t
+}
+
+// CreatedAt returns the value of the "created_at" field in the mutation.
+func (m *ExitRuleMutation) CreatedAt() (r time.Time, exists bool) {
+	v := m.created_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedAt returns the old "created_at" field's value of the ExitRule entity.
+// If the ExitRule object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ExitRuleMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
+	}
+	return oldValue.CreatedAt, nil
+}
+
+// ResetCreatedAt resets all changes to the "created_at" field.
+func (m *ExitRuleMutation) ResetCreatedAt() {
+	m.created_at = nil
+}
+
+// SetUpdatedAt sets the "updated_at" field.
+func (m *ExitRuleMutation) SetUpdatedAt(t time.Time) {
+	m.updated_at = &t
+}
+
+// UpdatedAt returns the value of the "updated_at" field in the mutation.
+func (m *ExitRuleMutation) UpdatedAt() (r time.Time, exists bool) {
+	v := m.updated_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUpdatedAt returns the old "updated_at" field's value of the ExitRule entity.
+// If the ExitRule object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ExitRuleMutation) OldUpdatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUpdatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUpdatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUpdatedAt: %w", err)
+	}
+	return oldValue.UpdatedAt, nil
+}
+
+// ResetUpdatedAt resets all changes to the "updated_at" field.
+func (m *ExitRuleMutation) ResetUpdatedAt() {
+	m.updated_at = nil
+}
+
+// SetOwnerID sets the "owner" edge to the User entity by id.
+func (m *ExitRuleMutation) SetOwnerID(id string) {
+	m.owner = &id
+}
+
+// ClearOwner clears the "owner" edge to the User entity.
+func (m *ExitRuleMutation) ClearOwner() {
+	m.clearedowner = true
+	m.clearedFields[exitrule.FieldUserID] = struct{}{}
+}
+
+// OwnerCleared reports if the "owner" edge to the User entity was cleared.
+func (m *ExitRuleMutation) OwnerCleared() bool {
+	return m.clearedowner
+}
+
+// OwnerID returns the "owner" edge ID in the mutation.
+func (m *ExitRuleMutation) OwnerID() (id string, exists bool) {
+	if m.owner != nil {
+		return *m.owner, true
+	}
+	return
+}
+
+// OwnerIDs returns the "owner" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// OwnerID instead. It exists only for internal usage by the builders.
+func (m *ExitRuleMutation) OwnerIDs() (ids []string) {
+	if id := m.owner; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetOwner resets all changes to the "owner" edge.
+func (m *ExitRuleMutation) ResetOwner() {
+	m.owner = nil
+	m.clearedowner = false
+}
+
+// ClearServer clears the "server" edge to the TailServer entity.
+func (m *ExitRuleMutation) ClearServer() {
+	m.clearedserver = true
+	m.clearedFields[exitrule.FieldServerID] = struct{}{}
+}
+
+// ServerCleared reports if the "server" edge to the TailServer entity was cleared.
+func (m *ExitRuleMutation) ServerCleared() bool {
+	return m.clearedserver
+}
+
+// ServerIDs returns the "server" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// ServerID instead. It exists only for internal usage by the builders.
+func (m *ExitRuleMutation) ServerIDs() (ids []string) {
+	if id := m.server; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetServer resets all changes to the "server" edge.
+func (m *ExitRuleMutation) ResetServer() {
+	m.server = nil
+	m.clearedserver = false
+}
+
+// Where appends a list predicates to the ExitRuleMutation builder.
+func (m *ExitRuleMutation) Where(ps ...predicate.ExitRule) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the ExitRuleMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *ExitRuleMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.ExitRule, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *ExitRuleMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *ExitRuleMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (ExitRule).
+func (m *ExitRuleMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *ExitRuleMutation) Fields() []string {
+	fields := make([]string, 0, 8)
+	if m.owner != nil {
+		fields = append(fields, exitrule.FieldUserID)
+	}
+	if m.server != nil {
+		fields = append(fields, exitrule.FieldServerID)
+	}
+	if m.prefix != nil {
+		fields = append(fields, exitrule.FieldPrefix)
+	}
+	if m.start_port != nil {
+		fields = append(fields, exitrule.FieldStartPort)
+	}
+	if m.end_port != nil {
+		fields = append(fields, exitrule.FieldEndPort)
+	}
+	if m.enabled != nil {
+		fields = append(fields, exitrule.FieldEnabled)
+	}
+	if m.created_at != nil {
+		fields = append(fields, exitrule.FieldCreatedAt)
+	}
+	if m.updated_at != nil {
+		fields = append(fields, exitrule.FieldUpdatedAt)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *ExitRuleMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case exitrule.FieldUserID:
+		return m.UserID()
+	case exitrule.FieldServerID:
+		return m.ServerID()
+	case exitrule.FieldPrefix:
+		return m.Prefix()
+	case exitrule.FieldStartPort:
+		return m.StartPort()
+	case exitrule.FieldEndPort:
+		return m.EndPort()
+	case exitrule.FieldEnabled:
+		return m.Enabled()
+	case exitrule.FieldCreatedAt:
+		return m.CreatedAt()
+	case exitrule.FieldUpdatedAt:
+		return m.UpdatedAt()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *ExitRuleMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case exitrule.FieldUserID:
+		return m.OldUserID(ctx)
+	case exitrule.FieldServerID:
+		return m.OldServerID(ctx)
+	case exitrule.FieldPrefix:
+		return m.OldPrefix(ctx)
+	case exitrule.FieldStartPort:
+		return m.OldStartPort(ctx)
+	case exitrule.FieldEndPort:
+		return m.OldEndPort(ctx)
+	case exitrule.FieldEnabled:
+		return m.OldEnabled(ctx)
+	case exitrule.FieldCreatedAt:
+		return m.OldCreatedAt(ctx)
+	case exitrule.FieldUpdatedAt:
+		return m.OldUpdatedAt(ctx)
+	}
+	return nil, fmt.Errorf("unknown ExitRule field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *ExitRuleMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case exitrule.FieldUserID:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUserID(v)
+		return nil
+	case exitrule.FieldServerID:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetServerID(v)
+		return nil
+	case exitrule.FieldPrefix:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetPrefix(v)
+		return nil
+	case exitrule.FieldStartPort:
+		v, ok := value.(uint16)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetStartPort(v)
+		return nil
+	case exitrule.FieldEndPort:
+		v, ok := value.(uint16)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetEndPort(v)
+		return nil
+	case exitrule.FieldEnabled:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetEnabled(v)
+		return nil
+	case exitrule.FieldCreatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedAt(v)
+		return nil
+	case exitrule.FieldUpdatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUpdatedAt(v)
+		return nil
+	}
+	return fmt.Errorf("unknown ExitRule field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *ExitRuleMutation) AddedFields() []string {
+	var fields []string
+	if m.addstart_port != nil {
+		fields = append(fields, exitrule.FieldStartPort)
+	}
+	if m.addend_port != nil {
+		fields = append(fields, exitrule.FieldEndPort)
+	}
+	return fields
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *ExitRuleMutation) AddedField(name string) (ent.Value, bool) {
+	switch name {
+	case exitrule.FieldStartPort:
+		return m.AddedStartPort()
+	case exitrule.FieldEndPort:
+		return m.AddedEndPort()
+	}
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *ExitRuleMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	case exitrule.FieldStartPort:
+		v, ok := value.(int16)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddStartPort(v)
+		return nil
+	case exitrule.FieldEndPort:
+		v, ok := value.(int16)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddEndPort(v)
+		return nil
+	}
+	return fmt.Errorf("unknown ExitRule numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *ExitRuleMutation) ClearedFields() []string {
+	return nil
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *ExitRuleMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *ExitRuleMutation) ClearField(name string) error {
+	return fmt.Errorf("unknown ExitRule nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *ExitRuleMutation) ResetField(name string) error {
+	switch name {
+	case exitrule.FieldUserID:
+		m.ResetUserID()
+		return nil
+	case exitrule.FieldServerID:
+		m.ResetServerID()
+		return nil
+	case exitrule.FieldPrefix:
+		m.ResetPrefix()
+		return nil
+	case exitrule.FieldStartPort:
+		m.ResetStartPort()
+		return nil
+	case exitrule.FieldEndPort:
+		m.ResetEndPort()
+		return nil
+	case exitrule.FieldEnabled:
+		m.ResetEnabled()
+		return nil
+	case exitrule.FieldCreatedAt:
+		m.ResetCreatedAt()
+		return nil
+	case exitrule.FieldUpdatedAt:
+		m.ResetUpdatedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown ExitRule field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *ExitRuleMutation) AddedEdges() []string {
+	edges := make([]string, 0, 2)
+	if m.owner != nil {
+		edges = append(edges, exitrule.EdgeOwner)
+	}
+	if m.server != nil {
+		edges = append(edges, exitrule.EdgeServer)
+	}
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *ExitRuleMutation) AddedIDs(name string) []ent.Value {
+	switch name {
+	case exitrule.EdgeOwner:
+		if id := m.owner; id != nil {
+			return []ent.Value{*id}
+		}
+	case exitrule.EdgeServer:
+		if id := m.server; id != nil {
+			return []ent.Value{*id}
+		}
+	}
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *ExitRuleMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 2)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *ExitRuleMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *ExitRuleMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 2)
+	if m.clearedowner {
+		edges = append(edges, exitrule.EdgeOwner)
+	}
+	if m.clearedserver {
+		edges = append(edges, exitrule.EdgeServer)
+	}
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *ExitRuleMutation) EdgeCleared(name string) bool {
+	switch name {
+	case exitrule.EdgeOwner:
+		return m.clearedowner
+	case exitrule.EdgeServer:
+		return m.clearedserver
+	}
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *ExitRuleMutation) ClearEdge(name string) error {
+	switch name {
+	case exitrule.EdgeOwner:
+		m.ClearOwner()
+		return nil
+	case exitrule.EdgeServer:
+		m.ClearServer()
+		return nil
+	}
+	return fmt.Errorf("unknown ExitRule unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *ExitRuleMutation) ResetEdge(name string) error {
+	switch name {
+	case exitrule.EdgeOwner:
+		m.ResetOwner()
+		return nil
+	case exitrule.EdgeServer:
+		m.ResetServer()
+		return nil
+	}
+	return fmt.Errorf("unknown ExitRule edge %s", name)
 }
 
 // LoginFlowMutation represents an operation that mutates the LoginFlow nodes in the graph.
@@ -5873,6 +6767,9 @@ type TailServerMutation struct {
 	allowed_clients        map[string]struct{}
 	removedallowed_clients map[string]struct{}
 	clearedallowed_clients bool
+	exit_rules             map[string]struct{}
+	removedexit_rules      map[string]struct{}
+	clearedexit_rules      bool
 	done                   bool
 	oldValue               func(context.Context) (*TailServer, error)
 	predicates             []predicate.TailServer
@@ -6552,6 +7449,60 @@ func (m *TailServerMutation) ResetAllowedClients() {
 	m.removedallowed_clients = nil
 }
 
+// AddExitRuleIDs adds the "exit_rules" edge to the ExitRule entity by ids.
+func (m *TailServerMutation) AddExitRuleIDs(ids ...string) {
+	if m.exit_rules == nil {
+		m.exit_rules = make(map[string]struct{})
+	}
+	for i := range ids {
+		m.exit_rules[ids[i]] = struct{}{}
+	}
+}
+
+// ClearExitRules clears the "exit_rules" edge to the ExitRule entity.
+func (m *TailServerMutation) ClearExitRules() {
+	m.clearedexit_rules = true
+}
+
+// ExitRulesCleared reports if the "exit_rules" edge to the ExitRule entity was cleared.
+func (m *TailServerMutation) ExitRulesCleared() bool {
+	return m.clearedexit_rules
+}
+
+// RemoveExitRuleIDs removes the "exit_rules" edge to the ExitRule entity by IDs.
+func (m *TailServerMutation) RemoveExitRuleIDs(ids ...string) {
+	if m.removedexit_rules == nil {
+		m.removedexit_rules = make(map[string]struct{})
+	}
+	for i := range ids {
+		delete(m.exit_rules, ids[i])
+		m.removedexit_rules[ids[i]] = struct{}{}
+	}
+}
+
+// RemovedExitRules returns the removed IDs of the "exit_rules" edge to the ExitRule entity.
+func (m *TailServerMutation) RemovedExitRulesIDs() (ids []string) {
+	for id := range m.removedexit_rules {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ExitRulesIDs returns the "exit_rules" edge IDs in the mutation.
+func (m *TailServerMutation) ExitRulesIDs() (ids []string) {
+	for id := range m.exit_rules {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ResetExitRules resets all changes to the "exit_rules" edge.
+func (m *TailServerMutation) ResetExitRules() {
+	m.exit_rules = nil
+	m.clearedexit_rules = false
+	m.removedexit_rules = nil
+}
+
 // Where appends a list predicates to the TailServerMutation builder.
 func (m *TailServerMutation) Where(ps ...predicate.TailServer) {
 	m.predicates = append(m.predicates, ps...)
@@ -6870,7 +7821,7 @@ func (m *TailServerMutation) ResetField(name string) error {
 
 // AddedEdges returns all edge names that were set/added in this mutation.
 func (m *TailServerMutation) AddedEdges() []string {
-	edges := make([]string, 0, 3)
+	edges := make([]string, 0, 4)
 	if m.owner != nil {
 		edges = append(edges, tailserver.EdgeOwner)
 	}
@@ -6879,6 +7830,9 @@ func (m *TailServerMutation) AddedEdges() []string {
 	}
 	if m.allowed_clients != nil {
 		edges = append(edges, tailserver.EdgeAllowedClients)
+	}
+	if m.exit_rules != nil {
+		edges = append(edges, tailserver.EdgeExitRules)
 	}
 	return edges
 }
@@ -6903,18 +7857,27 @@ func (m *TailServerMutation) AddedIDs(name string) []ent.Value {
 			ids = append(ids, id)
 		}
 		return ids
+	case tailserver.EdgeExitRules:
+		ids := make([]ent.Value, 0, len(m.exit_rules))
+		for id := range m.exit_rules {
+			ids = append(ids, id)
+		}
+		return ids
 	}
 	return nil
 }
 
 // RemovedEdges returns all edge names that were removed in this mutation.
 func (m *TailServerMutation) RemovedEdges() []string {
-	edges := make([]string, 0, 3)
+	edges := make([]string, 0, 4)
 	if m.removedmappings != nil {
 		edges = append(edges, tailserver.EdgeMappings)
 	}
 	if m.removedallowed_clients != nil {
 		edges = append(edges, tailserver.EdgeAllowedClients)
+	}
+	if m.removedexit_rules != nil {
+		edges = append(edges, tailserver.EdgeExitRules)
 	}
 	return edges
 }
@@ -6935,13 +7898,19 @@ func (m *TailServerMutation) RemovedIDs(name string) []ent.Value {
 			ids = append(ids, id)
 		}
 		return ids
+	case tailserver.EdgeExitRules:
+		ids := make([]ent.Value, 0, len(m.removedexit_rules))
+		for id := range m.removedexit_rules {
+			ids = append(ids, id)
+		}
+		return ids
 	}
 	return nil
 }
 
 // ClearedEdges returns all edge names that were cleared in this mutation.
 func (m *TailServerMutation) ClearedEdges() []string {
-	edges := make([]string, 0, 3)
+	edges := make([]string, 0, 4)
 	if m.clearedowner {
 		edges = append(edges, tailserver.EdgeOwner)
 	}
@@ -6950,6 +7919,9 @@ func (m *TailServerMutation) ClearedEdges() []string {
 	}
 	if m.clearedallowed_clients {
 		edges = append(edges, tailserver.EdgeAllowedClients)
+	}
+	if m.clearedexit_rules {
+		edges = append(edges, tailserver.EdgeExitRules)
 	}
 	return edges
 }
@@ -6964,6 +7936,8 @@ func (m *TailServerMutation) EdgeCleared(name string) bool {
 		return m.clearedmappings
 	case tailserver.EdgeAllowedClients:
 		return m.clearedallowed_clients
+	case tailserver.EdgeExitRules:
+		return m.clearedexit_rules
 	}
 	return false
 }
@@ -6992,6 +7966,9 @@ func (m *TailServerMutation) ResetEdge(name string) error {
 	case tailserver.EdgeAllowedClients:
 		m.ResetAllowedClients()
 		return nil
+	case tailserver.EdgeExitRules:
+		m.ResetExitRules()
+		return nil
 	}
 	return fmt.Errorf("unknown TailServer edge %s", name)
 }
@@ -7016,6 +7993,9 @@ type UserMutation struct {
 	servers             map[string]struct{}
 	removedservers      map[string]struct{}
 	clearedservers      bool
+	exit_rules          map[string]struct{}
+	removedexit_rules   map[string]struct{}
+	clearedexit_rules   bool
 	clients             map[string]struct{}
 	removedclients      map[string]struct{}
 	clearedclients      bool
@@ -7533,6 +8513,60 @@ func (m *UserMutation) ResetServers() {
 	m.removedservers = nil
 }
 
+// AddExitRuleIDs adds the "exit_rules" edge to the ExitRule entity by ids.
+func (m *UserMutation) AddExitRuleIDs(ids ...string) {
+	if m.exit_rules == nil {
+		m.exit_rules = make(map[string]struct{})
+	}
+	for i := range ids {
+		m.exit_rules[ids[i]] = struct{}{}
+	}
+}
+
+// ClearExitRules clears the "exit_rules" edge to the ExitRule entity.
+func (m *UserMutation) ClearExitRules() {
+	m.clearedexit_rules = true
+}
+
+// ExitRulesCleared reports if the "exit_rules" edge to the ExitRule entity was cleared.
+func (m *UserMutation) ExitRulesCleared() bool {
+	return m.clearedexit_rules
+}
+
+// RemoveExitRuleIDs removes the "exit_rules" edge to the ExitRule entity by IDs.
+func (m *UserMutation) RemoveExitRuleIDs(ids ...string) {
+	if m.removedexit_rules == nil {
+		m.removedexit_rules = make(map[string]struct{})
+	}
+	for i := range ids {
+		delete(m.exit_rules, ids[i])
+		m.removedexit_rules[ids[i]] = struct{}{}
+	}
+}
+
+// RemovedExitRules returns the removed IDs of the "exit_rules" edge to the ExitRule entity.
+func (m *UserMutation) RemovedExitRulesIDs() (ids []string) {
+	for id := range m.removedexit_rules {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ExitRulesIDs returns the "exit_rules" edge IDs in the mutation.
+func (m *UserMutation) ExitRulesIDs() (ids []string) {
+	for id := range m.exit_rules {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ResetExitRules resets all changes to the "exit_rules" edge.
+func (m *UserMutation) ResetExitRules() {
+	m.exit_rules = nil
+	m.clearedexit_rules = false
+	m.removedexit_rules = nil
+}
+
 // AddClientIDs adds the "clients" edge to the TailClient entity by ids.
 func (m *UserMutation) AddClientIDs(ids ...string) {
 	if m.clients == nil {
@@ -7951,12 +8985,15 @@ func (m *UserMutation) ResetField(name string) error {
 
 // AddedEdges returns all edge names that were set/added in this mutation.
 func (m *UserMutation) AddedEdges() []string {
-	edges := make([]string, 0, 5)
+	edges := make([]string, 0, 6)
 	if m.sessions != nil {
 		edges = append(edges, user.EdgeSessions)
 	}
 	if m.servers != nil {
 		edges = append(edges, user.EdgeServers)
+	}
+	if m.exit_rules != nil {
+		edges = append(edges, user.EdgeExitRules)
 	}
 	if m.clients != nil {
 		edges = append(edges, user.EdgeClients)
@@ -7986,6 +9023,12 @@ func (m *UserMutation) AddedIDs(name string) []ent.Value {
 			ids = append(ids, id)
 		}
 		return ids
+	case user.EdgeExitRules:
+		ids := make([]ent.Value, 0, len(m.exit_rules))
+		for id := range m.exit_rules {
+			ids = append(ids, id)
+		}
+		return ids
 	case user.EdgeClients:
 		ids := make([]ent.Value, 0, len(m.clients))
 		for id := range m.clients {
@@ -8010,12 +9053,15 @@ func (m *UserMutation) AddedIDs(name string) []ent.Value {
 
 // RemovedEdges returns all edge names that were removed in this mutation.
 func (m *UserMutation) RemovedEdges() []string {
-	edges := make([]string, 0, 5)
+	edges := make([]string, 0, 6)
 	if m.removedsessions != nil {
 		edges = append(edges, user.EdgeSessions)
 	}
 	if m.removedservers != nil {
 		edges = append(edges, user.EdgeServers)
+	}
+	if m.removedexit_rules != nil {
+		edges = append(edges, user.EdgeExitRules)
 	}
 	if m.removedclients != nil {
 		edges = append(edges, user.EdgeClients)
@@ -8045,6 +9091,12 @@ func (m *UserMutation) RemovedIDs(name string) []ent.Value {
 			ids = append(ids, id)
 		}
 		return ids
+	case user.EdgeExitRules:
+		ids := make([]ent.Value, 0, len(m.removedexit_rules))
+		for id := range m.removedexit_rules {
+			ids = append(ids, id)
+		}
+		return ids
 	case user.EdgeClients:
 		ids := make([]ent.Value, 0, len(m.removedclients))
 		for id := range m.removedclients {
@@ -8069,12 +9121,15 @@ func (m *UserMutation) RemovedIDs(name string) []ent.Value {
 
 // ClearedEdges returns all edge names that were cleared in this mutation.
 func (m *UserMutation) ClearedEdges() []string {
-	edges := make([]string, 0, 5)
+	edges := make([]string, 0, 6)
 	if m.clearedsessions {
 		edges = append(edges, user.EdgeSessions)
 	}
 	if m.clearedservers {
 		edges = append(edges, user.EdgeServers)
+	}
+	if m.clearedexit_rules {
+		edges = append(edges, user.EdgeExitRules)
 	}
 	if m.clearedclients {
 		edges = append(edges, user.EdgeClients)
@@ -8096,6 +9151,8 @@ func (m *UserMutation) EdgeCleared(name string) bool {
 		return m.clearedsessions
 	case user.EdgeServers:
 		return m.clearedservers
+	case user.EdgeExitRules:
+		return m.clearedexit_rules
 	case user.EdgeClients:
 		return m.clearedclients
 	case user.EdgeRoutes:
@@ -8123,6 +9180,9 @@ func (m *UserMutation) ResetEdge(name string) error {
 		return nil
 	case user.EdgeServers:
 		m.ResetServers()
+		return nil
+	case user.EdgeExitRules:
+		m.ResetExitRules()
 		return nil
 	case user.EdgeClients:
 		m.ResetClients()

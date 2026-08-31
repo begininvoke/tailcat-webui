@@ -16,6 +16,8 @@ type Tx struct {
 	AllowedClient *AllowedClientClient
 	// AuditEvent is the client for interacting with the AuditEvent builders.
 	AuditEvent *AuditEventClient
+	// ExitRule is the client for interacting with the ExitRule builders.
+	ExitRule *ExitRuleClient
 	// LoginFlow is the client for interacting with the LoginFlow builders.
 	LoginFlow *LoginFlowClient
 	// PortMapping is the client for interacting with the PortMapping builders.
@@ -163,6 +165,7 @@ func (tx *Tx) Client() *Client {
 func (tx *Tx) init() {
 	tx.AllowedClient = NewAllowedClientClient(tx.config)
 	tx.AuditEvent = NewAuditEventClient(tx.config)
+	tx.ExitRule = NewExitRuleClient(tx.config)
 	tx.LoginFlow = NewLoginFlowClient(tx.config)
 	tx.PortMapping = NewPortMappingClient(tx.config)
 	tx.PublishedRoute = NewPublishedRouteClient(tx.config)

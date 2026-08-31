@@ -104,7 +104,11 @@ func (a *API) Handler() (http.Handler, error) {
 	api.POST("/servers", a.createServer)
 	api.POST("/servers/:id/start", a.startServer)
 	api.POST("/servers/:id/stop", a.stopServer)
+	api.POST("/servers/:id/exit-node", a.setExitNodeEnabled)
 	api.DELETE("/servers/:id", a.deleteServer)
+	api.GET("/servers/:id/exit-rules", a.listExitRules)
+	api.POST("/servers/:id/exit-rules", a.createExitRule)
+	api.DELETE("/exit-rules/:id", a.deleteExitRule)
 	api.GET("/servers/:id/mappings", a.listMappings)
 	api.POST("/servers/:id/mappings", a.createMapping)
 	api.DELETE("/mappings/:id", a.deleteMapping)
@@ -398,6 +402,72 @@ func (a *API) deleteServer(c *echo.Context) error {
 		return err
 	}
 	if err := a.tailnet.DeleteServer(c.Request().Context(), p.ID, c.Param("id")); err != nil {
+		return err
+	}
+	return c.NoContent(http.StatusNoContent)
+}
+
+type setExitNodeRequest struct {
+	Enabled bool `json:"enabled"`
+}
+
+func (a *API) setExitNodeEnabled(c *echo.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	var request setExitNodeRequest
+	if err := c.Bind(&request); err != nil {
+		return err
+	}
+	view, err := a.tailnet.SetExitNodeEnabled(c.Request().Context(), p.ID, c.Param("id"), request.Enabled)
+	if err != nil {
+		return err
+	}
+	return c.JSON(http.StatusOK, view)
+}
+
+func (a *API) listExitRules(c *echo.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	rows, err := a.tailnet.ListExitRules(c.Request().Context(), p.ID, c.Param("id"))
+	if err != nil {
+		return err
+	}
+	return c.JSON(http.StatusOK, map[string]any{"items": rows})
+}
+
+type createExitRuleRequest struct {
+	Prefix    string `json:"prefix"`
+	StartPort uint16 `json:"start_port"`
+	EndPort   uint16 `json:"end_port"`
+	Enabled   bool   `json:"enabled"`
+}
+
+func (a *API) createExitRule(c *echo.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	var request createExitRuleRequest
+	if err := c.Bind(&request); err != nil {
+		return err
+	}
+	view, err := a.tailnet.CreateExitRule(c.Request().Context(), p.ID, c.Param("id"), tailnet.CreateExitRuleInput{Prefix: request.Prefix, StartPort: request.StartPort, EndPort: request.EndPort, Enabled: request.Enabled})
+	if err != nil {
+		return err
+	}
+	return c.JSON(http.StatusCreated, view)
+}
+
+func (a *API) deleteExitRule(c *echo.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	if err := a.tailnet.DeleteExitRule(c.Request().Context(), p.ID, c.Param("id")); err != nil {
 		return err
 	}
 	return c.NoContent(http.StatusNoContent)

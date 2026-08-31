@@ -90,7 +90,7 @@ paths:
                 key_mode: { type: string, enum: [ephemeral, saved] }
                 region: { type: string, default: auto }
                 derp_map_url: { type: string, format: uri }
-                exit_node_enabled: { type: boolean, default: false }
+                exit_node_enabled: { type: boolean, const: false, default: false, description: Enable later after creating at least one enabled exit rule }
                 start: { type: boolean, default: false }
       responses:
         '201': { description: Server created, content: { application/json: { schema: { $ref: '#/components/schemas/Server' } } } }
@@ -116,6 +116,59 @@ paths:
       responses:
         '204': { description: Server stopped }
         '409': { $ref: '#/components/responses/Error' }
+  /servers/{id}/exit-node:
+    post:
+      operationId: setExitNodeEnabled
+      parameters: [{ $ref: '#/components/parameters/ID' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [enabled]
+              properties:
+                enabled: { type: boolean }
+      responses:
+        '200': { description: Updated server, content: { application/json: { schema: { $ref: '#/components/schemas/Server' } } } }
+        '404': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+  /servers/{id}/exit-rules:
+    get:
+      operationId: listExitRules
+      parameters: [{ $ref: '#/components/parameters/ID' }]
+      responses:
+        '200': { description: Owner-scoped exit rules, content: { application/json: { schema: { $ref: '#/components/schemas/ExitRuleList' } } } }
+        '404': { $ref: '#/components/responses/Error' }
+    post:
+      operationId: createExitRule
+      parameters: [{ $ref: '#/components/parameters/ID' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [prefix, start_port, end_port, enabled]
+              properties:
+                prefix: { type: string, description: IPv4 or IPv6 CIDR prefix }
+                start_port: { type: integer, minimum: 1, maximum: 65535 }
+                end_port: { type: integer, minimum: 1, maximum: 65535 }
+                enabled: { type: boolean }
+      responses:
+        '201': { description: Exit rule created, content: { application/json: { schema: { $ref: '#/components/schemas/ExitRule' } } } }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+  /exit-rules/{id}:
+    delete:
+      operationId: deleteExitRule
+      parameters: [{ $ref: '#/components/parameters/ID' }]
+      responses:
+        '204': { description: Exit rule deleted }
+        '404': { $ref: '#/components/responses/Error' }
   /servers/{id}/mappings:
     get:
       operationId: listMappings
@@ -336,6 +389,18 @@ components:
         allowed_key_count: { type: integer }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+    ExitRule:
+      type: object
+      required: [id, server_id, prefix, start_port, end_port, enabled, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        server_id: { type: string, format: uuid }
+        prefix: { type: string }
+        start_port: { type: integer, minimum: 1, maximum: 65535 }
+        end_port: { type: integer, minimum: 1, maximum: 65535 }
+        enabled: { type: boolean }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
     Client:
       type: object
       required: [id, name, runtime_state, token_hint]
@@ -371,6 +436,9 @@ components:
     ServerList:
       type: object
       properties: { items: { type: array, items: { $ref: '#/components/schemas/Server' } } }
+    ExitRuleList:
+      type: object
+      properties: { items: { type: array, items: { $ref: '#/components/schemas/ExitRule' } } }
     ClientList:
       type: object
       properties: { items: { type: array, items: { $ref: '#/components/schemas/Client' } } }

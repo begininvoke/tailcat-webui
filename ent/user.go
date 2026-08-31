@@ -43,6 +43,8 @@ type UserEdges struct {
 	Sessions []*Session `json:"sessions,omitempty"`
 	// Servers holds the value of the servers edge.
 	Servers []*TailServer `json:"servers,omitempty"`
+	// ExitRules holds the value of the exit_rules edge.
+	ExitRules []*ExitRule `json:"exit_rules,omitempty"`
 	// Clients holds the value of the clients edge.
 	Clients []*TailClient `json:"clients,omitempty"`
 	// Routes holds the value of the routes edge.
@@ -51,7 +53,7 @@ type UserEdges struct {
 	AuditEvents []*AuditEvent `json:"audit_events,omitempty"`
 	// loadedTypes holds the information for reporting if a
 	// type was loaded (or requested) in eager-loading or not.
-	loadedTypes [5]bool
+	loadedTypes [6]bool
 }
 
 // SessionsOrErr returns the Sessions value or an error if the edge
@@ -72,10 +74,19 @@ func (e UserEdges) ServersOrErr() ([]*TailServer, error) {
 	return nil, &NotLoadedError{edge: "servers"}
 }
 
+// ExitRulesOrErr returns the ExitRules value or an error if the edge
+// was not loaded in eager-loading.
+func (e UserEdges) ExitRulesOrErr() ([]*ExitRule, error) {
+	if e.loadedTypes[2] {
+		return e.ExitRules, nil
+	}
+	return nil, &NotLoadedError{edge: "exit_rules"}
+}
+
 // ClientsOrErr returns the Clients value or an error if the edge
 // was not loaded in eager-loading.
 func (e UserEdges) ClientsOrErr() ([]*TailClient, error) {
-	if e.loadedTypes[2] {
+	if e.loadedTypes[3] {
 		return e.Clients, nil
 	}
 	return nil, &NotLoadedError{edge: "clients"}
@@ -84,7 +95,7 @@ func (e UserEdges) ClientsOrErr() ([]*TailClient, error) {
 // RoutesOrErr returns the Routes value or an error if the edge
 // was not loaded in eager-loading.
 func (e UserEdges) RoutesOrErr() ([]*PublishedRoute, error) {
-	if e.loadedTypes[3] {
+	if e.loadedTypes[4] {
 		return e.Routes, nil
 	}
 	return nil, &NotLoadedError{edge: "routes"}
@@ -93,7 +104,7 @@ func (e UserEdges) RoutesOrErr() ([]*PublishedRoute, error) {
 // AuditEventsOrErr returns the AuditEvents value or an error if the edge
 // was not loaded in eager-loading.
 func (e UserEdges) AuditEventsOrErr() ([]*AuditEvent, error) {
-	if e.loadedTypes[4] {
+	if e.loadedTypes[5] {
 		return e.AuditEvents, nil
 	}
 	return nil, &NotLoadedError{edge: "audit_events"}
@@ -192,6 +203,11 @@ func (_m *User) QuerySessions() *SessionQuery {
 // QueryServers queries the "servers" edge of the User entity.
 func (_m *User) QueryServers() *TailServerQuery {
 	return NewUserClient(_m.config).QueryServers(_m)
+}
+
+// QueryExitRules queries the "exit_rules" edge of the User entity.
+func (_m *User) QueryExitRules() *ExitRuleQuery {
+	return NewUserClient(_m.config).QueryExitRules(_m)
 }
 
 // QueryClients queries the "clients" edge of the User entity.

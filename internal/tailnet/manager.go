@@ -16,6 +16,7 @@ import (
 
 	"github.com/ca-x/tailcat-webui/ent"
 	"github.com/ca-x/tailcat-webui/ent/allowedclient"
+	"github.com/ca-x/tailcat-webui/ent/exitrule"
 	"github.com/ca-x/tailcat-webui/ent/portmapping"
 	"github.com/ca-x/tailcat-webui/ent/tailclient"
 	"github.com/ca-x/tailcat-webui/ent/tailserver"
@@ -117,6 +118,17 @@ type AllowedClientView struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+type ExitRuleView struct {
+	ID        string    `json:"id"`
+	ServerID  string    `json:"server_id"`
+	Prefix    string    `json:"prefix"`
+	StartPort uint16    `json:"start_port"`
+	EndPort   uint16    `json:"end_port"`
+	Enabled   bool      `json:"enabled"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 type CreateServerInput struct {
 	Name            string
 	KeyMode         string
@@ -139,6 +151,13 @@ type CreateMappingInput struct {
 	ListenPort uint16
 	TargetHost string
 	TargetPort uint16
+}
+
+type CreateExitRuleInput struct {
+	Prefix    string
+	StartPort uint16
+	EndPort   uint16
+	Enabled   bool
 }
 
 type runningServer struct {
@@ -330,14 +349,14 @@ func (m *Manager) ListServers(ctx context.Context, userID string) ([]ServerView,
 func (m *Manager) CreateServer(ctx context.Context, userID string, in CreateServerInput) (ServerView, error) {
 	in.Name = strings.TrimSpace(in.Name)
 	in.KeyMode = strings.TrimSpace(in.KeyMode)
-	if in.Name == "" || len(in.Name) > 80 || len(in.Region) > 255 || len(in.DERPMapURL) > 2048 || (in.KeyMode != "ephemeral" && in.KeyMode != "saved") {
+	if in.Name == "" || len(in.Name) > 80 || len(in.Region) > 255 || len(in.DERPMapURL) > 2048 || in.ExitNodeEnabled || (in.KeyMode != "ephemeral" && in.KeyMode != "saved") {
 		return ServerView{}, ErrInvalid
 	}
 	if err := m.validateDERPConfig(in.Region, in.DERPMapURL); err != nil {
 		return ServerView{}, err
 	}
 	id := uuid.NewV7().String()
-	create := m.db.TailServer.Create().SetID(id).SetUserID(userID).SetName(in.Name).SetKeyMode(tailserver.KeyMode(in.KeyMode)).SetRegion(normalizeRegion(in.Region)).SetDerpMapURL(strings.TrimSpace(in.DERPMapURL)).SetExitNodeEnabled(in.ExitNodeEnabled).SetDesiredRunning(in.Start)
+	create := m.db.TailServer.Create().SetID(id).SetUserID(userID).SetName(in.Name).SetKeyMode(tailserver.KeyMode(in.KeyMode)).SetRegion(normalizeRegion(in.Region)).SetDerpMapURL(strings.TrimSpace(in.DERPMapURL)).SetDesiredRunning(in.Start)
 	if in.KeyMode == "saved" {
 		private := key.NewNode()
 		text, err := private.MarshalText()
@@ -409,7 +428,7 @@ func (m *Manager) StartServer(ctx context.Context, userID, id string) (ServerVie
 		delete(m.starting, id)
 		m.mu.Unlock()
 	}()
-	row, err := m.db.TailServer.Query().Where(tailserver.IDEQ(id), tailserver.UserIDEQ(userID)).WithMappings(func(q *ent.PortMappingQuery) { q.Where(portmapping.Enabled(true), portmapping.UserIDEQ(userID)) }).WithAllowedClients(func(q *ent.AllowedClientQuery) { q.Where(allowedclient.UserIDEQ(userID)) }).Only(ctx)
+	row, err := m.db.TailServer.Query().Where(tailserver.IDEQ(id), tailserver.UserIDEQ(userID)).WithMappings(func(q *ent.PortMappingQuery) { q.Where(portmapping.Enabled(true), portmapping.UserIDEQ(userID)) }).WithAllowedClients(func(q *ent.AllowedClientQuery) { q.Where(allowedclient.UserIDEQ(userID)) }).WithExitRules(func(q *ent.ExitRuleQuery) { q.Where(exitrule.Enabled(true), exitrule.UserIDEQ(userID)) }).Only(ctx)
 	if ent.IsNotFound(err) {
 		return ServerView{}, ErrNotFound
 	}
@@ -502,6 +521,50 @@ func (m *Manager) DeleteServer(ctx context.Context, userID, id string) error {
 	}
 	m.publish(userID, "server", id, RuntimePhaseStopped, "")
 	return nil
+}
+
+func (m *Manager) SetExitNodeEnabled(ctx context.Context, userID, id string, enabled bool) (ServerView, error) {
+	unlock := m.lockServerOperation(id)
+	defer unlock()
+	row, err := m.db.TailServer.Query().Where(tailserver.IDEQ(id), tailserver.UserIDEQ(userID)).Only(ctx)
+	if ent.IsNotFound(err) {
+		return ServerView{}, ErrNotFound
+	}
+	if err != nil {
+		return ServerView{}, fmt.Errorf("load Tailcat server: %w", err)
+	}
+	if enabled {
+		hasRule, err := m.db.ExitRule.Query().Where(exitrule.ServerIDEQ(id), exitrule.UserIDEQ(userID), exitrule.Enabled(true)).Exist(ctx)
+		if err != nil {
+			return ServerView{}, fmt.Errorf("validate enabled exit rules: %w", err)
+		}
+		if !hasRule {
+			return ServerView{}, ErrInvalid
+		}
+	}
+	if row.ExitNodeEnabled == enabled {
+		view := serverView(row)
+		m.mu.RLock()
+		runtime := m.servers[id]
+		m.mu.RUnlock()
+		if runtime != nil {
+			view.RuntimeState = RuntimePhaseRunning
+			view.ConnectionToken = runtime.token
+			view.PublicKey = runtime.publicKey
+			view.StartedAt = runtime.startedAt
+		}
+		return view, nil
+	}
+	if m.isServerRunning(id) {
+		if err := m.stopServerLocked(ctx, userID, id); err != nil {
+			return ServerView{}, err
+		}
+	}
+	row, err = row.Update().SetExitNodeEnabled(enabled).Save(ctx)
+	if err != nil {
+		return ServerView{}, fmt.Errorf("persist exit-node state: %w", err)
+	}
+	return serverView(row), nil
 }
 
 func (m *Manager) lockServerOperation(id string) func() {
@@ -612,6 +675,97 @@ func (m *Manager) DeleteMapping(ctx context.Context, userID, id string) error {
 	count, err := m.db.PortMapping.Delete().Where(portmapping.IDEQ(id), portmapping.UserIDEQ(userID)).Exec(ctx)
 	if err != nil {
 		return fmt.Errorf("delete port mapping: %w", err)
+	}
+	if count == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (m *Manager) ListExitRules(ctx context.Context, userID, serverID string) ([]ExitRuleView, error) {
+	if _, err := m.db.TailServer.Query().Where(tailserver.IDEQ(serverID), tailserver.UserIDEQ(userID)).Only(ctx); ent.IsNotFound(err) {
+		return nil, ErrNotFound
+	} else if err != nil {
+		return nil, fmt.Errorf("load Tailcat server: %w", err)
+	}
+	rows, err := m.db.ExitRule.Query().Where(exitrule.UserIDEQ(userID), exitrule.ServerIDEQ(serverID)).Order(ent.Asc(exitrule.FieldCreatedAt)).All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list exit rules: %w", err)
+	}
+	views := make([]ExitRuleView, 0, len(rows))
+	for _, row := range rows {
+		views = append(views, exitRuleView(row))
+	}
+	return views, nil
+}
+
+func (m *Manager) CreateExitRule(ctx context.Context, userID, serverID string, in CreateExitRuleInput) (ExitRuleView, error) {
+	prefix, err := netip.ParsePrefix(strings.TrimSpace(in.Prefix))
+	if err != nil || prefix.Addr().Is4In6() || in.StartPort == 0 || in.EndPort < in.StartPort {
+		return ExitRuleView{}, ErrInvalid
+	}
+	prefix = prefix.Masked()
+	unlock := m.lockServerOperation(serverID)
+	defer unlock()
+	if _, err := m.db.TailServer.Query().Where(tailserver.IDEQ(serverID), tailserver.UserIDEQ(userID)).Only(ctx); ent.IsNotFound(err) {
+		return ExitRuleView{}, ErrNotFound
+	} else if err != nil {
+		return ExitRuleView{}, fmt.Errorf("load Tailcat server: %w", err)
+	}
+	count, err := m.db.ExitRule.Query().Where(exitrule.ServerIDEQ(serverID)).Count(ctx)
+	if err != nil {
+		return ExitRuleView{}, fmt.Errorf("count exit rules: %w", err)
+	}
+	if count >= 128 {
+		return ExitRuleView{}, ErrCapacity
+	}
+	duplicate, err := m.db.ExitRule.Query().Where(exitrule.ServerIDEQ(serverID), exitrule.PrefixEQ(prefix.String()), exitrule.StartPortEQ(in.StartPort), exitrule.EndPortEQ(in.EndPort)).Exist(ctx)
+	if err != nil {
+		return ExitRuleView{}, fmt.Errorf("validate exit rule: %w", err)
+	}
+	if duplicate {
+		return ExitRuleView{}, ErrConflict
+	}
+	if m.isServerRunning(serverID) {
+		if err := m.stopServerLocked(ctx, userID, serverID); err != nil {
+			return ExitRuleView{}, err
+		}
+	}
+	row, err := m.db.ExitRule.Create().SetUserID(userID).SetServerID(serverID).SetPrefix(prefix.String()).SetStartPort(in.StartPort).SetEndPort(in.EndPort).SetEnabled(in.Enabled).Save(ctx)
+	if err != nil {
+		if ent.IsConstraintError(err) {
+			return ExitRuleView{}, ErrConflict
+		}
+		return ExitRuleView{}, fmt.Errorf("create exit rule: %w", err)
+	}
+	return exitRuleView(row), nil
+}
+
+func (m *Manager) DeleteExitRule(ctx context.Context, userID, id string) error {
+	row, err := m.db.ExitRule.Query().Where(exitrule.IDEQ(id), exitrule.UserIDEQ(userID)).Only(ctx)
+	if ent.IsNotFound(err) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("load exit rule: %w", err)
+	}
+	unlock := m.lockServerOperation(row.ServerID)
+	defer unlock()
+	row, err = m.db.ExitRule.Query().Where(exitrule.IDEQ(id), exitrule.UserIDEQ(userID)).Only(ctx)
+	if ent.IsNotFound(err) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("reload exit rule: %w", err)
+	}
+	if m.isServerRunning(row.ServerID) {
+		if err := m.stopServerLocked(ctx, userID, row.ServerID); err != nil {
+			return err
+		}
+	}
+	count, err := m.db.ExitRule.Delete().Where(exitrule.IDEQ(id), exitrule.UserIDEQ(userID)).Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("delete exit rule: %w", err)
 	}
 	if count == 0 {
 		return ErrNotFound
@@ -984,9 +1138,12 @@ func (m *Manager) buildServer(ctx context.Context, row *ent.TailServer) (ServerR
 		}
 	}
 	if row.ExitNodeEnabled {
-		spec.AllowProxy = func(target netip.AddrPort) bool { return m.exitPolicy.AllowAddr(target.Addr()) }
+		allowTarget := func(target netip.AddrPort) bool {
+			return m.exitPolicy.AllowAddrPort(target) && exitRulesAllow(row.Edges.ExitRules, target)
+		}
+		spec.AllowProxy = allowTarget
 		spec.ForwardTCPHandler = func(target netip.AddrPort) TCPHandler {
-			if !m.exitPolicy.AllowAddr(target.Addr()) {
+			if !allowTarget(target) {
 				return nil
 			}
 			return func(runtimeCtx context.Context, tracked net.Conn) {
@@ -1009,6 +1166,16 @@ func (m *Manager) buildServer(ctx context.Context, row *ent.TailServer) (ServerR
 		return nil, fmt.Errorf("create Tailcat server runtime: %w", err)
 	}
 	return runtime, nil
+}
+
+func exitRulesAllow(rules []*ent.ExitRule, target netip.AddrPort) bool {
+	for _, rule := range rules {
+		prefix, err := netip.ParsePrefix(rule.Prefix)
+		if err == nil && rule.Enabled && prefix.Contains(target.Addr().Unmap()) && rule.StartPort <= target.Port() && target.Port() <= rule.EndPort {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Manager) client(ctx context.Context, userID, id string) (ClientRuntime, *ent.TailClient, error) {
@@ -1252,6 +1419,10 @@ func clientView(row *ent.TailClient) ClientView {
 
 func mappingView(row *ent.PortMapping) PortMappingView {
 	return PortMappingView{ID: row.ID, ServerID: row.ServerID, Name: row.Name, Kind: string(row.Kind), ListenPort: row.ListenPort, TargetHost: row.TargetHost, TargetPort: row.TargetPort, Enabled: row.Enabled, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt}
+}
+
+func exitRuleView(row *ent.ExitRule) ExitRuleView {
+	return ExitRuleView{ID: row.ID, ServerID: row.ServerID, Prefix: row.Prefix, StartPort: row.StartPort, EndPort: row.EndPort, Enabled: row.Enabled, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt}
 }
 
 func (m *Manager) publish(userID, kind, id string, phase RuntimePhase, message string) {

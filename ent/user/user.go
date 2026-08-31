@@ -32,6 +32,8 @@ const (
 	EdgeSessions = "sessions"
 	// EdgeServers holds the string denoting the servers edge name in mutations.
 	EdgeServers = "servers"
+	// EdgeExitRules holds the string denoting the exit_rules edge name in mutations.
+	EdgeExitRules = "exit_rules"
 	// EdgeClients holds the string denoting the clients edge name in mutations.
 	EdgeClients = "clients"
 	// EdgeRoutes holds the string denoting the routes edge name in mutations.
@@ -54,6 +56,13 @@ const (
 	ServersInverseTable = "tail_servers"
 	// ServersColumn is the table column denoting the servers relation/edge.
 	ServersColumn = "user_id"
+	// ExitRulesTable is the table that holds the exit_rules relation/edge.
+	ExitRulesTable = "exit_rules"
+	// ExitRulesInverseTable is the table name for the ExitRule entity.
+	// It exists in this package in order to avoid circular dependency with the "exitrule" package.
+	ExitRulesInverseTable = "exit_rules"
+	// ExitRulesColumn is the table column denoting the exit_rules relation/edge.
+	ExitRulesColumn = "user_id"
 	// ClientsTable is the table that holds the clients relation/edge.
 	ClientsTable = "tail_clients"
 	// ClientsInverseTable is the table name for the TailClient entity.
@@ -185,6 +194,20 @@ func ByServers(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
 	}
 }
 
+// ByExitRulesCount orders the results by exit_rules count.
+func ByExitRulesCount(opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborsCount(s, newExitRulesStep(), opts...)
+	}
+}
+
+// ByExitRules orders the results by exit_rules terms.
+func ByExitRules(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newExitRulesStep(), append([]sql.OrderTerm{term}, terms...)...)
+	}
+}
+
 // ByClientsCount orders the results by clients count.
 func ByClientsCount(opts ...sql.OrderTermOption) OrderOption {
 	return func(s *sql.Selector) {
@@ -238,6 +261,13 @@ func newServersStep() *sqlgraph.Step {
 		sqlgraph.From(Table, FieldID),
 		sqlgraph.To(ServersInverseTable, FieldID),
 		sqlgraph.Edge(sqlgraph.O2M, false, ServersTable, ServersColumn),
+	)
+}
+func newExitRulesStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(ExitRulesInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.O2M, false, ExitRulesTable, ExitRulesColumn),
 	)
 }
 func newClientsStep() *sqlgraph.Step {

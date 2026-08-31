@@ -31,6 +31,7 @@ func (User) Edges() []ent.Edge {
 	return []ent.Edge{
 		edge.To("sessions", Session.Type).Annotations(entsql.OnDelete(entsql.Cascade)),
 		edge.To("servers", TailServer.Type).Annotations(entsql.OnDelete(entsql.Cascade)),
+		edge.To("exit_rules", ExitRule.Type).Annotations(entsql.OnDelete(entsql.Cascade)),
 		edge.To("clients", TailClient.Type).Annotations(entsql.OnDelete(entsql.Cascade)),
 		edge.To("routes", PublishedRoute.Type).Annotations(entsql.OnDelete(entsql.Cascade)),
 		edge.To("audit_events", AuditEvent.Type).Annotations(entsql.OnDelete(entsql.SetNull)),

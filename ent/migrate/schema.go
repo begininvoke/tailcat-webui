@@ -86,6 +86,50 @@ var (
 			},
 		},
 	}
+	// ExitRulesColumns holds the columns for the "exit_rules" table.
+	ExitRulesColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeString},
+		{Name: "prefix", Type: field.TypeString},
+		{Name: "start_port", Type: field.TypeUint16},
+		{Name: "end_port", Type: field.TypeUint16},
+		{Name: "enabled", Type: field.TypeBool, Default: true},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "updated_at", Type: field.TypeTime},
+		{Name: "server_id", Type: field.TypeString},
+		{Name: "user_id", Type: field.TypeString},
+	}
+	// ExitRulesTable holds the schema information for the "exit_rules" table.
+	ExitRulesTable = &schema.Table{
+		Name:       "exit_rules",
+		Columns:    ExitRulesColumns,
+		PrimaryKey: []*schema.Column{ExitRulesColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "exit_rules_tail_servers_exit_rules",
+				Columns:    []*schema.Column{ExitRulesColumns[7]},
+				RefColumns: []*schema.Column{TailServersColumns[0]},
+				OnDelete:   schema.Cascade,
+			},
+			{
+				Symbol:     "exit_rules_users_exit_rules",
+				Columns:    []*schema.Column{ExitRulesColumns[8]},
+				RefColumns: []*schema.Column{UsersColumns[0]},
+				OnDelete:   schema.Cascade,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "exitrule_server_id_prefix_start_port_end_port",
+				Unique:  true,
+				Columns: []*schema.Column{ExitRulesColumns[7], ExitRulesColumns[1], ExitRulesColumns[2], ExitRulesColumns[3]},
+			},
+			{
+				Name:    "exitrule_user_id",
+				Unique:  false,
+				Columns: []*schema.Column{ExitRulesColumns[8]},
+			},
+		},
+	}
 	// LoginFlowsColumns holds the columns for the "login_flows" table.
 	LoginFlowsColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeString},
@@ -331,6 +375,7 @@ var (
 	Tables = []*schema.Table{
 		AllowedClientsTable,
 		AuditEventsTable,
+		ExitRulesTable,
 		LoginFlowsTable,
 		PortMappingsTable,
 		PublishedRoutesTable,
@@ -344,6 +389,8 @@ var (
 func init() {
 	AllowedClientsTable.ForeignKeys[0].RefTable = TailServersTable
 	AuditEventsTable.ForeignKeys[0].RefTable = UsersTable
+	ExitRulesTable.ForeignKeys[0].RefTable = TailServersTable
+	ExitRulesTable.ForeignKeys[1].RefTable = UsersTable
 	PortMappingsTable.ForeignKeys[0].RefTable = TailServersTable
 	PublishedRoutesTable.ForeignKeys[0].RefTable = TailClientsTable
 	PublishedRoutesTable.ForeignKeys[1].RefTable = UsersTable

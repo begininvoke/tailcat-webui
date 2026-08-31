@@ -634,6 +634,29 @@ func HasAllowedClientsWith(preds ...predicate.AllowedClient) predicate.TailServe
 	})
 }
 
+// HasExitRules applies the HasEdge predicate on the "exit_rules" edge.
+func HasExitRules() predicate.TailServer {
+	return predicate.TailServer(func(s *sql.Selector) {
+		step := sqlgraph.NewStep(
+			sqlgraph.From(Table, FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, ExitRulesTable, ExitRulesColumn),
+		)
+		sqlgraph.HasNeighbors(s, step)
+	})
+}
+
+// HasExitRulesWith applies the HasEdge predicate on the "exit_rules" edge with a given conditions (other predicates).
+func HasExitRulesWith(preds ...predicate.ExitRule) predicate.TailServer {
+	return predicate.TailServer(func(s *sql.Selector) {
+		step := newExitRulesStep()
+		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
+			for _, p := range preds {
+				p(s)
+			}
+		})
+	})
+}
+
 // And groups predicates with the AND operator between them.
 func And(predicates ...predicate.TailServer) predicate.TailServer {
 	return predicate.TailServer(sql.AndPredicates(predicates...))

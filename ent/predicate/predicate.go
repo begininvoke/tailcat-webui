@@ -12,6 +12,9 @@ type AllowedClient func(*sql.Selector)
 // AuditEvent is the predicate function for auditevent builders.
 type AuditEvent func(*sql.Selector)
 
+// ExitRule is the predicate function for exitrule builders.
+type ExitRule func(*sql.Selector)
+
 // LoginFlow is the predicate function for loginflow builders.
 type LoginFlow func(*sql.Selector)
 

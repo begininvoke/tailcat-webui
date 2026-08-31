@@ -54,9 +54,11 @@ type TailServerEdges struct {
 	Mappings []*PortMapping `json:"mappings,omitempty"`
 	// AllowedClients holds the value of the allowed_clients edge.
 	AllowedClients []*AllowedClient `json:"allowed_clients,omitempty"`
+	// ExitRules holds the value of the exit_rules edge.
+	ExitRules []*ExitRule `json:"exit_rules,omitempty"`
 	// loadedTypes holds the information for reporting if a
 	// type was loaded (or requested) in eager-loading or not.
-	loadedTypes [3]bool
+	loadedTypes [4]bool
 }
 
 // OwnerOrErr returns the Owner value or an error if the edge
@@ -86,6 +88,15 @@ func (e TailServerEdges) AllowedClientsOrErr() ([]*AllowedClient, error) {
 		return e.AllowedClients, nil
 	}
 	return nil, &NotLoadedError{edge: "allowed_clients"}
+}
+
+// ExitRulesOrErr returns the ExitRules value or an error if the edge
+// was not loaded in eager-loading.
+func (e TailServerEdges) ExitRulesOrErr() ([]*ExitRule, error) {
+	if e.loadedTypes[3] {
+		return e.ExitRules, nil
+	}
+	return nil, &NotLoadedError{edge: "exit_rules"}
 }
 
 // scanValues returns the types for scanning values from sql.Rows.
@@ -214,6 +225,11 @@ func (_m *TailServer) QueryMappings() *PortMappingQuery {
 // QueryAllowedClients queries the "allowed_clients" edge of the TailServer entity.
 func (_m *TailServer) QueryAllowedClients() *AllowedClientQuery {
 	return NewTailServerClient(_m.config).QueryAllowedClients(_m)
+}
+
+// QueryExitRules queries the "exit_rules" edge of the TailServer entity.
+func (_m *TailServer) QueryExitRules() *ExitRuleQuery {
+	return NewTailServerClient(_m.config).QueryExitRules(_m)
 }
 
 // Update returns a builder for updating this TailServer.

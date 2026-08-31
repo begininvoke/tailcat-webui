@@ -13,6 +13,7 @@ import (
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
 	"github.com/ca-x/tailcat-webui/ent/allowedclient"
+	"github.com/ca-x/tailcat-webui/ent/exitrule"
 	"github.com/ca-x/tailcat-webui/ent/portmapping"
 	"github.com/ca-x/tailcat-webui/ent/predicate"
 	"github.com/ca-x/tailcat-webui/ent/tailserver"
@@ -29,6 +30,7 @@ type TailServerQuery struct {
 	withOwner          *UserQuery
 	withMappings       *PortMappingQuery
 	withAllowedClients *AllowedClientQuery
+	withExitRules      *ExitRuleQuery
 	// intermediate query (i.e. traversal path).
 	sql  *sql.Selector
 	path func(context.Context) (*sql.Selector, error)
@@ -124,6 +126,28 @@ func (_q *TailServerQuery) QueryAllowedClients() *AllowedClientQuery {
 			sqlgraph.From(tailserver.Table, tailserver.FieldID, selector),
 			sqlgraph.To(allowedclient.Table, allowedclient.FieldID),
 			sqlgraph.Edge(sqlgraph.O2M, false, tailserver.AllowedClientsTable, tailserver.AllowedClientsColumn),
+		)
+		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
+		return fromU, nil
+	}
+	return query
+}
+
+// QueryExitRules chains the current query on the "exit_rules" edge.
+func (_q *TailServerQuery) QueryExitRules() *ExitRuleQuery {
+	query := (&ExitRuleClient{config: _q.config}).Query()
+	query.path = func(ctx context.Context) (fromU *sql.Selector, err error) {
+		if err := _q.prepareQuery(ctx); err != nil {
+			return nil, err
+		}
+		selector := _q.sqlQuery(ctx)
+		if err := selector.Err(); err != nil {
+			return nil, err
+		}
+		step := sqlgraph.NewStep(
+			sqlgraph.From(tailserver.Table, tailserver.FieldID, selector),
+			sqlgraph.To(exitrule.Table, exitrule.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, tailserver.ExitRulesTable, tailserver.ExitRulesColumn),
 		)
 		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
 		return fromU, nil
@@ -326,6 +350,7 @@ func (_q *TailServerQuery) Clone() *TailServerQuery {
 		withOwner:          _q.withOwner.Clone(),
 		withMappings:       _q.withMappings.Clone(),
 		withAllowedClients: _q.withAllowedClients.Clone(),
+		withExitRules:      _q.withExitRules.Clone(),
 		// clone intermediate query.
 		sql:  _q.sql.Clone(),
 		path: _q.path,
@@ -362,6 +387,17 @@ func (_q *TailServerQuery) WithAllowedClients(opts ...func(*AllowedClientQuery))
 		opt(query)
 	}
 	_q.withAllowedClients = query
+	return _q
+}
+
+// WithExitRules tells the query-builder to eager-load the nodes that are connected to
+// the "exit_rules" edge. The optional arguments are used to configure the query builder of the edge.
+func (_q *TailServerQuery) WithExitRules(opts ...func(*ExitRuleQuery)) *TailServerQuery {
+	query := (&ExitRuleClient{config: _q.config}).Query()
+	for _, opt := range opts {
+		opt(query)
+	}
+	_q.withExitRules = query
 	return _q
 }
 
@@ -443,10 +479,11 @@ func (_q *TailServerQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*T
 	var (
 		nodes       = []*TailServer{}
 		_spec       = _q.querySpec()
-		loadedTypes = [3]bool{
+		loadedTypes = [4]bool{
 			_q.withOwner != nil,
 			_q.withMappings != nil,
 			_q.withAllowedClients != nil,
+			_q.withExitRules != nil,
 		}
 	)
 	_spec.ScanValues = func(columns []string) ([]any, error) {
@@ -484,6 +521,13 @@ func (_q *TailServerQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*T
 		if err := _q.loadAllowedClients(ctx, query, nodes,
 			func(n *TailServer) { n.Edges.AllowedClients = []*AllowedClient{} },
 			func(n *TailServer, e *AllowedClient) { n.Edges.AllowedClients = append(n.Edges.AllowedClients, e) }); err != nil {
+			return nil, err
+		}
+	}
+	if query := _q.withExitRules; query != nil {
+		if err := _q.loadExitRules(ctx, query, nodes,
+			func(n *TailServer) { n.Edges.ExitRules = []*ExitRule{} },
+			func(n *TailServer, e *ExitRule) { n.Edges.ExitRules = append(n.Edges.ExitRules, e) }); err != nil {
 			return nil, err
 		}
 	}
@@ -564,6 +608,36 @@ func (_q *TailServerQuery) loadAllowedClients(ctx context.Context, query *Allowe
 	}
 	query.Where(predicate.AllowedClient(func(s *sql.Selector) {
 		s.Where(sql.InValues(s.C(tailserver.AllowedClientsColumn), fks...))
+	}))
+	neighbors, err := query.All(ctx)
+	if err != nil {
+		return err
+	}
+	for _, n := range neighbors {
+		fk := n.ServerID
+		node, ok := nodeids[fk]
+		if !ok {
+			return fmt.Errorf(`unexpected referenced foreign-key "server_id" returned %v for node %v`, fk, n.ID)
+		}
+		assign(node, n)
+	}
+	return nil
+}
+func (_q *TailServerQuery) loadExitRules(ctx context.Context, query *ExitRuleQuery, nodes []*TailServer, init func(*TailServer), assign func(*TailServer, *ExitRule)) error {
+	fks := make([]driver.Value, 0, len(nodes))
+	nodeids := make(map[string]*TailServer)
+	for i := range nodes {
+		fks = append(fks, nodes[i].ID)
+		nodeids[nodes[i].ID] = nodes[i]
+		if init != nil {
+			init(nodes[i])
+		}
+	}
+	if len(query.ctx.Fields) > 0 {
+		query.ctx.AppendFieldOnce(exitrule.FieldServerID)
+	}
+	query.Where(predicate.ExitRule(func(s *sql.Selector) {
+		s.Where(sql.InValues(s.C(tailserver.ExitRulesColumn), fks...))
 	}))
 	neighbors, err := query.All(ctx)
 	if err != nil {

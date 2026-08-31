@@ -7,6 +7,7 @@ import (
 
 	"github.com/ca-x/tailcat-webui/ent/allowedclient"
 	"github.com/ca-x/tailcat-webui/ent/auditevent"
+	"github.com/ca-x/tailcat-webui/ent/exitrule"
 	"github.com/ca-x/tailcat-webui/ent/loginflow"
 	"github.com/ca-x/tailcat-webui/ent/portmapping"
 	"github.com/ca-x/tailcat-webui/ent/publishedroute"
@@ -53,6 +54,30 @@ func init() {
 	auditeventDescID := auditeventFields[0].Descriptor()
 	// auditevent.DefaultID holds the default value on creation for the id field.
 	auditevent.DefaultID = auditeventDescID.Default.(func() string)
+	exitruleFields := schema.ExitRule{}.Fields()
+	_ = exitruleFields
+	// exitruleDescPrefix is the schema descriptor for prefix field.
+	exitruleDescPrefix := exitruleFields[3].Descriptor()
+	// exitrule.PrefixValidator is a validator for the "prefix" field. It is called by the builders before save.
+	exitrule.PrefixValidator = exitruleDescPrefix.Validators[0].(func(string) error)
+	// exitruleDescEnabled is the schema descriptor for enabled field.
+	exitruleDescEnabled := exitruleFields[6].Descriptor()
+	// exitrule.DefaultEnabled holds the default value on creation for the enabled field.
+	exitrule.DefaultEnabled = exitruleDescEnabled.Default.(bool)
+	// exitruleDescCreatedAt is the schema descriptor for created_at field.
+	exitruleDescCreatedAt := exitruleFields[7].Descriptor()
+	// exitrule.DefaultCreatedAt holds the default value on creation for the created_at field.
+	exitrule.DefaultCreatedAt = exitruleDescCreatedAt.Default.(func() time.Time)
+	// exitruleDescUpdatedAt is the schema descriptor for updated_at field.
+	exitruleDescUpdatedAt := exitruleFields[8].Descriptor()
+	// exitrule.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	exitrule.DefaultUpdatedAt = exitruleDescUpdatedAt.Default.(func() time.Time)
+	// exitrule.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	exitrule.UpdateDefaultUpdatedAt = exitruleDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// exitruleDescID is the schema descriptor for id field.
+	exitruleDescID := exitruleFields[0].Descriptor()
+	// exitrule.DefaultID holds the default value on creation for the id field.
+	exitrule.DefaultID = exitruleDescID.Default.(func() string)
 	loginflowFields := schema.LoginFlow{}.Fields()
 	_ = loginflowFields
 	// loginflowDescReturnTo is the schema descriptor for return_to field.

@@ -12,6 +12,7 @@ import (
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
 	"github.com/ca-x/tailcat-webui/ent/auditevent"
+	"github.com/ca-x/tailcat-webui/ent/exitrule"
 	"github.com/ca-x/tailcat-webui/ent/predicate"
 	"github.com/ca-x/tailcat-webui/ent/publishedroute"
 	"github.com/ca-x/tailcat-webui/ent/session"
@@ -129,6 +130,21 @@ func (_u *UserUpdate) AddServers(v ...*TailServer) *UserUpdate {
 	return _u.AddServerIDs(ids...)
 }
 
+// AddExitRuleIDs adds the "exit_rules" edge to the ExitRule entity by IDs.
+func (_u *UserUpdate) AddExitRuleIDs(ids ...string) *UserUpdate {
+	_u.mutation.AddExitRuleIDs(ids...)
+	return _u
+}
+
+// AddExitRules adds the "exit_rules" edges to the ExitRule entity.
+func (_u *UserUpdate) AddExitRules(v ...*ExitRule) *UserUpdate {
+	ids := make([]string, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddExitRuleIDs(ids...)
+}
+
 // AddClientIDs adds the "clients" edge to the TailClient entity by IDs.
 func (_u *UserUpdate) AddClientIDs(ids ...string) *UserUpdate {
 	_u.mutation.AddClientIDs(ids...)
@@ -219,6 +235,27 @@ func (_u *UserUpdate) RemoveServers(v ...*TailServer) *UserUpdate {
 		ids[i] = v[i].ID
 	}
 	return _u.RemoveServerIDs(ids...)
+}
+
+// ClearExitRules clears all "exit_rules" edges to the ExitRule entity.
+func (_u *UserUpdate) ClearExitRules() *UserUpdate {
+	_u.mutation.ClearExitRules()
+	return _u
+}
+
+// RemoveExitRuleIDs removes the "exit_rules" edge to ExitRule entities by IDs.
+func (_u *UserUpdate) RemoveExitRuleIDs(ids ...string) *UserUpdate {
+	_u.mutation.RemoveExitRuleIDs(ids...)
+	return _u
+}
+
+// RemoveExitRules removes "exit_rules" edges to ExitRule entities.
+func (_u *UserUpdate) RemoveExitRules(v ...*ExitRule) *UserUpdate {
+	ids := make([]string, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveExitRuleIDs(ids...)
 }
 
 // ClearClients clears all "clients" edges to the TailClient entity.
@@ -433,6 +470,51 @@ func (_u *UserUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(tailserver.FieldID, field.TypeString),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.ExitRulesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.ExitRulesTable,
+			Columns: []string{user.ExitRulesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(exitrule.FieldID, field.TypeString),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedExitRulesIDs(); len(nodes) > 0 && !_u.mutation.ExitRulesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.ExitRulesTable,
+			Columns: []string{user.ExitRulesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(exitrule.FieldID, field.TypeString),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.ExitRulesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.ExitRulesTable,
+			Columns: []string{user.ExitRulesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(exitrule.FieldID, field.TypeString),
 			},
 		}
 		for _, k := range nodes {
@@ -691,6 +773,21 @@ func (_u *UserUpdateOne) AddServers(v ...*TailServer) *UserUpdateOne {
 	return _u.AddServerIDs(ids...)
 }
 
+// AddExitRuleIDs adds the "exit_rules" edge to the ExitRule entity by IDs.
+func (_u *UserUpdateOne) AddExitRuleIDs(ids ...string) *UserUpdateOne {
+	_u.mutation.AddExitRuleIDs(ids...)
+	return _u
+}
+
+// AddExitRules adds the "exit_rules" edges to the ExitRule entity.
+func (_u *UserUpdateOne) AddExitRules(v ...*ExitRule) *UserUpdateOne {
+	ids := make([]string, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddExitRuleIDs(ids...)
+}
+
 // AddClientIDs adds the "clients" edge to the TailClient entity by IDs.
 func (_u *UserUpdateOne) AddClientIDs(ids ...string) *UserUpdateOne {
 	_u.mutation.AddClientIDs(ids...)
@@ -781,6 +878,27 @@ func (_u *UserUpdateOne) RemoveServers(v ...*TailServer) *UserUpdateOne {
 		ids[i] = v[i].ID
 	}
 	return _u.RemoveServerIDs(ids...)
+}
+
+// ClearExitRules clears all "exit_rules" edges to the ExitRule entity.
+func (_u *UserUpdateOne) ClearExitRules() *UserUpdateOne {
+	_u.mutation.ClearExitRules()
+	return _u
+}
+
+// RemoveExitRuleIDs removes the "exit_rules" edge to ExitRule entities by IDs.
+func (_u *UserUpdateOne) RemoveExitRuleIDs(ids ...string) *UserUpdateOne {
+	_u.mutation.RemoveExitRuleIDs(ids...)
+	return _u
+}
+
+// RemoveExitRules removes "exit_rules" edges to ExitRule entities.
+func (_u *UserUpdateOne) RemoveExitRules(v ...*ExitRule) *UserUpdateOne {
+	ids := make([]string, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveExitRuleIDs(ids...)
 }
 
 // ClearClients clears all "clients" edges to the TailClient entity.
@@ -1025,6 +1143,51 @@ func (_u *UserUpdateOne) sqlSave(ctx context.Context) (_node *User, err error) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(tailserver.FieldID, field.TypeString),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.ExitRulesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.ExitRulesTable,
+			Columns: []string{user.ExitRulesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(exitrule.FieldID, field.TypeString),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedExitRulesIDs(); len(nodes) > 0 && !_u.mutation.ExitRulesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.ExitRulesTable,
+			Columns: []string{user.ExitRulesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(exitrule.FieldID, field.TypeString),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.ExitRulesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.ExitRulesTable,
+			Columns: []string{user.ExitRulesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(exitrule.FieldID, field.TypeString),
 			},
 		}
 		for _, k := range nodes {

@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/netip"
 	"reflect"
 	"sync"
 	"testing"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/ca-x/tailcat-webui/ent"
 	"github.com/ca-x/tailcat-webui/ent/enttest"
+	"github.com/ca-x/tailcat-webui/ent/exitrule"
 	"github.com/ca-x/tailcat-webui/ent/tailserver"
 	"github.com/ca-x/tailcat-webui/internal/secrets"
 
@@ -307,6 +309,144 @@ func TestManagerStopDeleteOrderingUsesRuntimeFactory(t *testing.T) {
 	}
 	if db.TailServer.Query().Where(tailserver.IDEQ(server.ID)).ExistX(t.Context()) {
 		t.Fatal("server row still exists after delete")
+	}
+}
+
+func TestManagerExitPolicyIntersectsDeploymentAndOwnerRules(t *testing.T) {
+	runtime := &fakeServerRuntime{token: "fake-token", public: "nodekey:fake-server"}
+	factory := &fakeRuntimeFactory{server: runtime}
+	manager, db, ownerID := newRuntimeFactoryTestManager(t, factory)
+	manager.exitPolicy = NewTargetPolicy([]TargetRule{{Prefix: netip.MustParsePrefix("10.0.0.0/8"), Ports: []PortRange{{Start: 443, End: 443}}}})
+	server := db.TailServer.Create().SetUserID(ownerID).SetName("exit-intersection").SetRegion("tailcat.dev").SetExitNodeEnabled(true).SaveX(t.Context())
+	db.ExitRule.Create().SetUserID(ownerID).SetServerID(server.ID).SetPrefix("10.1.0.0/16").SetStartPort(400).SetEndPort(500).SaveX(t.Context())
+
+	if _, err := manager.StartServer(t.Context(), ownerID, server.ID); err != nil {
+		t.Fatalf("StartServer: %v", err)
+	}
+	allow := factory.serverSpecs[0].AllowProxy
+	if allow == nil {
+		t.Fatal("exit-node AllowProxy predicate is nil")
+	}
+	for target, want := range map[string]bool{
+		"10.1.2.3:443": true,
+		"10.2.2.3:443": false,
+		"10.1.2.3:80":  false,
+	} {
+		if got := allow(netip.MustParseAddrPort(target)); got != want {
+			t.Errorf("AllowProxy(%s) = %t, want %t", target, got, want)
+		}
+	}
+	if factory.serverSpecs[0].ForwardTCPHandler(netip.MustParseAddrPort("10.2.2.3:443")) != nil {
+		t.Fatal("OnTCPForward handler accepted a target outside owner rules")
+	}
+}
+
+func TestManagerExitPolicyWithNoEnabledOwnerRulesDeniesAll(t *testing.T) {
+	runtime := &fakeServerRuntime{token: "fake-token", public: "nodekey:fake-server"}
+	factory := &fakeRuntimeFactory{server: runtime}
+	manager, db, ownerID := newRuntimeFactoryTestManager(t, factory)
+	manager.exitPolicy = NewTargetPolicy([]TargetRule{{Prefix: netip.MustParsePrefix("10.0.0.0/8"), Ports: []PortRange{{Start: 443, End: 443}}}})
+	server := db.TailServer.Create().SetUserID(ownerID).SetName("exit-empty").SetRegion("tailcat.dev").SetExitNodeEnabled(true).SaveX(t.Context())
+	db.ExitRule.Create().SetUserID(ownerID).SetServerID(server.ID).SetPrefix("10.0.0.0/8").SetStartPort(443).SetEndPort(443).SetEnabled(false).SaveX(t.Context())
+
+	if _, err := manager.StartServer(t.Context(), ownerID, server.ID); err != nil {
+		t.Fatalf("StartServer: %v", err)
+	}
+	target := netip.MustParseAddrPort("10.1.2.3:443")
+	if factory.serverSpecs[0].AllowProxy(target) {
+		t.Fatal("empty enabled owner rules allowed proxy traffic")
+	}
+	if factory.serverSpecs[0].ForwardTCPHandler(target) != nil {
+		t.Fatal("empty enabled owner rules installed a TCP forward handler")
+	}
+	if _, err := manager.SetExitNodeEnabled(t.Context(), ownerID, server.ID, true); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("enable request with no enabled owner rules error = %v, want %v", err, ErrInvalid)
+	}
+}
+
+func TestManagerExitNodeEnableRequiresRuleAndStopsBeforePersist(t *testing.T) {
+	runtime := &fakeServerRuntime{token: "fake-token", public: "nodekey:fake-server"}
+	factory := &fakeRuntimeFactory{server: runtime}
+	manager, db, ownerID := newRuntimeFactoryTestManager(t, factory)
+	server := db.TailServer.Create().SetUserID(ownerID).SetName("exit-enable").SetRegion("tailcat.dev").SaveX(t.Context())
+
+	if _, err := manager.SetExitNodeEnabled(t.Context(), ownerID, server.ID, true); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("enable without rules error = %v, want %v", err, ErrInvalid)
+	}
+	disabledRule := db.ExitRule.Create().SetUserID(ownerID).SetServerID(server.ID).SetPrefix("10.0.0.0/8").SetStartPort(443).SetEndPort(443).SetEnabled(false).SaveX(t.Context())
+	if _, err := manager.SetExitNodeEnabled(t.Context(), ownerID, server.ID, true); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("enable with only disabled rule error = %v, want %v", err, ErrInvalid)
+	}
+	db.ExitRule.UpdateOne(disabledRule).SetEnabled(true).ExecX(t.Context())
+	if _, err := manager.StartServer(t.Context(), ownerID, server.ID); err != nil {
+		t.Fatalf("StartServer: %v", err)
+	}
+	runtime.onClose = func() {
+		if db.TailServer.GetX(t.Context(), server.ID).ExitNodeEnabled {
+			t.Error("exit-node state persisted before runtime close")
+		}
+	}
+	view, err := manager.SetExitNodeEnabled(t.Context(), ownerID, server.ID, true)
+	if err != nil {
+		t.Fatalf("SetExitNodeEnabled: %v", err)
+	}
+	if !view.ExitNodeEnabled || view.DesiredRunning || manager.isServerRunning(server.ID) {
+		t.Fatalf("enabled server view = %+v, running=%t", view, manager.isServerRunning(server.ID))
+	}
+	if got, want := runtime.events, []string{"start", "drain", "close"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("runtime events = %v, want %v", got, want)
+	}
+}
+
+func TestManagerCreateServerCannotEnableExitNode(t *testing.T) {
+	manager, db, ownerID := newRuntimeFactoryTestManager(t, &fakeRuntimeFactory{})
+	_, err := manager.CreateServer(t.Context(), ownerID, CreateServerInput{Name: "invalid-exit", KeyMode: "ephemeral", Region: "tailcat.dev", ExitNodeEnabled: true})
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("CreateServer error = %v, want %v", err, ErrInvalid)
+	}
+	if got := db.TailServer.Query().CountX(t.Context()); got != 0 {
+		t.Fatalf("servers after invalid create = %d, want 0", got)
+	}
+}
+
+func TestManagerExitRuleCreateStopsRuntimeBeforePersistence(t *testing.T) {
+	runtime := &fakeServerRuntime{token: "fake-token", public: "nodekey:fake-server"}
+	manager, db, ownerID := newRuntimeFactoryTestManager(t, &fakeRuntimeFactory{server: runtime})
+	server := db.TailServer.Create().SetUserID(ownerID).SetName("exit-create-order").SetRegion("tailcat.dev").SaveX(t.Context())
+	if _, err := manager.StartServer(t.Context(), ownerID, server.ID); err != nil {
+		t.Fatalf("StartServer: %v", err)
+	}
+	runtime.onClose = func() {
+		if got := db.ExitRule.Query().CountX(t.Context()); got != 0 {
+			t.Errorf("exit rules at runtime close = %d, want 0", got)
+		}
+	}
+	if _, err := manager.CreateExitRule(t.Context(), ownerID, server.ID, CreateExitRuleInput{Prefix: "10.0.0.0/8", StartPort: 443, EndPort: 443, Enabled: true}); err != nil {
+		t.Fatalf("CreateExitRule: %v", err)
+	}
+	if manager.isServerRunning(server.ID) || db.TailServer.GetX(t.Context(), server.ID).DesiredRunning {
+		t.Fatal("rule creation left the server running")
+	}
+}
+
+func TestManagerExitRuleDeleteStopsRuntimeBeforeRevocation(t *testing.T) {
+	runtime := &fakeServerRuntime{token: "fake-token", public: "nodekey:fake-server"}
+	manager, db, ownerID := newRuntimeFactoryTestManager(t, &fakeRuntimeFactory{server: runtime})
+	server := db.TailServer.Create().SetUserID(ownerID).SetName("exit-delete-order").SetRegion("tailcat.dev").SetExitNodeEnabled(true).SaveX(t.Context())
+	rule := db.ExitRule.Create().SetUserID(ownerID).SetServerID(server.ID).SetPrefix("10.0.0.0/8").SetStartPort(443).SetEndPort(443).SaveX(t.Context())
+	if _, err := manager.StartServer(t.Context(), ownerID, server.ID); err != nil {
+		t.Fatalf("StartServer: %v", err)
+	}
+	runtime.onClose = func() {
+		if !db.ExitRule.Query().Where(exitrule.IDEQ(rule.ID)).ExistX(t.Context()) {
+			t.Error("exit rule revoked before runtime close")
+		}
+	}
+	if err := manager.DeleteExitRule(t.Context(), ownerID, rule.ID); err != nil {
+		t.Fatalf("DeleteExitRule: %v", err)
+	}
+	if db.ExitRule.Query().Where(exitrule.IDEQ(rule.ID)).ExistX(t.Context()) {
+		t.Fatal("exit rule still exists after deletion")
 	}
 }
 

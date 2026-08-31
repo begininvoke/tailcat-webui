@@ -11,6 +11,7 @@ import (
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
 	"github.com/ca-x/tailcat-webui/ent/allowedclient"
+	"github.com/ca-x/tailcat-webui/ent/exitrule"
 	"github.com/ca-x/tailcat-webui/ent/portmapping"
 	"github.com/ca-x/tailcat-webui/ent/tailserver"
 	"github.com/ca-x/tailcat-webui/ent/user"
@@ -206,6 +207,21 @@ func (_c *TailServerCreate) AddAllowedClients(v ...*AllowedClient) *TailServerCr
 		ids[i] = v[i].ID
 	}
 	return _c.AddAllowedClientIDs(ids...)
+}
+
+// AddExitRuleIDs adds the "exit_rules" edge to the ExitRule entity by IDs.
+func (_c *TailServerCreate) AddExitRuleIDs(ids ...string) *TailServerCreate {
+	_c.mutation.AddExitRuleIDs(ids...)
+	return _c
+}
+
+// AddExitRules adds the "exit_rules" edges to the ExitRule entity.
+func (_c *TailServerCreate) AddExitRules(v ...*ExitRule) *TailServerCreate {
+	ids := make([]string, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _c.AddExitRuleIDs(ids...)
 }
 
 // Mutation returns the TailServerMutation object of the builder.
@@ -436,6 +452,22 @@ func (_c *TailServerCreate) createSpec() (*TailServer, *sqlgraph.CreateSpec) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(allowedclient.FieldID, field.TypeString),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges = append(_spec.Edges, edge)
+	}
+	if nodes := _c.mutation.ExitRulesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   tailserver.ExitRulesTable,
+			Columns: []string{tailserver.ExitRulesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(exitrule.FieldID, field.TypeString),
 			},
 		}
 		for _, k := range nodes {
