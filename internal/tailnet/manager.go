@@ -25,7 +25,6 @@ import (
 	"github.com/tailscale/tailcat"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
-	"tailscale.com/wgengine/filter"
 )
 
 var (
@@ -143,21 +142,15 @@ type CreateMappingInput struct {
 }
 
 type runningServer struct {
-	server      *tailcat.Server
-	userID      string
-	startedAt   time.Time
-	token       string
-	publicKey   string
-	ctx         context.Context
-	cancel      context.CancelFunc
-	admissionMu sync.Mutex
-	stopping    bool
-	handlers    sync.WaitGroup
-	connections map[net.Conn]struct{}
+	server    ServerRuntime
+	userID    string
+	startedAt time.Time
+	token     string
+	publicKey string
 }
 
 type runningClient struct {
-	client *tailcat.Client
+	client ClientRuntime
 	userID string
 	state  RuntimePhase
 }
@@ -167,55 +160,8 @@ type operationLock struct {
 	refs int
 }
 
-func newRunningServer(server *tailcat.Server) *runningServer {
-	ctx, cancel := context.WithCancel(context.Background())
-	return &runningServer{server: server, ctx: ctx, cancel: cancel, connections: make(map[net.Conn]struct{})}
-}
-
-func (r *runningServer) serve(connection net.Conn, handler func(context.Context, net.Conn)) {
-	r.admissionMu.Lock()
-	if r.stopping {
-		r.admissionMu.Unlock()
-		_ = connection.Close()
-		return
-	}
-	r.handlers.Add(1)
-	r.connections[connection] = struct{}{}
-	r.admissionMu.Unlock()
-	defer func() {
-		r.admissionMu.Lock()
-		delete(r.connections, connection)
-		r.admissionMu.Unlock()
-		r.handlers.Done()
-	}()
-	handler(r.ctx, connection)
-}
-
 func (r *runningServer) shutdown(ctx context.Context) error {
-	r.admissionMu.Lock()
-	r.stopping = true
-	r.cancel()
-	connections := make([]net.Conn, 0, len(r.connections))
-	for connection := range r.connections {
-		connections = append(connections, connection)
-	}
-	r.admissionMu.Unlock()
-	for _, connection := range connections {
-		_ = connection.Close()
-	}
-	done := make(chan struct{})
-	go func() {
-		r.handlers.Wait()
-		close(done)
-	}()
-	var waitErr error
-	select {
-	case <-done:
-	case <-ctx.Done():
-		waitErr = ctx.Err()
-	}
-	drainErr := r.server.DrainTCP(ctx)
-	return errors.Join(waitErr, drainErr, r.server.Close())
+	return errors.Join(r.server.DrainTCP(ctx), r.server.Close())
 }
 
 type Manager struct {
@@ -225,6 +171,7 @@ type Manager struct {
 	exitPolicy       *TargetPolicy
 	allowedDERPHosts map[string]struct{}
 	unsafeSSH        bool
+	runtimeFactory   RuntimeFactory
 	recordEvent      EventRecorder
 	logger           *slog.Logger
 	eventsMu         sync.Mutex
@@ -240,9 +187,16 @@ type Manager struct {
 	clients          map[string]*runningClient
 }
 
-func NewManager(db *ent.Client, box *secrets.Box, mappingPolicy, exitPolicy *TargetPolicy, allowedDERPHosts []string, unsafeSSH bool, recorder EventRecorder, logger *slog.Logger) (*Manager, error) {
+func NewManager(db *ent.Client, box *secrets.Box, mappingPolicy, exitPolicy *TargetPolicy, allowedDERPHosts []string, unsafeSSH bool, recorder EventRecorder, logger *slog.Logger, factories ...RuntimeFactory) (*Manager, error) {
 	if db == nil || box == nil || mappingPolicy == nil || exitPolicy == nil {
 		return nil, errors.New("tailnet manager: nil dependency")
+	}
+	if len(factories) > 1 || len(factories) == 1 && factories[0] == nil {
+		return nil, errors.New("tailnet manager: invalid runtime factory")
+	}
+	runtimeFactory := RuntimeFactory(tailcatRuntimeFactory{})
+	if len(factories) == 1 {
+		runtimeFactory = factories[0]
 	}
 	allowedHosts := map[string]struct{}{"tailcat.dev": {}}
 	for _, host := range allowedDERPHosts {
@@ -254,6 +208,7 @@ func NewManager(db *ent.Client, box *secrets.Box, mappingPolicy, exitPolicy *Tar
 		db: db, box: box, mappingPolicy: mappingPolicy, exitPolicy: exitPolicy, logger: logger,
 		allowedDERPHosts: allowedHosts,
 		unsafeSSH:        unsafeSSH,
+		runtimeFactory:   runtimeFactory,
 		recordEvent:      recorder,
 		userEvents:       make(map[string]*events.Broker[events.Envelope]),
 		eventSequences:   make(map[string]uint64),
@@ -461,27 +416,22 @@ func (m *Manager) StartServer(ctx context.Context, userID, id string) (ServerVie
 	if err != nil {
 		return ServerView{}, fmt.Errorf("load Tailcat server: %w", err)
 	}
-	runtime, err := m.buildServer(ctx, row)
+	serverRuntime, err := m.buildServer(ctx, row)
 	if err != nil {
 		return ServerView{}, err
 	}
-	if err := runtime.server.Start(); err != nil {
-		runtime.cancel()
-		_ = runtime.server.Close()
+	if err := serverRuntime.Start(); err != nil {
+		_ = serverRuntime.Close()
 		return ServerView{}, fmt.Errorf("start Tailcat server: %w", err)
 	}
-	runtime.startedAt = time.Now()
-	runtime.token = string(runtime.server.ConnBlob())
-	connInfo, err := tailcat.ParseConnBlob(tailcat.ConnBlob(runtime.token))
-	if err != nil {
-		runtime.cancel()
-		runtime.server.Close()
-		return ServerView{}, fmt.Errorf("parse started Tailcat server token: %w", err)
+	runtime := &runningServer{
+		server:    serverRuntime,
+		startedAt: time.Now(),
+		token:     serverRuntime.ConnectionToken(),
+		publicKey: serverRuntime.PublicKey(),
 	}
-	runtime.publicKey = connInfo.ServerPublic.String()
 	if err := row.Update().SetDesiredRunning(true).Exec(ctx); err != nil {
-		runtime.cancel()
-		runtime.server.Close()
+		_ = serverRuntime.Close()
 		return ServerView{}, fmt.Errorf("persist desired server state: %w", err)
 	}
 	runtime.userID = userID
@@ -791,7 +741,7 @@ func (m *Manager) ListClients(ctx context.Context, userID string) ([]ClientView,
 		m.mu.RUnlock()
 		if runtime != nil {
 			view.RuntimeState = runtime.state
-			view.PublicKey = runtime.client.PublicKey().String()
+			view.PublicKey = runtime.client.PublicKey()
 		}
 		views = append(views, view)
 	}
@@ -903,7 +853,7 @@ func (m *Manager) PingClient(ctx context.Context, userID, id string) (ClientView
 	view := clientView(row)
 	m.setClientState(id, RuntimePhaseReady)
 	view.RuntimeState = RuntimePhaseReady
-	view.PublicKey = client.PublicKey().String()
+	view.PublicKey = client.PublicKey()
 	m.publish(userID, "client", id, RuntimePhaseReady, path)
 	return view, nil
 }
@@ -966,18 +916,22 @@ func (m *Manager) ResolveToken(ctx context.Context, raw string) (string, error) 
 	return string(resolved), nil
 }
 
-func (m *Manager) buildServer(ctx context.Context, row *ent.TailServer) (*runningServer, error) {
+func (m *Manager) buildServer(ctx context.Context, row *ent.TailServer) (ServerRuntime, error) {
 	if err := m.validateDERPConfig(row.Region, row.DerpMapURL); err != nil {
 		return nil, err
 	}
-	srv := &tailcat.Server{DERPMapURL: row.DerpMapURL}
-	runtime := newRunningServer(srv)
+	spec := ServerSpec{
+		DERPMapURL:          row.DerpMapURL,
+		TCPHandlers:         make(map[uint16]TCPHandler),
+		ReservedTCPHandlers: make(map[uint16]TCPHandler),
+		NoAuthSSHPorts:      make(map[uint16]struct{}),
+	}
 	if row.KeyMode == tailserver.KeyModeSaved {
 		plaintext, err := m.box.Open(row.KeyCipher, secretAD(row.UserID, row.ID))
 		if err != nil {
 			return nil, err
 		}
-		if err := srv.Key.UnmarshalText(plaintext); err != nil {
+		if err := spec.Key.UnmarshalText(plaintext); err != nil {
 			return nil, fmt.Errorf("decode Tailcat server key: %w", err)
 		}
 	}
@@ -990,50 +944,28 @@ func (m *Manager) buildServer(ctx context.Context, row *ent.TailServer) (*runnin
 			return nil, err
 		}
 	}
-	srv.Region, srv.RegionID = region, regionID
+	spec.Region, spec.RegionID = region, regionID
 	for _, allowed := range row.Edges.AllowedClients {
 		var public key.NodePublic
 		if err := public.UnmarshalText([]byte(allowed.PublicKey)); err != nil {
 			return nil, fmt.Errorf("decode allowed client %s: %w", allowed.ID, err)
 		}
-		srv.AllowedClients = append(srv.AllowedClients, public)
+		spec.AllowedClients = append(spec.AllowedClients, public)
 	}
-	if row.AllowlistEnabled && len(srv.AllowedClients) == 0 {
+	if row.AllowlistEnabled && len(spec.AllowedClients) == 0 {
 		// Tailcat treats an empty slice as allow-all. A persisted enabled
 		// allowlist with no entries must instead fail closed.
-		srv.AllowedClients = append(srv.AllowedClients, key.NewNode().Public())
+		spec.AllowedClients = append(spec.AllowedClients, key.NewNode().Public())
 	}
-	mappings := make(map[uint16]*ent.PortMapping, len(row.Edges.Mappings))
 	for _, mapping := range row.Edges.Mappings {
 		if mapping.Kind == portmapping.KindNoAuthSSH && (!m.unsafeSSH || !row.AllowlistEnabled || len(row.Edges.AllowedClients) == 0) {
 			return nil, errors.New("auth-free SSH is disabled outside loopback demo mode")
 		}
-		mappings[mapping.ListenPort] = mapping
-		srv.ServedTCPPorts = append(srv.ServedTCPPorts, filter.PortRange{First: mapping.ListenPort, Last: mapping.ListenPort})
-	}
-	mappingSlots := make(chan struct{}, 128)
-	withMappingSlot := func(handler func(context.Context, net.Conn)) func(net.Conn) {
-		return func(connection net.Conn) {
-			runtime.serve(connection, func(runtimeCtx context.Context, tracked net.Conn) {
-				select {
-				case mappingSlots <- struct{}{}:
-					defer func() { <-mappingSlots }()
-					handler(runtimeCtx, tracked)
-				default:
-					_ = tracked.Close()
-				}
-			})
-		}
-	}
-	srv.OnTCP = func(port uint16) func(net.Conn) {
-		mapping := mappings[port]
-		if mapping == nil {
-			return nil
-		}
 		if mapping.Kind == portmapping.KindNoAuthSSH {
-			return withMappingSlot(func(_ context.Context, connection net.Conn) { srv.HandleTailscaleSSHConn(connection) })
+			spec.NoAuthSSHPorts[mapping.ListenPort] = struct{}{}
+			continue
 		}
-		return withMappingSlot(func(runtimeCtx context.Context, inbound net.Conn) {
+		spec.TCPHandlers[mapping.ListenPort] = func(runtimeCtx context.Context, inbound net.Conn) {
 			dialCtx, cancel := context.WithTimeout(runtimeCtx, 10*time.Second)
 			defer cancel()
 			target, err := m.mappingPolicy.Resolve(dialCtx, mapping.TargetHost, mapping.TargetPort)
@@ -1049,43 +981,37 @@ func (m *Manager) buildServer(ctx context.Context, row *ent.TailServer) (*runnin
 				return
 			}
 			proxyConnectionsContext(runtimeCtx, inbound, outbound)
-		})
+		}
 	}
 	if row.ExitNodeEnabled {
-		exitSlots := make(chan struct{}, 64)
-		srv.AllowProxy = func(target netip.AddrPort) bool { return m.exitPolicy.AllowAddr(target.Addr()) }
-		srv.OnTCPForward = func(target netip.AddrPort) func(net.Conn) {
+		spec.AllowProxy = func(target netip.AddrPort) bool { return m.exitPolicy.AllowAddr(target.Addr()) }
+		spec.ForwardTCPHandler = func(target netip.AddrPort) TCPHandler {
 			if !m.exitPolicy.AllowAddr(target.Addr()) {
 				return nil
 			}
-			return func(inbound net.Conn) {
-				runtime.serve(inbound, func(runtimeCtx context.Context, tracked net.Conn) {
-					select {
-					case exitSlots <- struct{}{}:
-						defer func() { <-exitSlots }()
-					default:
-						_ = tracked.Close()
-						return
-					}
-					dialCtx, cancel := context.WithTimeout(runtimeCtx, 10*time.Second)
-					defer cancel()
-					outbound, err := (&net.Dialer{}).DialContext(dialCtx, "tcp", target.String())
-					if err != nil {
-						_ = tracked.Close()
-						return
-					}
-					proxyConnectionsContext(runtimeCtx, tracked, outbound)
-				})
+			return func(runtimeCtx context.Context, tracked net.Conn) {
+				dialCtx, cancel := context.WithTimeout(runtimeCtx, 10*time.Second)
+				defer cancel()
+				outbound, err := (&net.Dialer{}).DialContext(dialCtx, "tcp", target.String())
+				if err != nil {
+					_ = tracked.Close()
+					return
+				}
+				proxyConnectionsContext(runtimeCtx, tracked, outbound)
 			}
 		}
 	}
-	srv.Logf = func(format string, args ...any) {
+	spec.Logf = func(format string, args ...any) {
 		m.logger.Debug("Tailcat runtime", "server_id", row.ID, "message", fmt.Sprintf(format, args...))
+	}
+	runtime, err := m.runtimeFactory.NewServer(ctx, spec)
+	if err != nil {
+		return nil, fmt.Errorf("create Tailcat server runtime: %w", err)
 	}
 	return runtime, nil
 }
 
-func (m *Manager) client(ctx context.Context, userID, id string) (*tailcat.Client, *ent.TailClient, error) {
+func (m *Manager) client(ctx context.Context, userID, id string) (ClientRuntime, *ent.TailClient, error) {
 	unlock := m.lockClientOperation(id)
 	defer unlock()
 	row, err := m.db.TailClient.Query().Where(tailclient.IDEQ(id), tailclient.UserIDEQ(userID)).Only(ctx)
@@ -1108,21 +1034,25 @@ func (m *Manager) client(ctx context.Context, userID, id string) (*tailcat.Clien
 	if err != nil {
 		return nil, nil, err
 	}
-	client := &tailcat.Client{Server: tailcat.ConnBlob(serverToken), DERPMapURL: row.DerpMapURL}
 	if err := m.validateTokenDERP(tailcat.ConnBlob(serverToken)); err != nil {
 		return nil, nil, err
 	}
+	spec := ClientSpec{ConnectionToken: string(serverToken), DERPMapURL: row.DerpMapURL}
 	if len(row.KeyCipher) > 0 {
 		plaintext, err := m.box.Open(row.KeyCipher, secretAD(userID, id))
 		if err != nil {
 			return nil, nil, err
 		}
-		if err := client.Key.UnmarshalText(plaintext); err != nil {
+		if err := spec.Key.UnmarshalText(plaintext); err != nil {
 			return nil, nil, fmt.Errorf("decode Tailcat client key: %w", err)
 		}
 	}
-	client.Logf = func(format string, args ...any) {
+	spec.Logf = func(format string, args ...any) {
 		m.logger.Debug("Tailcat runtime", "client_id", id, "message", fmt.Sprintf(format, args...))
+	}
+	client, err := m.runtimeFactory.NewClient(ctx, spec)
+	if err != nil {
+		return nil, nil, fmt.Errorf("create Tailcat client runtime: %w", err)
 	}
 	m.mu.Lock()
 	if existing := m.clients[id]; existing != nil {
