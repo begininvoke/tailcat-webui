@@ -3,6 +3,7 @@ package publish
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -12,6 +13,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -21,6 +23,8 @@ import (
 
 	_ "github.com/lib-x/entsqlite"
 )
+
+var registryTestDatabaseID atomic.Uint64
 
 func TestTransportRegistryReusesConnectionWithinRoute(t *testing.T) {
 	dialer := newRegistryTestDialer()
@@ -186,6 +190,66 @@ func TestTransportRegistryCloseInvalidatesIdleConnections(t *testing.T) {
 	}
 }
 
+func TestServiceCloseDrainsActiveUpgradeBeforeReturning(t *testing.T) {
+	db := enttest.Open(t, "sqlite3", registryTestDatabaseDSN("transport-close-upgrade"))
+	owner := db.User.Create().SetIssuer("test").SetSubject("owner").SaveX(t.Context())
+	client := db.TailClient.Create().SetUserID(owner.ID).SetName("client").SetServerTokenCipher([]byte("cipher")).SetTokenHint("tc…").SaveX(t.Context())
+	route := db.PublishedRoute.Create().SetUserID(owner.ID).SetClientID(client.ID).SetName("route").SetSlug("route-a").SetRemotePort(8080).SetAccess(publishedroute.AccessPublic).SaveX(t.Context())
+	dialer := &registryUpgradeDialer{upgraded: make(chan struct{}), exited: make(chan struct{})}
+	service := newRegistryTestService(t, db, dialer)
+	proxyDone := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		service.Proxy(w, request, route.Slug, "", "192.0.2.10")
+		close(proxyDone)
+	}))
+	t.Cleanup(server.Close)
+	frontend, err := net.Dial("tcp", server.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = frontend.Close() })
+	_, err = fmt.Fprintf(frontend, "GET / HTTP/1.1\r\nHost: %s\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n", service.routeURL(route).Host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := http.ReadResponse(bufio.NewReader(frontend), &http.Request{Method: http.MethodGet})
+	if err != nil {
+		t.Fatalf("read upgrade response: %v", err)
+	}
+	if response.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("upgrade status = %d, want %d", response.StatusCode, http.StatusSwitchingProtocols)
+	}
+	select {
+	case <-dialer.upgraded:
+	case <-time.After(time.Second):
+		t.Fatal("upstream upgrade did not become active")
+	}
+
+	closeDone := make(chan struct{})
+	go func() {
+		service.Close()
+		close(closeDone)
+	}()
+	select {
+	case <-closeDone:
+	case <-time.After(time.Second):
+		t.Fatal("Service.Close did not drain active upgrade")
+	}
+	select {
+	case <-proxyDone:
+	default:
+		t.Fatal("Service.Close returned before active upgrade work exited")
+	}
+	select {
+	case <-dialer.exited:
+	default:
+		t.Fatal("Service.Close returned before upstream upgrade exited")
+	}
+	if _, _, ok := service.acquire(t.Context(), owner.ID, client.ID, route.ID, "192.0.2.11"); ok {
+		t.Fatal("closed service admitted new published work")
+	}
+}
+
 func TestRouteDeleteInvalidatesRuntimeBeforeDurableDeletion(t *testing.T) {
 	db := enttest.Open(t, "sqlite3", "file:transport-delete?mode=memory&cache=shared&_pragma=foreign_keys(1)")
 	owner := db.User.Create().SetIssuer("test").SetSubject("owner").SaveX(t.Context())
@@ -297,6 +361,110 @@ func TestClientInvalidationCancelsAllOwnedRouteWork(t *testing.T) {
 	}
 }
 
+func TestRouteDeleteTombstoneSurvivesFailedClientInvalidationOverlap(t *testing.T) {
+	db, owner, client, route, service := newRouteInvalidationTest(t, "failed-client-overlap")
+	deleteStarted := make(chan struct{})
+	allowDelete := make(chan struct{})
+	allowDeleteOnce := sync.OnceFunc(func() { close(allowDelete) })
+	t.Cleanup(allowDeleteOnce)
+	db.PublishedRoute.Use(func(next ent.Mutator) ent.Mutator {
+		return ent.MutateFunc(func(ctx context.Context, mutation ent.Mutation) (ent.Value, error) {
+			if mutation.Op() == ent.OpDelete {
+				close(deleteStarted)
+				select {
+				case <-allowDelete:
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+			}
+			return next.Mutate(ctx, mutation)
+		})
+	})
+	deleteResult := make(chan error, 1)
+	go func() { deleteResult <- service.Delete(t.Context(), owner.ID, route.ID) }()
+	select {
+	case <-deleteStarted:
+	case <-time.After(time.Second):
+		t.Fatal("route delete did not reach durable barrier")
+	}
+	if err := service.InvalidateClient(t.Context(), owner.ID, client.ID); err != nil {
+		t.Fatalf("InvalidateClient: %v", err)
+	}
+	service.CompleteClientInvalidation(owner.ID, client.ID)
+	if _, release, ok := service.acquire(t.Context(), owner.ID, client.ID, route.ID, "192.0.2.20"); ok {
+		release()
+		t.Fatal("failed client invalidation cleared an overlapping route-delete tombstone")
+	}
+	allowDeleteOnce()
+	if err := <-deleteResult; err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+}
+
+func TestConcurrentRouteDeleteFailureKeepsOtherTombstone(t *testing.T) {
+	db, owner, client, route, service := newRouteInvalidationTest(t, "concurrent-route-delete")
+	firstStarted := make(chan struct{})
+	allowFirst := make(chan struct{})
+	allowFirstOnce := sync.OnceFunc(func() { close(allowFirst) })
+	t.Cleanup(allowFirstOnce)
+	db.PublishedRoute.Use(func(next ent.Mutator) ent.Mutator {
+		return ent.MutateFunc(func(ctx context.Context, mutation ent.Mutation) (ent.Value, error) {
+			if mutation.Op() != ent.OpDelete {
+				return next.Mutate(ctx, mutation)
+			}
+			switch ctx.Value(routeDeleteTestKey{}) {
+			case "first":
+				close(firstStarted)
+				select {
+				case <-allowFirst:
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+				return next.Mutate(ctx, mutation)
+			case "second":
+				return nil, context.Canceled
+			default:
+				return next.Mutate(ctx, mutation)
+			}
+		})
+	})
+	firstResult := make(chan error, 1)
+	firstCtx := context.WithValue(t.Context(), routeDeleteTestKey{}, "first")
+	go func() { firstResult <- service.Delete(firstCtx, owner.ID, route.ID) }()
+	select {
+	case <-firstStarted:
+	case <-time.After(time.Second):
+		t.Fatal("first route delete did not reach durable barrier")
+	}
+	secondCtx := context.WithValue(t.Context(), routeDeleteTestKey{}, "second")
+	if err := service.Delete(secondCtx, owner.ID, route.ID); !errors.Is(err, context.Canceled) {
+		t.Fatalf("second Delete error = %v, want context canceled", err)
+	}
+	if _, release, ok := service.acquire(t.Context(), owner.ID, client.ID, route.ID, "192.0.2.21"); ok {
+		release()
+		t.Fatal("failed concurrent route delete cleared the first delete tombstone")
+	}
+	allowFirstOnce()
+	if err := <-firstResult; err != nil {
+		t.Fatalf("first Delete: %v", err)
+	}
+}
+
+type routeDeleteTestKey struct{}
+
+func newRouteInvalidationTest(t *testing.T, databaseName string) (*ent.Client, *ent.User, *ent.TailClient, *ent.PublishedRoute, *Service) {
+	t.Helper()
+	db := enttest.Open(t, "sqlite3", registryTestDatabaseDSN(databaseName))
+	owner := db.User.Create().SetIssuer("test").SetSubject("owner").SaveX(t.Context())
+	client := db.TailClient.Create().SetUserID(owner.ID).SetName("client").SetServerTokenCipher([]byte("cipher")).SetTokenHint("tc…").SaveX(t.Context())
+	route := db.PublishedRoute.Create().SetUserID(owner.ID).SetClientID(client.ID).SetName("route").SetSlug("route-a").SetRemotePort(8080).SetAccess(publishedroute.AccessPublic).SaveX(t.Context())
+	return db, owner, client, route, newRegistryTestService(t, db, newRegistryTestDialer())
+}
+
+func registryTestDatabaseDSN(name string) string {
+	return fmt.Sprintf("file:%s-%d?mode=memory&cache=shared&_pragma=foreign_keys(1)", name, registryTestDatabaseID.Add(1))
+}
+
 func newRegistryTestService(t *testing.T, db *ent.Client, dialer PortDialer) *Service {
 	t.Helper()
 	managementURL, _ := url.Parse("https://manage.example.test")
@@ -386,6 +554,31 @@ type registryDialKey struct {
 	ownerID  string
 	clientID string
 	port     uint16
+}
+
+type registryUpgradeDialer struct {
+	upgraded chan struct{}
+	exited   chan struct{}
+}
+
+func (d *registryUpgradeDialer) DialPort(context.Context, string, string, uint16) (net.Conn, error) {
+	client, server := net.Pipe()
+	go func() {
+		defer close(d.exited)
+		defer server.Close()
+		request, err := http.ReadRequest(bufio.NewReader(server))
+		if err != nil {
+			return
+		}
+		_ = request.Body.Close()
+		_, err = fmt.Fprint(server, "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n")
+		if err != nil {
+			return
+		}
+		close(d.upgraded)
+		_, _ = io.Copy(io.Discard, server)
+	}()
+	return client, nil
 }
 
 func serveRegistryTestConnection(connection net.Conn) {

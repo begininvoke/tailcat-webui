@@ -141,7 +141,7 @@ func TestAcquirePartitionsCapacityBySource(t *testing.T) {
 		activeByRouteSource: make(map[string]int),
 		sourceRates:         make(map[string]*sourceRateState),
 		activeCancels:       make(map[string]map[uint64]context.CancelFunc),
-		deleting:            make(map[string]bool),
+		routeInvalidations:  make(map[string]int),
 	}
 	var releases []func()
 	for range 4 {

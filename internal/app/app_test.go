@@ -1,6 +1,7 @@
 package app
 
 import (
+	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -8,6 +9,30 @@ import (
 	"runtime"
 	"testing"
 )
+
+func TestPublishedWorkExitsBeforeTailcatRuntimeClose(t *testing.T) {
+	activeExit := make(chan struct{})
+	publisher := closeFunc(func() { close(activeExit) })
+	runtime := closeErrorFunc(func() error {
+		select {
+		case <-activeExit:
+			return nil
+		default:
+			return errors.New("Tailcat runtime closed before published work exited")
+		}
+	})
+	if err := closePublishedBeforeTailnet(publisher, runtime); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type closeFunc func()
+
+func (f closeFunc) Close() { f() }
+
+type closeErrorFunc func() error
+
+func (f closeErrorFunc) Close() error { return f() }
 
 func TestDataDirectoryAllowsOnlyOneProcess(t *testing.T) {
 	t.Setenv("TAILCAT_WEBUI_DEMO_MODE", "true")

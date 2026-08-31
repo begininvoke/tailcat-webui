@@ -153,8 +153,15 @@ func (a *App) Run(ctx context.Context) error {
 }
 
 func (a *App) Close() error {
-	a.publish.Close()
-	return errors.Join(a.tailnet.Close(), a.db.Close(), a.lock.Unlock())
+	return errors.Join(closePublishedBeforeTailnet(a.publish, a.tailnet), a.db.Close(), a.lock.Unlock())
+}
+
+type publishedCloser interface{ Close() }
+type tailnetCloser interface{ Close() error }
+
+func closePublishedBeforeTailnet(publisher publishedCloser, manager tailnetCloser) error {
+	publisher.Close()
+	return manager.Close()
 }
 
 func DefaultLogger() *slog.Logger {
