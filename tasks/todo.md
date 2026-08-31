@@ -33,7 +33,7 @@
 - [x] Diagnostic schema and bounded reserved-port protocol
 - [x] Diagnostic lifecycle, API, retention and audit integration
 - [x] Client diagnostics tab with progress, history and cancellation
-- [ ] Transfer share/job/file/item schemas and migrations
+- [x] Transfer share/job/file/item schemas and migrations
 - [ ] Rooted staging storage and BLAKE3 block manifests
 - [ ] Capability protocol, resume runner and reserved Tailcat service
 - [ ] Share/transfer management API, quotas, cleanup and OpenAPI
