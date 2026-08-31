@@ -627,6 +627,29 @@ func HasClientsWith(preds ...predicate.TailClient) predicate.User {
 	})
 }
 
+// HasDiagnosticRuns applies the HasEdge predicate on the "diagnostic_runs" edge.
+func HasDiagnosticRuns() predicate.User {
+	return predicate.User(func(s *sql.Selector) {
+		step := sqlgraph.NewStep(
+			sqlgraph.From(Table, FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, DiagnosticRunsTable, DiagnosticRunsColumn),
+		)
+		sqlgraph.HasNeighbors(s, step)
+	})
+}
+
+// HasDiagnosticRunsWith applies the HasEdge predicate on the "diagnostic_runs" edge with a given conditions (other predicates).
+func HasDiagnosticRunsWith(preds ...predicate.DiagnosticRun) predicate.User {
+	return predicate.User(func(s *sql.Selector) {
+		step := newDiagnosticRunsStep()
+		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
+			for _, p := range preds {
+				p(s)
+			}
+		})
+	})
+}
+
 // HasRoutes applies the HasEdge predicate on the "routes" edge.
 func HasRoutes() predicate.User {
 	return predicate.User(func(s *sql.Selector) {

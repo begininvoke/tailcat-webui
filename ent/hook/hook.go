@@ -33,6 +33,18 @@ func (f AuditEventFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, 
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.AuditEventMutation", m)
 }
 
+// The DiagnosticRunFunc type is an adapter to allow the use of ordinary
+// function as DiagnosticRun mutator.
+type DiagnosticRunFunc func(context.Context, *ent.DiagnosticRunMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f DiagnosticRunFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.DiagnosticRunMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.DiagnosticRunMutation", m)
+}
+
 // The ExitRuleFunc type is an adapter to allow the use of ordinary
 // function as ExitRule mutator.
 type ExitRuleFunc func(context.Context, *ent.ExitRuleMutation) (ent.Value, error)

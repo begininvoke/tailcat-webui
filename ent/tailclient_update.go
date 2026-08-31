@@ -11,6 +11,7 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
+	"github.com/ca-x/tailcat-webui/ent/diagnosticrun"
 	"github.com/ca-x/tailcat-webui/ent/predicate"
 	"github.com/ca-x/tailcat-webui/ent/publishedroute"
 	"github.com/ca-x/tailcat-webui/ent/tailclient"
@@ -168,6 +169,21 @@ func (_u *TailClientUpdate) SetUpdatedAt(v time.Time) *TailClientUpdate {
 	return _u
 }
 
+// AddDiagnosticRunIDs adds the "diagnostic_runs" edge to the DiagnosticRun entity by IDs.
+func (_u *TailClientUpdate) AddDiagnosticRunIDs(ids ...string) *TailClientUpdate {
+	_u.mutation.AddDiagnosticRunIDs(ids...)
+	return _u
+}
+
+// AddDiagnosticRuns adds the "diagnostic_runs" edges to the DiagnosticRun entity.
+func (_u *TailClientUpdate) AddDiagnosticRuns(v ...*DiagnosticRun) *TailClientUpdate {
+	ids := make([]string, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddDiagnosticRunIDs(ids...)
+}
+
 // AddRouteIDs adds the "routes" edge to the PublishedRoute entity by IDs.
 func (_u *TailClientUpdate) AddRouteIDs(ids ...string) *TailClientUpdate {
 	_u.mutation.AddRouteIDs(ids...)
@@ -186,6 +202,27 @@ func (_u *TailClientUpdate) AddRoutes(v ...*PublishedRoute) *TailClientUpdate {
 // Mutation returns the TailClientMutation object of the builder.
 func (_u *TailClientUpdate) Mutation() *TailClientMutation {
 	return _u.mutation
+}
+
+// ClearDiagnosticRuns clears all "diagnostic_runs" edges to the DiagnosticRun entity.
+func (_u *TailClientUpdate) ClearDiagnosticRuns() *TailClientUpdate {
+	_u.mutation.ClearDiagnosticRuns()
+	return _u
+}
+
+// RemoveDiagnosticRunIDs removes the "diagnostic_runs" edge to DiagnosticRun entities by IDs.
+func (_u *TailClientUpdate) RemoveDiagnosticRunIDs(ids ...string) *TailClientUpdate {
+	_u.mutation.RemoveDiagnosticRunIDs(ids...)
+	return _u
+}
+
+// RemoveDiagnosticRuns removes "diagnostic_runs" edges to DiagnosticRun entities.
+func (_u *TailClientUpdate) RemoveDiagnosticRuns(v ...*DiagnosticRun) *TailClientUpdate {
+	ids := make([]string, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveDiagnosticRunIDs(ids...)
 }
 
 // ClearRoutes clears all "routes" edges to the PublishedRoute entity.
@@ -324,6 +361,51 @@ func (_u *TailClientUpdate) sqlSave(ctx context.Context) (_node int, err error) 
 	}
 	if value, ok := _u.mutation.UpdatedAt(); ok {
 		_spec.SetField(tailclient.FieldUpdatedAt, field.TypeTime, value)
+	}
+	if _u.mutation.DiagnosticRunsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   tailclient.DiagnosticRunsTable,
+			Columns: []string{tailclient.DiagnosticRunsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(diagnosticrun.FieldID, field.TypeString),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedDiagnosticRunsIDs(); len(nodes) > 0 && !_u.mutation.DiagnosticRunsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   tailclient.DiagnosticRunsTable,
+			Columns: []string{tailclient.DiagnosticRunsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(diagnosticrun.FieldID, field.TypeString),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.DiagnosticRunsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   tailclient.DiagnosticRunsTable,
+			Columns: []string{tailclient.DiagnosticRunsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(diagnosticrun.FieldID, field.TypeString),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
 	}
 	if _u.mutation.RoutesCleared() {
 		edge := &sqlgraph.EdgeSpec{
@@ -529,6 +611,21 @@ func (_u *TailClientUpdateOne) SetUpdatedAt(v time.Time) *TailClientUpdateOne {
 	return _u
 }
 
+// AddDiagnosticRunIDs adds the "diagnostic_runs" edge to the DiagnosticRun entity by IDs.
+func (_u *TailClientUpdateOne) AddDiagnosticRunIDs(ids ...string) *TailClientUpdateOne {
+	_u.mutation.AddDiagnosticRunIDs(ids...)
+	return _u
+}
+
+// AddDiagnosticRuns adds the "diagnostic_runs" edges to the DiagnosticRun entity.
+func (_u *TailClientUpdateOne) AddDiagnosticRuns(v ...*DiagnosticRun) *TailClientUpdateOne {
+	ids := make([]string, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddDiagnosticRunIDs(ids...)
+}
+
 // AddRouteIDs adds the "routes" edge to the PublishedRoute entity by IDs.
 func (_u *TailClientUpdateOne) AddRouteIDs(ids ...string) *TailClientUpdateOne {
 	_u.mutation.AddRouteIDs(ids...)
@@ -547,6 +644,27 @@ func (_u *TailClientUpdateOne) AddRoutes(v ...*PublishedRoute) *TailClientUpdate
 // Mutation returns the TailClientMutation object of the builder.
 func (_u *TailClientUpdateOne) Mutation() *TailClientMutation {
 	return _u.mutation
+}
+
+// ClearDiagnosticRuns clears all "diagnostic_runs" edges to the DiagnosticRun entity.
+func (_u *TailClientUpdateOne) ClearDiagnosticRuns() *TailClientUpdateOne {
+	_u.mutation.ClearDiagnosticRuns()
+	return _u
+}
+
+// RemoveDiagnosticRunIDs removes the "diagnostic_runs" edge to DiagnosticRun entities by IDs.
+func (_u *TailClientUpdateOne) RemoveDiagnosticRunIDs(ids ...string) *TailClientUpdateOne {
+	_u.mutation.RemoveDiagnosticRunIDs(ids...)
+	return _u
+}
+
+// RemoveDiagnosticRuns removes "diagnostic_runs" edges to DiagnosticRun entities.
+func (_u *TailClientUpdateOne) RemoveDiagnosticRuns(v ...*DiagnosticRun) *TailClientUpdateOne {
+	ids := make([]string, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveDiagnosticRunIDs(ids...)
 }
 
 // ClearRoutes clears all "routes" edges to the PublishedRoute entity.
@@ -715,6 +833,51 @@ func (_u *TailClientUpdateOne) sqlSave(ctx context.Context) (_node *TailClient, 
 	}
 	if value, ok := _u.mutation.UpdatedAt(); ok {
 		_spec.SetField(tailclient.FieldUpdatedAt, field.TypeTime, value)
+	}
+	if _u.mutation.DiagnosticRunsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   tailclient.DiagnosticRunsTable,
+			Columns: []string{tailclient.DiagnosticRunsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(diagnosticrun.FieldID, field.TypeString),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedDiagnosticRunsIDs(); len(nodes) > 0 && !_u.mutation.DiagnosticRunsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   tailclient.DiagnosticRunsTable,
+			Columns: []string{tailclient.DiagnosticRunsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(diagnosticrun.FieldID, field.TypeString),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.DiagnosticRunsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   tailclient.DiagnosticRunsTable,
+			Columns: []string{tailclient.DiagnosticRunsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(diagnosticrun.FieldID, field.TypeString),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
 	}
 	if _u.mutation.RoutesCleared() {
 		edge := &sqlgraph.EdgeSpec{

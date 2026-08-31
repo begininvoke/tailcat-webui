@@ -17,6 +17,7 @@ import (
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"github.com/ca-x/tailcat-webui/ent/allowedclient"
 	"github.com/ca-x/tailcat-webui/ent/auditevent"
+	"github.com/ca-x/tailcat-webui/ent/diagnosticrun"
 	"github.com/ca-x/tailcat-webui/ent/exitrule"
 	"github.com/ca-x/tailcat-webui/ent/loginflow"
 	"github.com/ca-x/tailcat-webui/ent/portmapping"
@@ -36,6 +37,8 @@ type Client struct {
 	AllowedClient *AllowedClientClient
 	// AuditEvent is the client for interacting with the AuditEvent builders.
 	AuditEvent *AuditEventClient
+	// DiagnosticRun is the client for interacting with the DiagnosticRun builders.
+	DiagnosticRun *DiagnosticRunClient
 	// ExitRule is the client for interacting with the ExitRule builders.
 	ExitRule *ExitRuleClient
 	// LoginFlow is the client for interacting with the LoginFlow builders.
@@ -65,6 +68,7 @@ func (c *Client) init() {
 	c.Schema = migrate.NewSchema(c.driver)
 	c.AllowedClient = NewAllowedClientClient(c.config)
 	c.AuditEvent = NewAuditEventClient(c.config)
+	c.DiagnosticRun = NewDiagnosticRunClient(c.config)
 	c.ExitRule = NewExitRuleClient(c.config)
 	c.LoginFlow = NewLoginFlowClient(c.config)
 	c.PortMapping = NewPortMappingClient(c.config)
@@ -167,6 +171,7 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 		config:         cfg,
 		AllowedClient:  NewAllowedClientClient(cfg),
 		AuditEvent:     NewAuditEventClient(cfg),
+		DiagnosticRun:  NewDiagnosticRunClient(cfg),
 		ExitRule:       NewExitRuleClient(cfg),
 		LoginFlow:      NewLoginFlowClient(cfg),
 		PortMapping:    NewPortMappingClient(cfg),
@@ -196,6 +201,7 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 		config:         cfg,
 		AllowedClient:  NewAllowedClientClient(cfg),
 		AuditEvent:     NewAuditEventClient(cfg),
+		DiagnosticRun:  NewDiagnosticRunClient(cfg),
 		ExitRule:       NewExitRuleClient(cfg),
 		LoginFlow:      NewLoginFlowClient(cfg),
 		PortMapping:    NewPortMappingClient(cfg),
@@ -233,8 +239,8 @@ func (c *Client) Close() error {
 // In order to add hooks to a specific client, call: `client.Node.Use(...)`.
 func (c *Client) Use(hooks ...Hook) {
 	for _, n := range []interface{ Use(...Hook) }{
-		c.AllowedClient, c.AuditEvent, c.ExitRule, c.LoginFlow, c.PortMapping,
-		c.PublishedRoute, c.Session, c.TailClient, c.TailServer, c.User,
+		c.AllowedClient, c.AuditEvent, c.DiagnosticRun, c.ExitRule, c.LoginFlow,
+		c.PortMapping, c.PublishedRoute, c.Session, c.TailClient, c.TailServer, c.User,
 	} {
 		n.Use(hooks...)
 	}
@@ -244,8 +250,8 @@ func (c *Client) Use(hooks ...Hook) {
 // In order to add interceptors to a specific client, call: `client.Node.Intercept(...)`.
 func (c *Client) Intercept(interceptors ...Interceptor) {
 	for _, n := range []interface{ Intercept(...Interceptor) }{
-		c.AllowedClient, c.AuditEvent, c.ExitRule, c.LoginFlow, c.PortMapping,
-		c.PublishedRoute, c.Session, c.TailClient, c.TailServer, c.User,
+		c.AllowedClient, c.AuditEvent, c.DiagnosticRun, c.ExitRule, c.LoginFlow,
+		c.PortMapping, c.PublishedRoute, c.Session, c.TailClient, c.TailServer, c.User,
 	} {
 		n.Intercept(interceptors...)
 	}
@@ -258,6 +264,8 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.AllowedClient.mutate(ctx, m)
 	case *AuditEventMutation:
 		return c.AuditEvent.mutate(ctx, m)
+	case *DiagnosticRunMutation:
+		return c.DiagnosticRun.mutate(ctx, m)
 	case *ExitRuleMutation:
 		return c.ExitRule.mutate(ctx, m)
 	case *LoginFlowMutation:
@@ -574,6 +582,171 @@ func (c *AuditEventClient) mutate(ctx context.Context, m *AuditEventMutation) (V
 		return (&AuditEventDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
 	default:
 		return nil, fmt.Errorf("ent: unknown AuditEvent mutation op: %q", m.Op())
+	}
+}
+
+// DiagnosticRunClient is a client for the DiagnosticRun schema.
+type DiagnosticRunClient struct {
+	config
+}
+
+// NewDiagnosticRunClient returns a client for the DiagnosticRun from the given config.
+func NewDiagnosticRunClient(c config) *DiagnosticRunClient {
+	return &DiagnosticRunClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `diagnosticrun.Hooks(f(g(h())))`.
+func (c *DiagnosticRunClient) Use(hooks ...Hook) {
+	c.hooks.DiagnosticRun = append(c.hooks.DiagnosticRun, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `diagnosticrun.Intercept(f(g(h())))`.
+func (c *DiagnosticRunClient) Intercept(interceptors ...Interceptor) {
+	c.inters.DiagnosticRun = append(c.inters.DiagnosticRun, interceptors...)
+}
+
+// Create returns a builder for creating a DiagnosticRun entity.
+func (c *DiagnosticRunClient) Create() *DiagnosticRunCreate {
+	mutation := newDiagnosticRunMutation(c.config, OpCreate)
+	return &DiagnosticRunCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of DiagnosticRun entities.
+func (c *DiagnosticRunClient) CreateBulk(builders ...*DiagnosticRunCreate) *DiagnosticRunCreateBulk {
+	return &DiagnosticRunCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *DiagnosticRunClient) MapCreateBulk(slice any, setFunc func(*DiagnosticRunCreate, int)) *DiagnosticRunCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &DiagnosticRunCreateBulk{err: fmt.Errorf("calling to DiagnosticRunClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*DiagnosticRunCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &DiagnosticRunCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for DiagnosticRun.
+func (c *DiagnosticRunClient) Update() *DiagnosticRunUpdate {
+	mutation := newDiagnosticRunMutation(c.config, OpUpdate)
+	return &DiagnosticRunUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *DiagnosticRunClient) UpdateOne(_m *DiagnosticRun) *DiagnosticRunUpdateOne {
+	mutation := newDiagnosticRunMutation(c.config, OpUpdateOne, withDiagnosticRun(_m))
+	return &DiagnosticRunUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *DiagnosticRunClient) UpdateOneID(id string) *DiagnosticRunUpdateOne {
+	mutation := newDiagnosticRunMutation(c.config, OpUpdateOne, withDiagnosticRunID(id))
+	return &DiagnosticRunUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for DiagnosticRun.
+func (c *DiagnosticRunClient) Delete() *DiagnosticRunDelete {
+	mutation := newDiagnosticRunMutation(c.config, OpDelete)
+	return &DiagnosticRunDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *DiagnosticRunClient) DeleteOne(_m *DiagnosticRun) *DiagnosticRunDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *DiagnosticRunClient) DeleteOneID(id string) *DiagnosticRunDeleteOne {
+	builder := c.Delete().Where(diagnosticrun.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &DiagnosticRunDeleteOne{builder}
+}
+
+// Query returns a query builder for DiagnosticRun.
+func (c *DiagnosticRunClient) Query() *DiagnosticRunQuery {
+	return &DiagnosticRunQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeDiagnosticRun},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a DiagnosticRun entity by its id.
+func (c *DiagnosticRunClient) Get(ctx context.Context, id string) (*DiagnosticRun, error) {
+	return c.Query().Where(diagnosticrun.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *DiagnosticRunClient) GetX(ctx context.Context, id string) *DiagnosticRun {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// QueryOwner queries the owner edge of a DiagnosticRun.
+func (c *DiagnosticRunClient) QueryOwner(_m *DiagnosticRun) *UserQuery {
+	query := (&UserClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(diagnosticrun.Table, diagnosticrun.FieldID, id),
+			sqlgraph.To(user.Table, user.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, diagnosticrun.OwnerTable, diagnosticrun.OwnerColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryClient queries the client edge of a DiagnosticRun.
+func (c *DiagnosticRunClient) QueryClient(_m *DiagnosticRun) *TailClientQuery {
+	query := (&TailClientClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(diagnosticrun.Table, diagnosticrun.FieldID, id),
+			sqlgraph.To(tailclient.Table, tailclient.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, diagnosticrun.ClientTable, diagnosticrun.ClientColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// Hooks returns the client hooks.
+func (c *DiagnosticRunClient) Hooks() []Hook {
+	return c.hooks.DiagnosticRun
+}
+
+// Interceptors returns the client interceptors.
+func (c *DiagnosticRunClient) Interceptors() []Interceptor {
+	return c.inters.DiagnosticRun
+}
+
+func (c *DiagnosticRunClient) mutate(ctx context.Context, m *DiagnosticRunMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&DiagnosticRunCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&DiagnosticRunUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&DiagnosticRunUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&DiagnosticRunDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown DiagnosticRun mutation op: %q", m.Op())
 	}
 }
 
@@ -1462,6 +1635,22 @@ func (c *TailClientClient) QueryOwner(_m *TailClient) *UserQuery {
 	return query
 }
 
+// QueryDiagnosticRuns queries the diagnostic_runs edge of a TailClient.
+func (c *TailClientClient) QueryDiagnosticRuns(_m *TailClient) *DiagnosticRunQuery {
+	query := (&DiagnosticRunClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(tailclient.Table, tailclient.FieldID, id),
+			sqlgraph.To(diagnosticrun.Table, diagnosticrun.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, tailclient.DiagnosticRunsTable, tailclient.DiagnosticRunsColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
 // QueryRoutes queries the routes edge of a TailClient.
 func (c *TailClientClient) QueryRoutes(_m *TailClient) *PublishedRouteQuery {
 	query := (&PublishedRouteClient{config: c.config}).Query()
@@ -1872,6 +2061,22 @@ func (c *UserClient) QueryClients(_m *User) *TailClientQuery {
 	return query
 }
 
+// QueryDiagnosticRuns queries the diagnostic_runs edge of a User.
+func (c *UserClient) QueryDiagnosticRuns(_m *User) *DiagnosticRunQuery {
+	query := (&DiagnosticRunClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(user.Table, user.FieldID, id),
+			sqlgraph.To(diagnosticrun.Table, diagnosticrun.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, user.DiagnosticRunsTable, user.DiagnosticRunsColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
 // QueryRoutes queries the routes edge of a User.
 func (c *UserClient) QueryRoutes(_m *User) *PublishedRouteQuery {
 	query := (&PublishedRouteClient{config: c.config}).Query()
@@ -1932,11 +2137,11 @@ func (c *UserClient) mutate(ctx context.Context, m *UserMutation) (Value, error)
 // hooks and interceptors per client, for fast access.
 type (
 	hooks struct {
-		AllowedClient, AuditEvent, ExitRule, LoginFlow, PortMapping, PublishedRoute,
-		Session, TailClient, TailServer, User []ent.Hook
+		AllowedClient, AuditEvent, DiagnosticRun, ExitRule, LoginFlow, PortMapping,
+		PublishedRoute, Session, TailClient, TailServer, User []ent.Hook
 	}
 	inters struct {
-		AllowedClient, AuditEvent, ExitRule, LoginFlow, PortMapping, PublishedRoute,
-		Session, TailClient, TailServer, User []ent.Interceptor
+		AllowedClient, AuditEvent, DiagnosticRun, ExitRule, LoginFlow, PortMapping,
+		PublishedRoute, Session, TailClient, TailServer, User []ent.Interceptor
 	}
 )

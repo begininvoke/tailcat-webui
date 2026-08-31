@@ -4,7 +4,6 @@ package ent
 
 import (
 	"context"
-	"database/sql/driver"
 	"fmt"
 	"math"
 
@@ -14,59 +13,57 @@ import (
 	"entgo.io/ent/schema/field"
 	"github.com/ca-x/tailcat-webui/ent/diagnosticrun"
 	"github.com/ca-x/tailcat-webui/ent/predicate"
-	"github.com/ca-x/tailcat-webui/ent/publishedroute"
 	"github.com/ca-x/tailcat-webui/ent/tailclient"
 	"github.com/ca-x/tailcat-webui/ent/user"
 )
 
-// TailClientQuery is the builder for querying TailClient entities.
-type TailClientQuery struct {
+// DiagnosticRunQuery is the builder for querying DiagnosticRun entities.
+type DiagnosticRunQuery struct {
 	config
-	ctx                *QueryContext
-	order              []tailclient.OrderOption
-	inters             []Interceptor
-	predicates         []predicate.TailClient
-	withOwner          *UserQuery
-	withDiagnosticRuns *DiagnosticRunQuery
-	withRoutes         *PublishedRouteQuery
+	ctx        *QueryContext
+	order      []diagnosticrun.OrderOption
+	inters     []Interceptor
+	predicates []predicate.DiagnosticRun
+	withOwner  *UserQuery
+	withClient *TailClientQuery
 	// intermediate query (i.e. traversal path).
 	sql  *sql.Selector
 	path func(context.Context) (*sql.Selector, error)
 }
 
-// Where adds a new predicate for the TailClientQuery builder.
-func (_q *TailClientQuery) Where(ps ...predicate.TailClient) *TailClientQuery {
+// Where adds a new predicate for the DiagnosticRunQuery builder.
+func (_q *DiagnosticRunQuery) Where(ps ...predicate.DiagnosticRun) *DiagnosticRunQuery {
 	_q.predicates = append(_q.predicates, ps...)
 	return _q
 }
 
 // Limit the number of records to be returned by this query.
-func (_q *TailClientQuery) Limit(limit int) *TailClientQuery {
+func (_q *DiagnosticRunQuery) Limit(limit int) *DiagnosticRunQuery {
 	_q.ctx.Limit = &limit
 	return _q
 }
 
 // Offset to start from.
-func (_q *TailClientQuery) Offset(offset int) *TailClientQuery {
+func (_q *DiagnosticRunQuery) Offset(offset int) *DiagnosticRunQuery {
 	_q.ctx.Offset = &offset
 	return _q
 }
 
 // Unique configures the query builder to filter duplicate records on query.
 // By default, unique is set to true, and can be disabled using this method.
-func (_q *TailClientQuery) Unique(unique bool) *TailClientQuery {
+func (_q *DiagnosticRunQuery) Unique(unique bool) *DiagnosticRunQuery {
 	_q.ctx.Unique = &unique
 	return _q
 }
 
 // Order specifies how the records should be ordered.
-func (_q *TailClientQuery) Order(o ...tailclient.OrderOption) *TailClientQuery {
+func (_q *DiagnosticRunQuery) Order(o ...diagnosticrun.OrderOption) *DiagnosticRunQuery {
 	_q.order = append(_q.order, o...)
 	return _q
 }
 
 // QueryOwner chains the current query on the "owner" edge.
-func (_q *TailClientQuery) QueryOwner() *UserQuery {
+func (_q *DiagnosticRunQuery) QueryOwner() *UserQuery {
 	query := (&UserClient{config: _q.config}).Query()
 	query.path = func(ctx context.Context) (fromU *sql.Selector, err error) {
 		if err := _q.prepareQuery(ctx); err != nil {
@@ -77,9 +74,9 @@ func (_q *TailClientQuery) QueryOwner() *UserQuery {
 			return nil, err
 		}
 		step := sqlgraph.NewStep(
-			sqlgraph.From(tailclient.Table, tailclient.FieldID, selector),
+			sqlgraph.From(diagnosticrun.Table, diagnosticrun.FieldID, selector),
 			sqlgraph.To(user.Table, user.FieldID),
-			sqlgraph.Edge(sqlgraph.M2O, true, tailclient.OwnerTable, tailclient.OwnerColumn),
+			sqlgraph.Edge(sqlgraph.M2O, true, diagnosticrun.OwnerTable, diagnosticrun.OwnerColumn),
 		)
 		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
 		return fromU, nil
@@ -87,9 +84,9 @@ func (_q *TailClientQuery) QueryOwner() *UserQuery {
 	return query
 }
 
-// QueryDiagnosticRuns chains the current query on the "diagnostic_runs" edge.
-func (_q *TailClientQuery) QueryDiagnosticRuns() *DiagnosticRunQuery {
-	query := (&DiagnosticRunClient{config: _q.config}).Query()
+// QueryClient chains the current query on the "client" edge.
+func (_q *DiagnosticRunQuery) QueryClient() *TailClientQuery {
+	query := (&TailClientClient{config: _q.config}).Query()
 	query.path = func(ctx context.Context) (fromU *sql.Selector, err error) {
 		if err := _q.prepareQuery(ctx); err != nil {
 			return nil, err
@@ -99,9 +96,9 @@ func (_q *TailClientQuery) QueryDiagnosticRuns() *DiagnosticRunQuery {
 			return nil, err
 		}
 		step := sqlgraph.NewStep(
-			sqlgraph.From(tailclient.Table, tailclient.FieldID, selector),
-			sqlgraph.To(diagnosticrun.Table, diagnosticrun.FieldID),
-			sqlgraph.Edge(sqlgraph.O2M, false, tailclient.DiagnosticRunsTable, tailclient.DiagnosticRunsColumn),
+			sqlgraph.From(diagnosticrun.Table, diagnosticrun.FieldID, selector),
+			sqlgraph.To(tailclient.Table, tailclient.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, diagnosticrun.ClientTable, diagnosticrun.ClientColumn),
 		)
 		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
 		return fromU, nil
@@ -109,43 +106,21 @@ func (_q *TailClientQuery) QueryDiagnosticRuns() *DiagnosticRunQuery {
 	return query
 }
 
-// QueryRoutes chains the current query on the "routes" edge.
-func (_q *TailClientQuery) QueryRoutes() *PublishedRouteQuery {
-	query := (&PublishedRouteClient{config: _q.config}).Query()
-	query.path = func(ctx context.Context) (fromU *sql.Selector, err error) {
-		if err := _q.prepareQuery(ctx); err != nil {
-			return nil, err
-		}
-		selector := _q.sqlQuery(ctx)
-		if err := selector.Err(); err != nil {
-			return nil, err
-		}
-		step := sqlgraph.NewStep(
-			sqlgraph.From(tailclient.Table, tailclient.FieldID, selector),
-			sqlgraph.To(publishedroute.Table, publishedroute.FieldID),
-			sqlgraph.Edge(sqlgraph.O2M, false, tailclient.RoutesTable, tailclient.RoutesColumn),
-		)
-		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
-		return fromU, nil
-	}
-	return query
-}
-
-// First returns the first TailClient entity from the query.
-// Returns a *NotFoundError when no TailClient was found.
-func (_q *TailClientQuery) First(ctx context.Context) (*TailClient, error) {
+// First returns the first DiagnosticRun entity from the query.
+// Returns a *NotFoundError when no DiagnosticRun was found.
+func (_q *DiagnosticRunQuery) First(ctx context.Context) (*DiagnosticRun, error) {
 	nodes, err := _q.Limit(1).All(setContextOp(ctx, _q.ctx, ent.OpQueryFirst))
 	if err != nil {
 		return nil, err
 	}
 	if len(nodes) == 0 {
-		return nil, &NotFoundError{tailclient.Label}
+		return nil, &NotFoundError{diagnosticrun.Label}
 	}
 	return nodes[0], nil
 }
 
 // FirstX is like First, but panics if an error occurs.
-func (_q *TailClientQuery) FirstX(ctx context.Context) *TailClient {
+func (_q *DiagnosticRunQuery) FirstX(ctx context.Context) *DiagnosticRun {
 	node, err := _q.First(ctx)
 	if err != nil && !IsNotFound(err) {
 		panic(err)
@@ -153,22 +128,22 @@ func (_q *TailClientQuery) FirstX(ctx context.Context) *TailClient {
 	return node
 }
 
-// FirstID returns the first TailClient ID from the query.
-// Returns a *NotFoundError when no TailClient ID was found.
-func (_q *TailClientQuery) FirstID(ctx context.Context) (id string, err error) {
+// FirstID returns the first DiagnosticRun ID from the query.
+// Returns a *NotFoundError when no DiagnosticRun ID was found.
+func (_q *DiagnosticRunQuery) FirstID(ctx context.Context) (id string, err error) {
 	var ids []string
 	if ids, err = _q.Limit(1).IDs(setContextOp(ctx, _q.ctx, ent.OpQueryFirstID)); err != nil {
 		return
 	}
 	if len(ids) == 0 {
-		err = &NotFoundError{tailclient.Label}
+		err = &NotFoundError{diagnosticrun.Label}
 		return
 	}
 	return ids[0], nil
 }
 
 // FirstIDX is like FirstID, but panics if an error occurs.
-func (_q *TailClientQuery) FirstIDX(ctx context.Context) string {
+func (_q *DiagnosticRunQuery) FirstIDX(ctx context.Context) string {
 	id, err := _q.FirstID(ctx)
 	if err != nil && !IsNotFound(err) {
 		panic(err)
@@ -176,10 +151,10 @@ func (_q *TailClientQuery) FirstIDX(ctx context.Context) string {
 	return id
 }
 
-// Only returns a single TailClient entity found by the query, ensuring it only returns one.
-// Returns a *NotSingularError when more than one TailClient entity is found.
-// Returns a *NotFoundError when no TailClient entities are found.
-func (_q *TailClientQuery) Only(ctx context.Context) (*TailClient, error) {
+// Only returns a single DiagnosticRun entity found by the query, ensuring it only returns one.
+// Returns a *NotSingularError when more than one DiagnosticRun entity is found.
+// Returns a *NotFoundError when no DiagnosticRun entities are found.
+func (_q *DiagnosticRunQuery) Only(ctx context.Context) (*DiagnosticRun, error) {
 	nodes, err := _q.Limit(2).All(setContextOp(ctx, _q.ctx, ent.OpQueryOnly))
 	if err != nil {
 		return nil, err
@@ -188,14 +163,14 @@ func (_q *TailClientQuery) Only(ctx context.Context) (*TailClient, error) {
 	case 1:
 		return nodes[0], nil
 	case 0:
-		return nil, &NotFoundError{tailclient.Label}
+		return nil, &NotFoundError{diagnosticrun.Label}
 	default:
-		return nil, &NotSingularError{tailclient.Label}
+		return nil, &NotSingularError{diagnosticrun.Label}
 	}
 }
 
 // OnlyX is like Only, but panics if an error occurs.
-func (_q *TailClientQuery) OnlyX(ctx context.Context) *TailClient {
+func (_q *DiagnosticRunQuery) OnlyX(ctx context.Context) *DiagnosticRun {
 	node, err := _q.Only(ctx)
 	if err != nil {
 		panic(err)
@@ -203,10 +178,10 @@ func (_q *TailClientQuery) OnlyX(ctx context.Context) *TailClient {
 	return node
 }
 
-// OnlyID is like Only, but returns the only TailClient ID in the query.
-// Returns a *NotSingularError when more than one TailClient ID is found.
+// OnlyID is like Only, but returns the only DiagnosticRun ID in the query.
+// Returns a *NotSingularError when more than one DiagnosticRun ID is found.
 // Returns a *NotFoundError when no entities are found.
-func (_q *TailClientQuery) OnlyID(ctx context.Context) (id string, err error) {
+func (_q *DiagnosticRunQuery) OnlyID(ctx context.Context) (id string, err error) {
 	var ids []string
 	if ids, err = _q.Limit(2).IDs(setContextOp(ctx, _q.ctx, ent.OpQueryOnlyID)); err != nil {
 		return
@@ -215,15 +190,15 @@ func (_q *TailClientQuery) OnlyID(ctx context.Context) (id string, err error) {
 	case 1:
 		id = ids[0]
 	case 0:
-		err = &NotFoundError{tailclient.Label}
+		err = &NotFoundError{diagnosticrun.Label}
 	default:
-		err = &NotSingularError{tailclient.Label}
+		err = &NotSingularError{diagnosticrun.Label}
 	}
 	return
 }
 
 // OnlyIDX is like OnlyID, but panics if an error occurs.
-func (_q *TailClientQuery) OnlyIDX(ctx context.Context) string {
+func (_q *DiagnosticRunQuery) OnlyIDX(ctx context.Context) string {
 	id, err := _q.OnlyID(ctx)
 	if err != nil {
 		panic(err)
@@ -231,18 +206,18 @@ func (_q *TailClientQuery) OnlyIDX(ctx context.Context) string {
 	return id
 }
 
-// All executes the query and returns a list of TailClients.
-func (_q *TailClientQuery) All(ctx context.Context) ([]*TailClient, error) {
+// All executes the query and returns a list of DiagnosticRuns.
+func (_q *DiagnosticRunQuery) All(ctx context.Context) ([]*DiagnosticRun, error) {
 	ctx = setContextOp(ctx, _q.ctx, ent.OpQueryAll)
 	if err := _q.prepareQuery(ctx); err != nil {
 		return nil, err
 	}
-	qr := querierAll[[]*TailClient, *TailClientQuery]()
-	return withInterceptors[[]*TailClient](ctx, _q, qr, _q.inters)
+	qr := querierAll[[]*DiagnosticRun, *DiagnosticRunQuery]()
+	return withInterceptors[[]*DiagnosticRun](ctx, _q, qr, _q.inters)
 }
 
 // AllX is like All, but panics if an error occurs.
-func (_q *TailClientQuery) AllX(ctx context.Context) []*TailClient {
+func (_q *DiagnosticRunQuery) AllX(ctx context.Context) []*DiagnosticRun {
 	nodes, err := _q.All(ctx)
 	if err != nil {
 		panic(err)
@@ -250,20 +225,20 @@ func (_q *TailClientQuery) AllX(ctx context.Context) []*TailClient {
 	return nodes
 }
 
-// IDs executes the query and returns a list of TailClient IDs.
-func (_q *TailClientQuery) IDs(ctx context.Context) (ids []string, err error) {
+// IDs executes the query and returns a list of DiagnosticRun IDs.
+func (_q *DiagnosticRunQuery) IDs(ctx context.Context) (ids []string, err error) {
 	if _q.ctx.Unique == nil && _q.path != nil {
 		_q.Unique(true)
 	}
 	ctx = setContextOp(ctx, _q.ctx, ent.OpQueryIDs)
-	if err = _q.Select(tailclient.FieldID).Scan(ctx, &ids); err != nil {
+	if err = _q.Select(diagnosticrun.FieldID).Scan(ctx, &ids); err != nil {
 		return nil, err
 	}
 	return ids, nil
 }
 
 // IDsX is like IDs, but panics if an error occurs.
-func (_q *TailClientQuery) IDsX(ctx context.Context) []string {
+func (_q *DiagnosticRunQuery) IDsX(ctx context.Context) []string {
 	ids, err := _q.IDs(ctx)
 	if err != nil {
 		panic(err)
@@ -272,16 +247,16 @@ func (_q *TailClientQuery) IDsX(ctx context.Context) []string {
 }
 
 // Count returns the count of the given query.
-func (_q *TailClientQuery) Count(ctx context.Context) (int, error) {
+func (_q *DiagnosticRunQuery) Count(ctx context.Context) (int, error) {
 	ctx = setContextOp(ctx, _q.ctx, ent.OpQueryCount)
 	if err := _q.prepareQuery(ctx); err != nil {
 		return 0, err
 	}
-	return withInterceptors[int](ctx, _q, querierCount[*TailClientQuery](), _q.inters)
+	return withInterceptors[int](ctx, _q, querierCount[*DiagnosticRunQuery](), _q.inters)
 }
 
 // CountX is like Count, but panics if an error occurs.
-func (_q *TailClientQuery) CountX(ctx context.Context) int {
+func (_q *DiagnosticRunQuery) CountX(ctx context.Context) int {
 	count, err := _q.Count(ctx)
 	if err != nil {
 		panic(err)
@@ -290,7 +265,7 @@ func (_q *TailClientQuery) CountX(ctx context.Context) int {
 }
 
 // Exist returns true if the query has elements in the graph.
-func (_q *TailClientQuery) Exist(ctx context.Context) (bool, error) {
+func (_q *DiagnosticRunQuery) Exist(ctx context.Context) (bool, error) {
 	ctx = setContextOp(ctx, _q.ctx, ent.OpQueryExist)
 	switch _, err := _q.FirstID(ctx); {
 	case IsNotFound(err):
@@ -303,7 +278,7 @@ func (_q *TailClientQuery) Exist(ctx context.Context) (bool, error) {
 }
 
 // ExistX is like Exist, but panics if an error occurs.
-func (_q *TailClientQuery) ExistX(ctx context.Context) bool {
+func (_q *DiagnosticRunQuery) ExistX(ctx context.Context) bool {
 	exist, err := _q.Exist(ctx)
 	if err != nil {
 		panic(err)
@@ -311,21 +286,20 @@ func (_q *TailClientQuery) ExistX(ctx context.Context) bool {
 	return exist
 }
 
-// Clone returns a duplicate of the TailClientQuery builder, including all associated steps. It can be
+// Clone returns a duplicate of the DiagnosticRunQuery builder, including all associated steps. It can be
 // used to prepare common query builders and use them differently after the clone is made.
-func (_q *TailClientQuery) Clone() *TailClientQuery {
+func (_q *DiagnosticRunQuery) Clone() *DiagnosticRunQuery {
 	if _q == nil {
 		return nil
 	}
-	return &TailClientQuery{
-		config:             _q.config,
-		ctx:                _q.ctx.Clone(),
-		order:              append([]tailclient.OrderOption{}, _q.order...),
-		inters:             append([]Interceptor{}, _q.inters...),
-		predicates:         append([]predicate.TailClient{}, _q.predicates...),
-		withOwner:          _q.withOwner.Clone(),
-		withDiagnosticRuns: _q.withDiagnosticRuns.Clone(),
-		withRoutes:         _q.withRoutes.Clone(),
+	return &DiagnosticRunQuery{
+		config:     _q.config,
+		ctx:        _q.ctx.Clone(),
+		order:      append([]diagnosticrun.OrderOption{}, _q.order...),
+		inters:     append([]Interceptor{}, _q.inters...),
+		predicates: append([]predicate.DiagnosticRun{}, _q.predicates...),
+		withOwner:  _q.withOwner.Clone(),
+		withClient: _q.withClient.Clone(),
 		// clone intermediate query.
 		sql:  _q.sql.Clone(),
 		path: _q.path,
@@ -334,7 +308,7 @@ func (_q *TailClientQuery) Clone() *TailClientQuery {
 
 // WithOwner tells the query-builder to eager-load the nodes that are connected to
 // the "owner" edge. The optional arguments are used to configure the query builder of the edge.
-func (_q *TailClientQuery) WithOwner(opts ...func(*UserQuery)) *TailClientQuery {
+func (_q *DiagnosticRunQuery) WithOwner(opts ...func(*UserQuery)) *DiagnosticRunQuery {
 	query := (&UserClient{config: _q.config}).Query()
 	for _, opt := range opts {
 		opt(query)
@@ -343,25 +317,14 @@ func (_q *TailClientQuery) WithOwner(opts ...func(*UserQuery)) *TailClientQuery 
 	return _q
 }
 
-// WithDiagnosticRuns tells the query-builder to eager-load the nodes that are connected to
-// the "diagnostic_runs" edge. The optional arguments are used to configure the query builder of the edge.
-func (_q *TailClientQuery) WithDiagnosticRuns(opts ...func(*DiagnosticRunQuery)) *TailClientQuery {
-	query := (&DiagnosticRunClient{config: _q.config}).Query()
+// WithClient tells the query-builder to eager-load the nodes that are connected to
+// the "client" edge. The optional arguments are used to configure the query builder of the edge.
+func (_q *DiagnosticRunQuery) WithClient(opts ...func(*TailClientQuery)) *DiagnosticRunQuery {
+	query := (&TailClientClient{config: _q.config}).Query()
 	for _, opt := range opts {
 		opt(query)
 	}
-	_q.withDiagnosticRuns = query
-	return _q
-}
-
-// WithRoutes tells the query-builder to eager-load the nodes that are connected to
-// the "routes" edge. The optional arguments are used to configure the query builder of the edge.
-func (_q *TailClientQuery) WithRoutes(opts ...func(*PublishedRouteQuery)) *TailClientQuery {
-	query := (&PublishedRouteClient{config: _q.config}).Query()
-	for _, opt := range opts {
-		opt(query)
-	}
-	_q.withRoutes = query
+	_q.withClient = query
 	return _q
 }
 
@@ -375,15 +338,15 @@ func (_q *TailClientQuery) WithRoutes(opts ...func(*PublishedRouteQuery)) *TailC
 //		Count int `json:"count,omitempty"`
 //	}
 //
-//	client.TailClient.Query().
-//		GroupBy(tailclient.FieldUserID).
+//	client.DiagnosticRun.Query().
+//		GroupBy(diagnosticrun.FieldUserID).
 //		Aggregate(ent.Count()).
 //		Scan(ctx, &v)
-func (_q *TailClientQuery) GroupBy(field string, fields ...string) *TailClientGroupBy {
+func (_q *DiagnosticRunQuery) GroupBy(field string, fields ...string) *DiagnosticRunGroupBy {
 	_q.ctx.Fields = append([]string{field}, fields...)
-	grbuild := &TailClientGroupBy{build: _q}
+	grbuild := &DiagnosticRunGroupBy{build: _q}
 	grbuild.flds = &_q.ctx.Fields
-	grbuild.label = tailclient.Label
+	grbuild.label = diagnosticrun.Label
 	grbuild.scan = grbuild.Scan
 	return grbuild
 }
@@ -397,23 +360,23 @@ func (_q *TailClientQuery) GroupBy(field string, fields ...string) *TailClientGr
 //		UserID string `json:"user_id,omitempty"`
 //	}
 //
-//	client.TailClient.Query().
-//		Select(tailclient.FieldUserID).
+//	client.DiagnosticRun.Query().
+//		Select(diagnosticrun.FieldUserID).
 //		Scan(ctx, &v)
-func (_q *TailClientQuery) Select(fields ...string) *TailClientSelect {
+func (_q *DiagnosticRunQuery) Select(fields ...string) *DiagnosticRunSelect {
 	_q.ctx.Fields = append(_q.ctx.Fields, fields...)
-	sbuild := &TailClientSelect{TailClientQuery: _q}
-	sbuild.label = tailclient.Label
+	sbuild := &DiagnosticRunSelect{DiagnosticRunQuery: _q}
+	sbuild.label = diagnosticrun.Label
 	sbuild.flds, sbuild.scan = &_q.ctx.Fields, sbuild.Scan
 	return sbuild
 }
 
-// Aggregate returns a TailClientSelect configured with the given aggregations.
-func (_q *TailClientQuery) Aggregate(fns ...AggregateFunc) *TailClientSelect {
+// Aggregate returns a DiagnosticRunSelect configured with the given aggregations.
+func (_q *DiagnosticRunQuery) Aggregate(fns ...AggregateFunc) *DiagnosticRunSelect {
 	return _q.Select().Aggregate(fns...)
 }
 
-func (_q *TailClientQuery) prepareQuery(ctx context.Context) error {
+func (_q *DiagnosticRunQuery) prepareQuery(ctx context.Context) error {
 	for _, inter := range _q.inters {
 		if inter == nil {
 			return fmt.Errorf("ent: uninitialized interceptor (forgotten import ent/runtime?)")
@@ -425,7 +388,7 @@ func (_q *TailClientQuery) prepareQuery(ctx context.Context) error {
 		}
 	}
 	for _, f := range _q.ctx.Fields {
-		if !tailclient.ValidColumn(f) {
+		if !diagnosticrun.ValidColumn(f) {
 			return &ValidationError{Name: f, err: fmt.Errorf("ent: invalid field %q for query", f)}
 		}
 	}
@@ -439,21 +402,20 @@ func (_q *TailClientQuery) prepareQuery(ctx context.Context) error {
 	return nil
 }
 
-func (_q *TailClientQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*TailClient, error) {
+func (_q *DiagnosticRunQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*DiagnosticRun, error) {
 	var (
-		nodes       = []*TailClient{}
+		nodes       = []*DiagnosticRun{}
 		_spec       = _q.querySpec()
-		loadedTypes = [3]bool{
+		loadedTypes = [2]bool{
 			_q.withOwner != nil,
-			_q.withDiagnosticRuns != nil,
-			_q.withRoutes != nil,
+			_q.withClient != nil,
 		}
 	)
 	_spec.ScanValues = func(columns []string) ([]any, error) {
-		return (*TailClient).scanValues(nil, columns)
+		return (*DiagnosticRun).scanValues(nil, columns)
 	}
 	_spec.Assign = func(columns []string, values []any) error {
-		node := &TailClient{config: _q.config}
+		node := &DiagnosticRun{config: _q.config}
 		nodes = append(nodes, node)
 		node.Edges.loadedTypes = loadedTypes
 		return node.assignValues(columns, values)
@@ -469,30 +431,22 @@ func (_q *TailClientQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*T
 	}
 	if query := _q.withOwner; query != nil {
 		if err := _q.loadOwner(ctx, query, nodes, nil,
-			func(n *TailClient, e *User) { n.Edges.Owner = e }); err != nil {
+			func(n *DiagnosticRun, e *User) { n.Edges.Owner = e }); err != nil {
 			return nil, err
 		}
 	}
-	if query := _q.withDiagnosticRuns; query != nil {
-		if err := _q.loadDiagnosticRuns(ctx, query, nodes,
-			func(n *TailClient) { n.Edges.DiagnosticRuns = []*DiagnosticRun{} },
-			func(n *TailClient, e *DiagnosticRun) { n.Edges.DiagnosticRuns = append(n.Edges.DiagnosticRuns, e) }); err != nil {
-			return nil, err
-		}
-	}
-	if query := _q.withRoutes; query != nil {
-		if err := _q.loadRoutes(ctx, query, nodes,
-			func(n *TailClient) { n.Edges.Routes = []*PublishedRoute{} },
-			func(n *TailClient, e *PublishedRoute) { n.Edges.Routes = append(n.Edges.Routes, e) }); err != nil {
+	if query := _q.withClient; query != nil {
+		if err := _q.loadClient(ctx, query, nodes, nil,
+			func(n *DiagnosticRun, e *TailClient) { n.Edges.Client = e }); err != nil {
 			return nil, err
 		}
 	}
 	return nodes, nil
 }
 
-func (_q *TailClientQuery) loadOwner(ctx context.Context, query *UserQuery, nodes []*TailClient, init func(*TailClient), assign func(*TailClient, *User)) error {
+func (_q *DiagnosticRunQuery) loadOwner(ctx context.Context, query *UserQuery, nodes []*DiagnosticRun, init func(*DiagnosticRun), assign func(*DiagnosticRun, *User)) error {
 	ids := make([]string, 0, len(nodes))
-	nodeids := make(map[string][]*TailClient)
+	nodeids := make(map[string][]*DiagnosticRun)
 	for i := range nodes {
 		fk := nodes[i].UserID
 		if _, ok := nodeids[fk]; !ok {
@@ -519,68 +473,37 @@ func (_q *TailClientQuery) loadOwner(ctx context.Context, query *UserQuery, node
 	}
 	return nil
 }
-func (_q *TailClientQuery) loadDiagnosticRuns(ctx context.Context, query *DiagnosticRunQuery, nodes []*TailClient, init func(*TailClient), assign func(*TailClient, *DiagnosticRun)) error {
-	fks := make([]driver.Value, 0, len(nodes))
-	nodeids := make(map[string]*TailClient)
+func (_q *DiagnosticRunQuery) loadClient(ctx context.Context, query *TailClientQuery, nodes []*DiagnosticRun, init func(*DiagnosticRun), assign func(*DiagnosticRun, *TailClient)) error {
+	ids := make([]string, 0, len(nodes))
+	nodeids := make(map[string][]*DiagnosticRun)
 	for i := range nodes {
-		fks = append(fks, nodes[i].ID)
-		nodeids[nodes[i].ID] = nodes[i]
-		if init != nil {
-			init(nodes[i])
+		fk := nodes[i].ClientID
+		if _, ok := nodeids[fk]; !ok {
+			ids = append(ids, fk)
 		}
+		nodeids[fk] = append(nodeids[fk], nodes[i])
 	}
-	if len(query.ctx.Fields) > 0 {
-		query.ctx.AppendFieldOnce(diagnosticrun.FieldClientID)
+	if len(ids) == 0 {
+		return nil
 	}
-	query.Where(predicate.DiagnosticRun(func(s *sql.Selector) {
-		s.Where(sql.InValues(s.C(tailclient.DiagnosticRunsColumn), fks...))
-	}))
+	query.Where(tailclient.IDIn(ids...))
 	neighbors, err := query.All(ctx)
 	if err != nil {
 		return err
 	}
 	for _, n := range neighbors {
-		fk := n.ClientID
-		node, ok := nodeids[fk]
+		nodes, ok := nodeids[n.ID]
 		if !ok {
-			return fmt.Errorf(`unexpected referenced foreign-key "client_id" returned %v for node %v`, fk, n.ID)
+			return fmt.Errorf(`unexpected foreign-key "client_id" returned %v`, n.ID)
 		}
-		assign(node, n)
-	}
-	return nil
-}
-func (_q *TailClientQuery) loadRoutes(ctx context.Context, query *PublishedRouteQuery, nodes []*TailClient, init func(*TailClient), assign func(*TailClient, *PublishedRoute)) error {
-	fks := make([]driver.Value, 0, len(nodes))
-	nodeids := make(map[string]*TailClient)
-	for i := range nodes {
-		fks = append(fks, nodes[i].ID)
-		nodeids[nodes[i].ID] = nodes[i]
-		if init != nil {
-			init(nodes[i])
+		for i := range nodes {
+			assign(nodes[i], n)
 		}
-	}
-	if len(query.ctx.Fields) > 0 {
-		query.ctx.AppendFieldOnce(publishedroute.FieldClientID)
-	}
-	query.Where(predicate.PublishedRoute(func(s *sql.Selector) {
-		s.Where(sql.InValues(s.C(tailclient.RoutesColumn), fks...))
-	}))
-	neighbors, err := query.All(ctx)
-	if err != nil {
-		return err
-	}
-	for _, n := range neighbors {
-		fk := n.ClientID
-		node, ok := nodeids[fk]
-		if !ok {
-			return fmt.Errorf(`unexpected referenced foreign-key "client_id" returned %v for node %v`, fk, n.ID)
-		}
-		assign(node, n)
 	}
 	return nil
 }
 
-func (_q *TailClientQuery) sqlCount(ctx context.Context) (int, error) {
+func (_q *DiagnosticRunQuery) sqlCount(ctx context.Context) (int, error) {
 	_spec := _q.querySpec()
 	_spec.Node.Columns = _q.ctx.Fields
 	if len(_q.ctx.Fields) > 0 {
@@ -589,8 +512,8 @@ func (_q *TailClientQuery) sqlCount(ctx context.Context) (int, error) {
 	return sqlgraph.CountNodes(ctx, _q.driver, _spec)
 }
 
-func (_q *TailClientQuery) querySpec() *sqlgraph.QuerySpec {
-	_spec := sqlgraph.NewQuerySpec(tailclient.Table, tailclient.Columns, sqlgraph.NewFieldSpec(tailclient.FieldID, field.TypeString))
+func (_q *DiagnosticRunQuery) querySpec() *sqlgraph.QuerySpec {
+	_spec := sqlgraph.NewQuerySpec(diagnosticrun.Table, diagnosticrun.Columns, sqlgraph.NewFieldSpec(diagnosticrun.FieldID, field.TypeString))
 	_spec.From = _q.sql
 	if unique := _q.ctx.Unique; unique != nil {
 		_spec.Unique = *unique
@@ -599,14 +522,17 @@ func (_q *TailClientQuery) querySpec() *sqlgraph.QuerySpec {
 	}
 	if fields := _q.ctx.Fields; len(fields) > 0 {
 		_spec.Node.Columns = make([]string, 0, len(fields))
-		_spec.Node.Columns = append(_spec.Node.Columns, tailclient.FieldID)
+		_spec.Node.Columns = append(_spec.Node.Columns, diagnosticrun.FieldID)
 		for i := range fields {
-			if fields[i] != tailclient.FieldID {
+			if fields[i] != diagnosticrun.FieldID {
 				_spec.Node.Columns = append(_spec.Node.Columns, fields[i])
 			}
 		}
 		if _q.withOwner != nil {
-			_spec.Node.AddColumnOnce(tailclient.FieldUserID)
+			_spec.Node.AddColumnOnce(diagnosticrun.FieldUserID)
+		}
+		if _q.withClient != nil {
+			_spec.Node.AddColumnOnce(diagnosticrun.FieldClientID)
 		}
 	}
 	if ps := _q.predicates; len(ps) > 0 {
@@ -632,12 +558,12 @@ func (_q *TailClientQuery) querySpec() *sqlgraph.QuerySpec {
 	return _spec
 }
 
-func (_q *TailClientQuery) sqlQuery(ctx context.Context) *sql.Selector {
+func (_q *DiagnosticRunQuery) sqlQuery(ctx context.Context) *sql.Selector {
 	builder := sql.Dialect(_q.driver.Dialect())
-	t1 := builder.Table(tailclient.Table)
+	t1 := builder.Table(diagnosticrun.Table)
 	columns := _q.ctx.Fields
 	if len(columns) == 0 {
-		columns = tailclient.Columns
+		columns = diagnosticrun.Columns
 	}
 	selector := builder.Select(t1.Columns(columns...)...).From(t1)
 	if _q.sql != nil {
@@ -664,28 +590,28 @@ func (_q *TailClientQuery) sqlQuery(ctx context.Context) *sql.Selector {
 	return selector
 }
 
-// TailClientGroupBy is the group-by builder for TailClient entities.
-type TailClientGroupBy struct {
+// DiagnosticRunGroupBy is the group-by builder for DiagnosticRun entities.
+type DiagnosticRunGroupBy struct {
 	selector
-	build *TailClientQuery
+	build *DiagnosticRunQuery
 }
 
 // Aggregate adds the given aggregation functions to the group-by query.
-func (_g *TailClientGroupBy) Aggregate(fns ...AggregateFunc) *TailClientGroupBy {
+func (_g *DiagnosticRunGroupBy) Aggregate(fns ...AggregateFunc) *DiagnosticRunGroupBy {
 	_g.fns = append(_g.fns, fns...)
 	return _g
 }
 
 // Scan applies the selector query and scans the result into the given value.
-func (_g *TailClientGroupBy) Scan(ctx context.Context, v any) error {
+func (_g *DiagnosticRunGroupBy) Scan(ctx context.Context, v any) error {
 	ctx = setContextOp(ctx, _g.build.ctx, ent.OpQueryGroupBy)
 	if err := _g.build.prepareQuery(ctx); err != nil {
 		return err
 	}
-	return scanWithInterceptors[*TailClientQuery, *TailClientGroupBy](ctx, _g.build, _g, _g.build.inters, v)
+	return scanWithInterceptors[*DiagnosticRunQuery, *DiagnosticRunGroupBy](ctx, _g.build, _g, _g.build.inters, v)
 }
 
-func (_g *TailClientGroupBy) sqlScan(ctx context.Context, root *TailClientQuery, v any) error {
+func (_g *DiagnosticRunGroupBy) sqlScan(ctx context.Context, root *DiagnosticRunQuery, v any) error {
 	selector := root.sqlQuery(ctx).Select()
 	aggregation := make([]string, 0, len(_g.fns))
 	for _, fn := range _g.fns {
@@ -712,28 +638,28 @@ func (_g *TailClientGroupBy) sqlScan(ctx context.Context, root *TailClientQuery,
 	return sql.ScanSlice(rows, v)
 }
 
-// TailClientSelect is the builder for selecting fields of TailClient entities.
-type TailClientSelect struct {
-	*TailClientQuery
+// DiagnosticRunSelect is the builder for selecting fields of DiagnosticRun entities.
+type DiagnosticRunSelect struct {
+	*DiagnosticRunQuery
 	selector
 }
 
 // Aggregate adds the given aggregation functions to the selector query.
-func (_s *TailClientSelect) Aggregate(fns ...AggregateFunc) *TailClientSelect {
+func (_s *DiagnosticRunSelect) Aggregate(fns ...AggregateFunc) *DiagnosticRunSelect {
 	_s.fns = append(_s.fns, fns...)
 	return _s
 }
 
 // Scan applies the selector query and scans the result into the given value.
-func (_s *TailClientSelect) Scan(ctx context.Context, v any) error {
+func (_s *DiagnosticRunSelect) Scan(ctx context.Context, v any) error {
 	ctx = setContextOp(ctx, _s.ctx, ent.OpQuerySelect)
 	if err := _s.prepareQuery(ctx); err != nil {
 		return err
 	}
-	return scanWithInterceptors[*TailClientQuery, *TailClientSelect](ctx, _s.TailClientQuery, _s, _s.inters, v)
+	return scanWithInterceptors[*DiagnosticRunQuery, *DiagnosticRunSelect](ctx, _s.DiagnosticRunQuery, _s, _s.inters, v)
 }
 
-func (_s *TailClientSelect) sqlScan(ctx context.Context, root *TailClientQuery, v any) error {
+func (_s *DiagnosticRunSelect) sqlScan(ctx context.Context, root *DiagnosticRunQuery, v any) error {
 	selector := root.sqlQuery(ctx)
 	aggregation := make([]string, 0, len(_s.fns))
 	for _, fn := range _s.fns {

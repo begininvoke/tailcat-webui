@@ -86,6 +86,55 @@ var (
 			},
 		},
 	}
+	// DiagnosticRunsColumns holds the columns for the "diagnostic_runs" table.
+	DiagnosticRunsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeString},
+		{Name: "kind", Type: field.TypeEnum, Enums: []string{"ping", "throughput"}},
+		{Name: "status", Type: field.TypeEnum, Enums: []string{"running", "succeeded", "failed", "canceled", "interrupted"}, Default: "running"},
+		{Name: "path", Type: field.TypeEnum, Nullable: true, Enums: []string{"direct", "derp", "peer_relay"}},
+		{Name: "latency_ms", Type: field.TypeInt64, Nullable: true},
+		{Name: "upload_bytes", Type: field.TypeInt64, Default: 0},
+		{Name: "download_bytes", Type: field.TypeInt64, Default: 0},
+		{Name: "upload_bps", Type: field.TypeInt64, Default: 0},
+		{Name: "download_bps", Type: field.TypeInt64, Default: 0},
+		{Name: "error_code", Type: field.TypeString, Nullable: true},
+		{Name: "started_at", Type: field.TypeTime},
+		{Name: "finished_at", Type: field.TypeTime, Nullable: true},
+		{Name: "client_id", Type: field.TypeString},
+		{Name: "user_id", Type: field.TypeString},
+	}
+	// DiagnosticRunsTable holds the schema information for the "diagnostic_runs" table.
+	DiagnosticRunsTable = &schema.Table{
+		Name:       "diagnostic_runs",
+		Columns:    DiagnosticRunsColumns,
+		PrimaryKey: []*schema.Column{DiagnosticRunsColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "diagnostic_runs_tail_clients_diagnostic_runs",
+				Columns:    []*schema.Column{DiagnosticRunsColumns[12]},
+				RefColumns: []*schema.Column{TailClientsColumns[0]},
+				OnDelete:   schema.Cascade,
+			},
+			{
+				Symbol:     "diagnostic_runs_users_diagnostic_runs",
+				Columns:    []*schema.Column{DiagnosticRunsColumns[13]},
+				RefColumns: []*schema.Column{UsersColumns[0]},
+				OnDelete:   schema.Cascade,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "diagnosticrun_user_id_started_at",
+				Unique:  false,
+				Columns: []*schema.Column{DiagnosticRunsColumns[13], DiagnosticRunsColumns[10]},
+			},
+			{
+				Name:    "diagnosticrun_client_id_started_at",
+				Unique:  false,
+				Columns: []*schema.Column{DiagnosticRunsColumns[12], DiagnosticRunsColumns[10]},
+			},
+		},
+	}
 	// ExitRulesColumns holds the columns for the "exit_rules" table.
 	ExitRulesColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeString},
@@ -375,6 +424,7 @@ var (
 	Tables = []*schema.Table{
 		AllowedClientsTable,
 		AuditEventsTable,
+		DiagnosticRunsTable,
 		ExitRulesTable,
 		LoginFlowsTable,
 		PortMappingsTable,
@@ -389,6 +439,8 @@ var (
 func init() {
 	AllowedClientsTable.ForeignKeys[0].RefTable = TailServersTable
 	AuditEventsTable.ForeignKeys[0].RefTable = UsersTable
+	DiagnosticRunsTable.ForeignKeys[0].RefTable = TailClientsTable
+	DiagnosticRunsTable.ForeignKeys[1].RefTable = UsersTable
 	ExitRulesTable.ForeignKeys[0].RefTable = TailServersTable
 	ExitRulesTable.ForeignKeys[1].RefTable = UsersTable
 	PortMappingsTable.ForeignKeys[0].RefTable = TailServersTable

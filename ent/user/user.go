@@ -36,6 +36,8 @@ const (
 	EdgeExitRules = "exit_rules"
 	// EdgeClients holds the string denoting the clients edge name in mutations.
 	EdgeClients = "clients"
+	// EdgeDiagnosticRuns holds the string denoting the diagnostic_runs edge name in mutations.
+	EdgeDiagnosticRuns = "diagnostic_runs"
 	// EdgeRoutes holds the string denoting the routes edge name in mutations.
 	EdgeRoutes = "routes"
 	// EdgeAuditEvents holds the string denoting the audit_events edge name in mutations.
@@ -70,6 +72,13 @@ const (
 	ClientsInverseTable = "tail_clients"
 	// ClientsColumn is the table column denoting the clients relation/edge.
 	ClientsColumn = "user_id"
+	// DiagnosticRunsTable is the table that holds the diagnostic_runs relation/edge.
+	DiagnosticRunsTable = "diagnostic_runs"
+	// DiagnosticRunsInverseTable is the table name for the DiagnosticRun entity.
+	// It exists in this package in order to avoid circular dependency with the "diagnosticrun" package.
+	DiagnosticRunsInverseTable = "diagnostic_runs"
+	// DiagnosticRunsColumn is the table column denoting the diagnostic_runs relation/edge.
+	DiagnosticRunsColumn = "user_id"
 	// RoutesTable is the table that holds the routes relation/edge.
 	RoutesTable = "published_routes"
 	// RoutesInverseTable is the table name for the PublishedRoute entity.
@@ -222,6 +231,20 @@ func ByClients(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
 	}
 }
 
+// ByDiagnosticRunsCount orders the results by diagnostic_runs count.
+func ByDiagnosticRunsCount(opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborsCount(s, newDiagnosticRunsStep(), opts...)
+	}
+}
+
+// ByDiagnosticRuns orders the results by diagnostic_runs terms.
+func ByDiagnosticRuns(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newDiagnosticRunsStep(), append([]sql.OrderTerm{term}, terms...)...)
+	}
+}
+
 // ByRoutesCount orders the results by routes count.
 func ByRoutesCount(opts ...sql.OrderTermOption) OrderOption {
 	return func(s *sql.Selector) {
@@ -275,6 +298,13 @@ func newClientsStep() *sqlgraph.Step {
 		sqlgraph.From(Table, FieldID),
 		sqlgraph.To(ClientsInverseTable, FieldID),
 		sqlgraph.Edge(sqlgraph.O2M, false, ClientsTable, ClientsColumn),
+	)
+}
+func newDiagnosticRunsStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(DiagnosticRunsInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.O2M, false, DiagnosticRunsTable, DiagnosticRunsColumn),
 	)
 }
 func newRoutesStep() *sqlgraph.Step {

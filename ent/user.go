@@ -47,13 +47,15 @@ type UserEdges struct {
 	ExitRules []*ExitRule `json:"exit_rules,omitempty"`
 	// Clients holds the value of the clients edge.
 	Clients []*TailClient `json:"clients,omitempty"`
+	// DiagnosticRuns holds the value of the diagnostic_runs edge.
+	DiagnosticRuns []*DiagnosticRun `json:"diagnostic_runs,omitempty"`
 	// Routes holds the value of the routes edge.
 	Routes []*PublishedRoute `json:"routes,omitempty"`
 	// AuditEvents holds the value of the audit_events edge.
 	AuditEvents []*AuditEvent `json:"audit_events,omitempty"`
 	// loadedTypes holds the information for reporting if a
 	// type was loaded (or requested) in eager-loading or not.
-	loadedTypes [6]bool
+	loadedTypes [7]bool
 }
 
 // SessionsOrErr returns the Sessions value or an error if the edge
@@ -92,10 +94,19 @@ func (e UserEdges) ClientsOrErr() ([]*TailClient, error) {
 	return nil, &NotLoadedError{edge: "clients"}
 }
 
+// DiagnosticRunsOrErr returns the DiagnosticRuns value or an error if the edge
+// was not loaded in eager-loading.
+func (e UserEdges) DiagnosticRunsOrErr() ([]*DiagnosticRun, error) {
+	if e.loadedTypes[4] {
+		return e.DiagnosticRuns, nil
+	}
+	return nil, &NotLoadedError{edge: "diagnostic_runs"}
+}
+
 // RoutesOrErr returns the Routes value or an error if the edge
 // was not loaded in eager-loading.
 func (e UserEdges) RoutesOrErr() ([]*PublishedRoute, error) {
-	if e.loadedTypes[4] {
+	if e.loadedTypes[5] {
 		return e.Routes, nil
 	}
 	return nil, &NotLoadedError{edge: "routes"}
@@ -104,7 +115,7 @@ func (e UserEdges) RoutesOrErr() ([]*PublishedRoute, error) {
 // AuditEventsOrErr returns the AuditEvents value or an error if the edge
 // was not loaded in eager-loading.
 func (e UserEdges) AuditEventsOrErr() ([]*AuditEvent, error) {
-	if e.loadedTypes[5] {
+	if e.loadedTypes[6] {
 		return e.AuditEvents, nil
 	}
 	return nil, &NotLoadedError{edge: "audit_events"}
@@ -213,6 +224,11 @@ func (_m *User) QueryExitRules() *ExitRuleQuery {
 // QueryClients queries the "clients" edge of the User entity.
 func (_m *User) QueryClients() *TailClientQuery {
 	return NewUserClient(_m.config).QueryClients(_m)
+}
+
+// QueryDiagnosticRuns queries the "diagnostic_runs" edge of the User entity.
+func (_m *User) QueryDiagnosticRuns() *DiagnosticRunQuery {
+	return NewUserClient(_m.config).QueryDiagnosticRuns(_m)
 }
 
 // QueryRoutes queries the "routes" edge of the User entity.

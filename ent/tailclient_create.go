@@ -10,6 +10,7 @@ import (
 
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
+	"github.com/ca-x/tailcat-webui/ent/diagnosticrun"
 	"github.com/ca-x/tailcat-webui/ent/publishedroute"
 	"github.com/ca-x/tailcat-webui/ent/tailclient"
 	"github.com/ca-x/tailcat-webui/ent/user"
@@ -159,6 +160,21 @@ func (_c *TailClientCreate) SetOwnerID(id string) *TailClientCreate {
 // SetOwner sets the "owner" edge to the User entity.
 func (_c *TailClientCreate) SetOwner(v *User) *TailClientCreate {
 	return _c.SetOwnerID(v.ID)
+}
+
+// AddDiagnosticRunIDs adds the "diagnostic_runs" edge to the DiagnosticRun entity by IDs.
+func (_c *TailClientCreate) AddDiagnosticRunIDs(ids ...string) *TailClientCreate {
+	_c.mutation.AddDiagnosticRunIDs(ids...)
+	return _c
+}
+
+// AddDiagnosticRuns adds the "diagnostic_runs" edges to the DiagnosticRun entity.
+func (_c *TailClientCreate) AddDiagnosticRuns(v ...*DiagnosticRun) *TailClientCreate {
+	ids := make([]string, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _c.AddDiagnosticRunIDs(ids...)
 }
 
 // AddRouteIDs adds the "routes" edge to the PublishedRoute entity by IDs.
@@ -353,6 +369,22 @@ func (_c *TailClientCreate) createSpec() (*TailClient, *sqlgraph.CreateSpec) {
 			edge.Target.Nodes = append(edge.Target.Nodes, k)
 		}
 		_node.UserID = nodes[0]
+		_spec.Edges = append(_spec.Edges, edge)
+	}
+	if nodes := _c.mutation.DiagnosticRunsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   tailclient.DiagnosticRunsTable,
+			Columns: []string{tailclient.DiagnosticRunsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(diagnosticrun.FieldID, field.TypeString),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
 		_spec.Edges = append(_spec.Edges, edge)
 	}
 	if nodes := _c.mutation.RoutesIDs(); len(nodes) > 0 {

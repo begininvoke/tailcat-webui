@@ -50,11 +50,13 @@ type TailClient struct {
 type TailClientEdges struct {
 	// Owner holds the value of the owner edge.
 	Owner *User `json:"owner,omitempty"`
+	// DiagnosticRuns holds the value of the diagnostic_runs edge.
+	DiagnosticRuns []*DiagnosticRun `json:"diagnostic_runs,omitempty"`
 	// Routes holds the value of the routes edge.
 	Routes []*PublishedRoute `json:"routes,omitempty"`
 	// loadedTypes holds the information for reporting if a
 	// type was loaded (or requested) in eager-loading or not.
-	loadedTypes [2]bool
+	loadedTypes [3]bool
 }
 
 // OwnerOrErr returns the Owner value or an error if the edge
@@ -68,10 +70,19 @@ func (e TailClientEdges) OwnerOrErr() (*User, error) {
 	return nil, &NotLoadedError{edge: "owner"}
 }
 
+// DiagnosticRunsOrErr returns the DiagnosticRuns value or an error if the edge
+// was not loaded in eager-loading.
+func (e TailClientEdges) DiagnosticRunsOrErr() ([]*DiagnosticRun, error) {
+	if e.loadedTypes[1] {
+		return e.DiagnosticRuns, nil
+	}
+	return nil, &NotLoadedError{edge: "diagnostic_runs"}
+}
+
 // RoutesOrErr returns the Routes value or an error if the edge
 // was not loaded in eager-loading.
 func (e TailClientEdges) RoutesOrErr() ([]*PublishedRoute, error) {
-	if e.loadedTypes[1] {
+	if e.loadedTypes[2] {
 		return e.Routes, nil
 	}
 	return nil, &NotLoadedError{edge: "routes"}
@@ -195,6 +206,11 @@ func (_m *TailClient) Value(name string) (ent.Value, error) {
 // QueryOwner queries the "owner" edge of the TailClient entity.
 func (_m *TailClient) QueryOwner() *UserQuery {
 	return NewTailClientClient(_m.config).QueryOwner(_m)
+}
+
+// QueryDiagnosticRuns queries the "diagnostic_runs" edge of the TailClient entity.
+func (_m *TailClient) QueryDiagnosticRuns() *DiagnosticRunQuery {
+	return NewTailClientClient(_m.config).QueryDiagnosticRuns(_m)
 }
 
 // QueryRoutes queries the "routes" edge of the TailClient entity.

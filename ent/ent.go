@@ -14,6 +14,7 @@ import (
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"github.com/ca-x/tailcat-webui/ent/allowedclient"
 	"github.com/ca-x/tailcat-webui/ent/auditevent"
+	"github.com/ca-x/tailcat-webui/ent/diagnosticrun"
 	"github.com/ca-x/tailcat-webui/ent/exitrule"
 	"github.com/ca-x/tailcat-webui/ent/loginflow"
 	"github.com/ca-x/tailcat-webui/ent/portmapping"
@@ -84,6 +85,7 @@ func checkColumn(t, c string) error {
 		columnCheck = sql.NewColumnCheck(map[string]func(string) bool{
 			allowedclient.Table:  allowedclient.ValidColumn,
 			auditevent.Table:     auditevent.ValidColumn,
+			diagnosticrun.Table:  diagnosticrun.ValidColumn,
 			exitrule.Table:       exitrule.ValidColumn,
 			loginflow.Table:      loginflow.ValidColumn,
 			portmapping.Table:    portmapping.ValidColumn,

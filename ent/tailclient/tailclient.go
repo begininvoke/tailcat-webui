@@ -38,6 +38,8 @@ const (
 	FieldUpdatedAt = "updated_at"
 	// EdgeOwner holds the string denoting the owner edge name in mutations.
 	EdgeOwner = "owner"
+	// EdgeDiagnosticRuns holds the string denoting the diagnostic_runs edge name in mutations.
+	EdgeDiagnosticRuns = "diagnostic_runs"
 	// EdgeRoutes holds the string denoting the routes edge name in mutations.
 	EdgeRoutes = "routes"
 	// Table holds the table name of the tailclient in the database.
@@ -49,6 +51,13 @@ const (
 	OwnerInverseTable = "users"
 	// OwnerColumn is the table column denoting the owner relation/edge.
 	OwnerColumn = "user_id"
+	// DiagnosticRunsTable is the table that holds the diagnostic_runs relation/edge.
+	DiagnosticRunsTable = "diagnostic_runs"
+	// DiagnosticRunsInverseTable is the table name for the DiagnosticRun entity.
+	// It exists in this package in order to avoid circular dependency with the "diagnosticrun" package.
+	DiagnosticRunsInverseTable = "diagnostic_runs"
+	// DiagnosticRunsColumn is the table column denoting the diagnostic_runs relation/edge.
+	DiagnosticRunsColumn = "client_id"
 	// RoutesTable is the table that holds the routes relation/edge.
 	RoutesTable = "published_routes"
 	// RoutesInverseTable is the table name for the PublishedRoute entity.
@@ -161,6 +170,20 @@ func ByOwnerField(field string, opts ...sql.OrderTermOption) OrderOption {
 	}
 }
 
+// ByDiagnosticRunsCount orders the results by diagnostic_runs count.
+func ByDiagnosticRunsCount(opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborsCount(s, newDiagnosticRunsStep(), opts...)
+	}
+}
+
+// ByDiagnosticRuns orders the results by diagnostic_runs terms.
+func ByDiagnosticRuns(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newDiagnosticRunsStep(), append([]sql.OrderTerm{term}, terms...)...)
+	}
+}
+
 // ByRoutesCount orders the results by routes count.
 func ByRoutesCount(opts ...sql.OrderTermOption) OrderOption {
 	return func(s *sql.Selector) {
@@ -179,6 +202,13 @@ func newOwnerStep() *sqlgraph.Step {
 		sqlgraph.From(Table, FieldID),
 		sqlgraph.To(OwnerInverseTable, FieldID),
 		sqlgraph.Edge(sqlgraph.M2O, true, OwnerTable, OwnerColumn),
+	)
+}
+func newDiagnosticRunsStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(DiagnosticRunsInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.O2M, false, DiagnosticRunsTable, DiagnosticRunsColumn),
 	)
 }
 func newRoutesStep() *sqlgraph.Step {

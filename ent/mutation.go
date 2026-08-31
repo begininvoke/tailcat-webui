@@ -13,6 +13,7 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"github.com/ca-x/tailcat-webui/ent/allowedclient"
 	"github.com/ca-x/tailcat-webui/ent/auditevent"
+	"github.com/ca-x/tailcat-webui/ent/diagnosticrun"
 	"github.com/ca-x/tailcat-webui/ent/exitrule"
 	"github.com/ca-x/tailcat-webui/ent/loginflow"
 	"github.com/ca-x/tailcat-webui/ent/portmapping"
@@ -35,6 +36,7 @@ const (
 	// Node types.
 	TypeAllowedClient  = "AllowedClient"
 	TypeAuditEvent     = "AuditEvent"
+	TypeDiagnosticRun  = "DiagnosticRun"
 	TypeExitRule       = "ExitRule"
 	TypeLoginFlow      = "LoginFlow"
 	TypePortMapping    = "PortMapping"
@@ -1507,6 +1509,1347 @@ func (m *AuditEventMutation) ResetEdge(name string) error {
 		return nil
 	}
 	return fmt.Errorf("unknown AuditEvent edge %s", name)
+}
+
+// DiagnosticRunMutation represents an operation that mutates the DiagnosticRun nodes in the graph.
+type DiagnosticRunMutation struct {
+	config
+	op                Op
+	typ               string
+	id                *string
+	kind              *diagnosticrun.Kind
+	status            *diagnosticrun.Status
+	_path             *diagnosticrun.Path
+	latency_ms        *int64
+	addlatency_ms     *int64
+	upload_bytes      *int64
+	addupload_bytes   *int64
+	download_bytes    *int64
+	adddownload_bytes *int64
+	upload_bps        *int64
+	addupload_bps     *int64
+	download_bps      *int64
+	adddownload_bps   *int64
+	error_code        *string
+	started_at        *time.Time
+	finished_at       *time.Time
+	clearedFields     map[string]struct{}
+	owner             *string
+	clearedowner      bool
+	client            *string
+	clearedclient     bool
+	done              bool
+	oldValue          func(context.Context) (*DiagnosticRun, error)
+	predicates        []predicate.DiagnosticRun
+}
+
+var _ ent.Mutation = (*DiagnosticRunMutation)(nil)
+
+// diagnosticrunOption allows management of the mutation configuration using functional options.
+type diagnosticrunOption func(*DiagnosticRunMutation)
+
+// newDiagnosticRunMutation creates new mutation for the DiagnosticRun entity.
+func newDiagnosticRunMutation(c config, op Op, opts ...diagnosticrunOption) *DiagnosticRunMutation {
+	m := &DiagnosticRunMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeDiagnosticRun,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withDiagnosticRunID sets the ID field of the mutation.
+func withDiagnosticRunID(id string) diagnosticrunOption {
+	return func(m *DiagnosticRunMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *DiagnosticRun
+		)
+		m.oldValue = func(ctx context.Context) (*DiagnosticRun, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().DiagnosticRun.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withDiagnosticRun sets the old DiagnosticRun of the mutation.
+func withDiagnosticRun(node *DiagnosticRun) diagnosticrunOption {
+	return func(m *DiagnosticRunMutation) {
+		m.oldValue = func(context.Context) (*DiagnosticRun, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m DiagnosticRunMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m DiagnosticRunMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// SetID sets the value of the id field. Note that this
+// operation is only accepted on creation of DiagnosticRun entities.
+func (m *DiagnosticRunMutation) SetID(id string) {
+	m.id = &id
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *DiagnosticRunMutation) ID() (id string, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *DiagnosticRunMutation) IDs(ctx context.Context) ([]string, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []string{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().DiagnosticRun.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetUserID sets the "user_id" field.
+func (m *DiagnosticRunMutation) SetUserID(s string) {
+	m.owner = &s
+}
+
+// UserID returns the value of the "user_id" field in the mutation.
+func (m *DiagnosticRunMutation) UserID() (r string, exists bool) {
+	v := m.owner
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUserID returns the old "user_id" field's value of the DiagnosticRun entity.
+// If the DiagnosticRun object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DiagnosticRunMutation) OldUserID(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUserID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUserID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUserID: %w", err)
+	}
+	return oldValue.UserID, nil
+}
+
+// ResetUserID resets all changes to the "user_id" field.
+func (m *DiagnosticRunMutation) ResetUserID() {
+	m.owner = nil
+}
+
+// SetClientID sets the "client_id" field.
+func (m *DiagnosticRunMutation) SetClientID(s string) {
+	m.client = &s
+}
+
+// ClientID returns the value of the "client_id" field in the mutation.
+func (m *DiagnosticRunMutation) ClientID() (r string, exists bool) {
+	v := m.client
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldClientID returns the old "client_id" field's value of the DiagnosticRun entity.
+// If the DiagnosticRun object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DiagnosticRunMutation) OldClientID(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldClientID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldClientID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldClientID: %w", err)
+	}
+	return oldValue.ClientID, nil
+}
+
+// ResetClientID resets all changes to the "client_id" field.
+func (m *DiagnosticRunMutation) ResetClientID() {
+	m.client = nil
+}
+
+// SetKind sets the "kind" field.
+func (m *DiagnosticRunMutation) SetKind(d diagnosticrun.Kind) {
+	m.kind = &d
+}
+
+// Kind returns the value of the "kind" field in the mutation.
+func (m *DiagnosticRunMutation) Kind() (r diagnosticrun.Kind, exists bool) {
+	v := m.kind
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldKind returns the old "kind" field's value of the DiagnosticRun entity.
+// If the DiagnosticRun object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DiagnosticRunMutation) OldKind(ctx context.Context) (v diagnosticrun.Kind, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldKind is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldKind requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldKind: %w", err)
+	}
+	return oldValue.Kind, nil
+}
+
+// ResetKind resets all changes to the "kind" field.
+func (m *DiagnosticRunMutation) ResetKind() {
+	m.kind = nil
+}
+
+// SetStatus sets the "status" field.
+func (m *DiagnosticRunMutation) SetStatus(d diagnosticrun.Status) {
+	m.status = &d
+}
+
+// Status returns the value of the "status" field in the mutation.
+func (m *DiagnosticRunMutation) Status() (r diagnosticrun.Status, exists bool) {
+	v := m.status
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldStatus returns the old "status" field's value of the DiagnosticRun entity.
+// If the DiagnosticRun object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DiagnosticRunMutation) OldStatus(ctx context.Context) (v diagnosticrun.Status, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldStatus is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldStatus requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldStatus: %w", err)
+	}
+	return oldValue.Status, nil
+}
+
+// ResetStatus resets all changes to the "status" field.
+func (m *DiagnosticRunMutation) ResetStatus() {
+	m.status = nil
+}
+
+// SetPath sets the "path" field.
+func (m *DiagnosticRunMutation) SetPath(d diagnosticrun.Path) {
+	m._path = &d
+}
+
+// Path returns the value of the "path" field in the mutation.
+func (m *DiagnosticRunMutation) Path() (r diagnosticrun.Path, exists bool) {
+	v := m._path
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldPath returns the old "path" field's value of the DiagnosticRun entity.
+// If the DiagnosticRun object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DiagnosticRunMutation) OldPath(ctx context.Context) (v diagnosticrun.Path, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldPath is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldPath requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldPath: %w", err)
+	}
+	return oldValue.Path, nil
+}
+
+// ClearPath clears the value of the "path" field.
+func (m *DiagnosticRunMutation) ClearPath() {
+	m._path = nil
+	m.clearedFields[diagnosticrun.FieldPath] = struct{}{}
+}
+
+// PathCleared returns if the "path" field was cleared in this mutation.
+func (m *DiagnosticRunMutation) PathCleared() bool {
+	_, ok := m.clearedFields[diagnosticrun.FieldPath]
+	return ok
+}
+
+// ResetPath resets all changes to the "path" field.
+func (m *DiagnosticRunMutation) ResetPath() {
+	m._path = nil
+	delete(m.clearedFields, diagnosticrun.FieldPath)
+}
+
+// SetLatencyMs sets the "latency_ms" field.
+func (m *DiagnosticRunMutation) SetLatencyMs(i int64) {
+	m.latency_ms = &i
+	m.addlatency_ms = nil
+}
+
+// LatencyMs returns the value of the "latency_ms" field in the mutation.
+func (m *DiagnosticRunMutation) LatencyMs() (r int64, exists bool) {
+	v := m.latency_ms
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldLatencyMs returns the old "latency_ms" field's value of the DiagnosticRun entity.
+// If the DiagnosticRun object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DiagnosticRunMutation) OldLatencyMs(ctx context.Context) (v *int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldLatencyMs is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldLatencyMs requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldLatencyMs: %w", err)
+	}
+	return oldValue.LatencyMs, nil
+}
+
+// AddLatencyMs adds i to the "latency_ms" field.
+func (m *DiagnosticRunMutation) AddLatencyMs(i int64) {
+	if m.addlatency_ms != nil {
+		*m.addlatency_ms += i
+	} else {
+		m.addlatency_ms = &i
+	}
+}
+
+// AddedLatencyMs returns the value that was added to the "latency_ms" field in this mutation.
+func (m *DiagnosticRunMutation) AddedLatencyMs() (r int64, exists bool) {
+	v := m.addlatency_ms
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearLatencyMs clears the value of the "latency_ms" field.
+func (m *DiagnosticRunMutation) ClearLatencyMs() {
+	m.latency_ms = nil
+	m.addlatency_ms = nil
+	m.clearedFields[diagnosticrun.FieldLatencyMs] = struct{}{}
+}
+
+// LatencyMsCleared returns if the "latency_ms" field was cleared in this mutation.
+func (m *DiagnosticRunMutation) LatencyMsCleared() bool {
+	_, ok := m.clearedFields[diagnosticrun.FieldLatencyMs]
+	return ok
+}
+
+// ResetLatencyMs resets all changes to the "latency_ms" field.
+func (m *DiagnosticRunMutation) ResetLatencyMs() {
+	m.latency_ms = nil
+	m.addlatency_ms = nil
+	delete(m.clearedFields, diagnosticrun.FieldLatencyMs)
+}
+
+// SetUploadBytes sets the "upload_bytes" field.
+func (m *DiagnosticRunMutation) SetUploadBytes(i int64) {
+	m.upload_bytes = &i
+	m.addupload_bytes = nil
+}
+
+// UploadBytes returns the value of the "upload_bytes" field in the mutation.
+func (m *DiagnosticRunMutation) UploadBytes() (r int64, exists bool) {
+	v := m.upload_bytes
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUploadBytes returns the old "upload_bytes" field's value of the DiagnosticRun entity.
+// If the DiagnosticRun object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DiagnosticRunMutation) OldUploadBytes(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUploadBytes is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUploadBytes requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUploadBytes: %w", err)
+	}
+	return oldValue.UploadBytes, nil
+}
+
+// AddUploadBytes adds i to the "upload_bytes" field.
+func (m *DiagnosticRunMutation) AddUploadBytes(i int64) {
+	if m.addupload_bytes != nil {
+		*m.addupload_bytes += i
+	} else {
+		m.addupload_bytes = &i
+	}
+}
+
+// AddedUploadBytes returns the value that was added to the "upload_bytes" field in this mutation.
+func (m *DiagnosticRunMutation) AddedUploadBytes() (r int64, exists bool) {
+	v := m.addupload_bytes
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetUploadBytes resets all changes to the "upload_bytes" field.
+func (m *DiagnosticRunMutation) ResetUploadBytes() {
+	m.upload_bytes = nil
+	m.addupload_bytes = nil
+}
+
+// SetDownloadBytes sets the "download_bytes" field.
+func (m *DiagnosticRunMutation) SetDownloadBytes(i int64) {
+	m.download_bytes = &i
+	m.adddownload_bytes = nil
+}
+
+// DownloadBytes returns the value of the "download_bytes" field in the mutation.
+func (m *DiagnosticRunMutation) DownloadBytes() (r int64, exists bool) {
+	v := m.download_bytes
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDownloadBytes returns the old "download_bytes" field's value of the DiagnosticRun entity.
+// If the DiagnosticRun object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DiagnosticRunMutation) OldDownloadBytes(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDownloadBytes is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDownloadBytes requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDownloadBytes: %w", err)
+	}
+	return oldValue.DownloadBytes, nil
+}
+
+// AddDownloadBytes adds i to the "download_bytes" field.
+func (m *DiagnosticRunMutation) AddDownloadBytes(i int64) {
+	if m.adddownload_bytes != nil {
+		*m.adddownload_bytes += i
+	} else {
+		m.adddownload_bytes = &i
+	}
+}
+
+// AddedDownloadBytes returns the value that was added to the "download_bytes" field in this mutation.
+func (m *DiagnosticRunMutation) AddedDownloadBytes() (r int64, exists bool) {
+	v := m.adddownload_bytes
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetDownloadBytes resets all changes to the "download_bytes" field.
+func (m *DiagnosticRunMutation) ResetDownloadBytes() {
+	m.download_bytes = nil
+	m.adddownload_bytes = nil
+}
+
+// SetUploadBps sets the "upload_bps" field.
+func (m *DiagnosticRunMutation) SetUploadBps(i int64) {
+	m.upload_bps = &i
+	m.addupload_bps = nil
+}
+
+// UploadBps returns the value of the "upload_bps" field in the mutation.
+func (m *DiagnosticRunMutation) UploadBps() (r int64, exists bool) {
+	v := m.upload_bps
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUploadBps returns the old "upload_bps" field's value of the DiagnosticRun entity.
+// If the DiagnosticRun object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DiagnosticRunMutation) OldUploadBps(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUploadBps is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUploadBps requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUploadBps: %w", err)
+	}
+	return oldValue.UploadBps, nil
+}
+
+// AddUploadBps adds i to the "upload_bps" field.
+func (m *DiagnosticRunMutation) AddUploadBps(i int64) {
+	if m.addupload_bps != nil {
+		*m.addupload_bps += i
+	} else {
+		m.addupload_bps = &i
+	}
+}
+
+// AddedUploadBps returns the value that was added to the "upload_bps" field in this mutation.
+func (m *DiagnosticRunMutation) AddedUploadBps() (r int64, exists bool) {
+	v := m.addupload_bps
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetUploadBps resets all changes to the "upload_bps" field.
+func (m *DiagnosticRunMutation) ResetUploadBps() {
+	m.upload_bps = nil
+	m.addupload_bps = nil
+}
+
+// SetDownloadBps sets the "download_bps" field.
+func (m *DiagnosticRunMutation) SetDownloadBps(i int64) {
+	m.download_bps = &i
+	m.adddownload_bps = nil
+}
+
+// DownloadBps returns the value of the "download_bps" field in the mutation.
+func (m *DiagnosticRunMutation) DownloadBps() (r int64, exists bool) {
+	v := m.download_bps
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDownloadBps returns the old "download_bps" field's value of the DiagnosticRun entity.
+// If the DiagnosticRun object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DiagnosticRunMutation) OldDownloadBps(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDownloadBps is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDownloadBps requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDownloadBps: %w", err)
+	}
+	return oldValue.DownloadBps, nil
+}
+
+// AddDownloadBps adds i to the "download_bps" field.
+func (m *DiagnosticRunMutation) AddDownloadBps(i int64) {
+	if m.adddownload_bps != nil {
+		*m.adddownload_bps += i
+	} else {
+		m.adddownload_bps = &i
+	}
+}
+
+// AddedDownloadBps returns the value that was added to the "download_bps" field in this mutation.
+func (m *DiagnosticRunMutation) AddedDownloadBps() (r int64, exists bool) {
+	v := m.adddownload_bps
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetDownloadBps resets all changes to the "download_bps" field.
+func (m *DiagnosticRunMutation) ResetDownloadBps() {
+	m.download_bps = nil
+	m.adddownload_bps = nil
+}
+
+// SetErrorCode sets the "error_code" field.
+func (m *DiagnosticRunMutation) SetErrorCode(s string) {
+	m.error_code = &s
+}
+
+// ErrorCode returns the value of the "error_code" field in the mutation.
+func (m *DiagnosticRunMutation) ErrorCode() (r string, exists bool) {
+	v := m.error_code
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldErrorCode returns the old "error_code" field's value of the DiagnosticRun entity.
+// If the DiagnosticRun object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DiagnosticRunMutation) OldErrorCode(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldErrorCode is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldErrorCode requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldErrorCode: %w", err)
+	}
+	return oldValue.ErrorCode, nil
+}
+
+// ClearErrorCode clears the value of the "error_code" field.
+func (m *DiagnosticRunMutation) ClearErrorCode() {
+	m.error_code = nil
+	m.clearedFields[diagnosticrun.FieldErrorCode] = struct{}{}
+}
+
+// ErrorCodeCleared returns if the "error_code" field was cleared in this mutation.
+func (m *DiagnosticRunMutation) ErrorCodeCleared() bool {
+	_, ok := m.clearedFields[diagnosticrun.FieldErrorCode]
+	return ok
+}
+
+// ResetErrorCode resets all changes to the "error_code" field.
+func (m *DiagnosticRunMutation) ResetErrorCode() {
+	m.error_code = nil
+	delete(m.clearedFields, diagnosticrun.FieldErrorCode)
+}
+
+// SetStartedAt sets the "started_at" field.
+func (m *DiagnosticRunMutation) SetStartedAt(t time.Time) {
+	m.started_at = &t
+}
+
+// StartedAt returns the value of the "started_at" field in the mutation.
+func (m *DiagnosticRunMutation) StartedAt() (r time.Time, exists bool) {
+	v := m.started_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldStartedAt returns the old "started_at" field's value of the DiagnosticRun entity.
+// If the DiagnosticRun object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DiagnosticRunMutation) OldStartedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldStartedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldStartedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldStartedAt: %w", err)
+	}
+	return oldValue.StartedAt, nil
+}
+
+// ResetStartedAt resets all changes to the "started_at" field.
+func (m *DiagnosticRunMutation) ResetStartedAt() {
+	m.started_at = nil
+}
+
+// SetFinishedAt sets the "finished_at" field.
+func (m *DiagnosticRunMutation) SetFinishedAt(t time.Time) {
+	m.finished_at = &t
+}
+
+// FinishedAt returns the value of the "finished_at" field in the mutation.
+func (m *DiagnosticRunMutation) FinishedAt() (r time.Time, exists bool) {
+	v := m.finished_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldFinishedAt returns the old "finished_at" field's value of the DiagnosticRun entity.
+// If the DiagnosticRun object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *DiagnosticRunMutation) OldFinishedAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldFinishedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldFinishedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldFinishedAt: %w", err)
+	}
+	return oldValue.FinishedAt, nil
+}
+
+// ClearFinishedAt clears the value of the "finished_at" field.
+func (m *DiagnosticRunMutation) ClearFinishedAt() {
+	m.finished_at = nil
+	m.clearedFields[diagnosticrun.FieldFinishedAt] = struct{}{}
+}
+
+// FinishedAtCleared returns if the "finished_at" field was cleared in this mutation.
+func (m *DiagnosticRunMutation) FinishedAtCleared() bool {
+	_, ok := m.clearedFields[diagnosticrun.FieldFinishedAt]
+	return ok
+}
+
+// ResetFinishedAt resets all changes to the "finished_at" field.
+func (m *DiagnosticRunMutation) ResetFinishedAt() {
+	m.finished_at = nil
+	delete(m.clearedFields, diagnosticrun.FieldFinishedAt)
+}
+
+// SetOwnerID sets the "owner" edge to the User entity by id.
+func (m *DiagnosticRunMutation) SetOwnerID(id string) {
+	m.owner = &id
+}
+
+// ClearOwner clears the "owner" edge to the User entity.
+func (m *DiagnosticRunMutation) ClearOwner() {
+	m.clearedowner = true
+	m.clearedFields[diagnosticrun.FieldUserID] = struct{}{}
+}
+
+// OwnerCleared reports if the "owner" edge to the User entity was cleared.
+func (m *DiagnosticRunMutation) OwnerCleared() bool {
+	return m.clearedowner
+}
+
+// OwnerID returns the "owner" edge ID in the mutation.
+func (m *DiagnosticRunMutation) OwnerID() (id string, exists bool) {
+	if m.owner != nil {
+		return *m.owner, true
+	}
+	return
+}
+
+// OwnerIDs returns the "owner" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// OwnerID instead. It exists only for internal usage by the builders.
+func (m *DiagnosticRunMutation) OwnerIDs() (ids []string) {
+	if id := m.owner; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetOwner resets all changes to the "owner" edge.
+func (m *DiagnosticRunMutation) ResetOwner() {
+	m.owner = nil
+	m.clearedowner = false
+}
+
+// ClearClient clears the "client" edge to the TailClient entity.
+func (m *DiagnosticRunMutation) ClearClient() {
+	m.clearedclient = true
+	m.clearedFields[diagnosticrun.FieldClientID] = struct{}{}
+}
+
+// ClientCleared reports if the "client" edge to the TailClient entity was cleared.
+func (m *DiagnosticRunMutation) ClientCleared() bool {
+	return m.clearedclient
+}
+
+// ClientIDs returns the "client" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// ClientID instead. It exists only for internal usage by the builders.
+func (m *DiagnosticRunMutation) ClientIDs() (ids []string) {
+	if id := m.client; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetClient resets all changes to the "client" edge.
+func (m *DiagnosticRunMutation) ResetClient() {
+	m.client = nil
+	m.clearedclient = false
+}
+
+// Where appends a list predicates to the DiagnosticRunMutation builder.
+func (m *DiagnosticRunMutation) Where(ps ...predicate.DiagnosticRun) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the DiagnosticRunMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *DiagnosticRunMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.DiagnosticRun, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *DiagnosticRunMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *DiagnosticRunMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (DiagnosticRun).
+func (m *DiagnosticRunMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *DiagnosticRunMutation) Fields() []string {
+	fields := make([]string, 0, 13)
+	if m.owner != nil {
+		fields = append(fields, diagnosticrun.FieldUserID)
+	}
+	if m.client != nil {
+		fields = append(fields, diagnosticrun.FieldClientID)
+	}
+	if m.kind != nil {
+		fields = append(fields, diagnosticrun.FieldKind)
+	}
+	if m.status != nil {
+		fields = append(fields, diagnosticrun.FieldStatus)
+	}
+	if m._path != nil {
+		fields = append(fields, diagnosticrun.FieldPath)
+	}
+	if m.latency_ms != nil {
+		fields = append(fields, diagnosticrun.FieldLatencyMs)
+	}
+	if m.upload_bytes != nil {
+		fields = append(fields, diagnosticrun.FieldUploadBytes)
+	}
+	if m.download_bytes != nil {
+		fields = append(fields, diagnosticrun.FieldDownloadBytes)
+	}
+	if m.upload_bps != nil {
+		fields = append(fields, diagnosticrun.FieldUploadBps)
+	}
+	if m.download_bps != nil {
+		fields = append(fields, diagnosticrun.FieldDownloadBps)
+	}
+	if m.error_code != nil {
+		fields = append(fields, diagnosticrun.FieldErrorCode)
+	}
+	if m.started_at != nil {
+		fields = append(fields, diagnosticrun.FieldStartedAt)
+	}
+	if m.finished_at != nil {
+		fields = append(fields, diagnosticrun.FieldFinishedAt)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *DiagnosticRunMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case diagnosticrun.FieldUserID:
+		return m.UserID()
+	case diagnosticrun.FieldClientID:
+		return m.ClientID()
+	case diagnosticrun.FieldKind:
+		return m.Kind()
+	case diagnosticrun.FieldStatus:
+		return m.Status()
+	case diagnosticrun.FieldPath:
+		return m.Path()
+	case diagnosticrun.FieldLatencyMs:
+		return m.LatencyMs()
+	case diagnosticrun.FieldUploadBytes:
+		return m.UploadBytes()
+	case diagnosticrun.FieldDownloadBytes:
+		return m.DownloadBytes()
+	case diagnosticrun.FieldUploadBps:
+		return m.UploadBps()
+	case diagnosticrun.FieldDownloadBps:
+		return m.DownloadBps()
+	case diagnosticrun.FieldErrorCode:
+		return m.ErrorCode()
+	case diagnosticrun.FieldStartedAt:
+		return m.StartedAt()
+	case diagnosticrun.FieldFinishedAt:
+		return m.FinishedAt()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *DiagnosticRunMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case diagnosticrun.FieldUserID:
+		return m.OldUserID(ctx)
+	case diagnosticrun.FieldClientID:
+		return m.OldClientID(ctx)
+	case diagnosticrun.FieldKind:
+		return m.OldKind(ctx)
+	case diagnosticrun.FieldStatus:
+		return m.OldStatus(ctx)
+	case diagnosticrun.FieldPath:
+		return m.OldPath(ctx)
+	case diagnosticrun.FieldLatencyMs:
+		return m.OldLatencyMs(ctx)
+	case diagnosticrun.FieldUploadBytes:
+		return m.OldUploadBytes(ctx)
+	case diagnosticrun.FieldDownloadBytes:
+		return m.OldDownloadBytes(ctx)
+	case diagnosticrun.FieldUploadBps:
+		return m.OldUploadBps(ctx)
+	case diagnosticrun.FieldDownloadBps:
+		return m.OldDownloadBps(ctx)
+	case diagnosticrun.FieldErrorCode:
+		return m.OldErrorCode(ctx)
+	case diagnosticrun.FieldStartedAt:
+		return m.OldStartedAt(ctx)
+	case diagnosticrun.FieldFinishedAt:
+		return m.OldFinishedAt(ctx)
+	}
+	return nil, fmt.Errorf("unknown DiagnosticRun field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *DiagnosticRunMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case diagnosticrun.FieldUserID:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUserID(v)
+		return nil
+	case diagnosticrun.FieldClientID:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetClientID(v)
+		return nil
+	case diagnosticrun.FieldKind:
+		v, ok := value.(diagnosticrun.Kind)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetKind(v)
+		return nil
+	case diagnosticrun.FieldStatus:
+		v, ok := value.(diagnosticrun.Status)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetStatus(v)
+		return nil
+	case diagnosticrun.FieldPath:
+		v, ok := value.(diagnosticrun.Path)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetPath(v)
+		return nil
+	case diagnosticrun.FieldLatencyMs:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetLatencyMs(v)
+		return nil
+	case diagnosticrun.FieldUploadBytes:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUploadBytes(v)
+		return nil
+	case diagnosticrun.FieldDownloadBytes:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDownloadBytes(v)
+		return nil
+	case diagnosticrun.FieldUploadBps:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUploadBps(v)
+		return nil
+	case diagnosticrun.FieldDownloadBps:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDownloadBps(v)
+		return nil
+	case diagnosticrun.FieldErrorCode:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetErrorCode(v)
+		return nil
+	case diagnosticrun.FieldStartedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetStartedAt(v)
+		return nil
+	case diagnosticrun.FieldFinishedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetFinishedAt(v)
+		return nil
+	}
+	return fmt.Errorf("unknown DiagnosticRun field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *DiagnosticRunMutation) AddedFields() []string {
+	var fields []string
+	if m.addlatency_ms != nil {
+		fields = append(fields, diagnosticrun.FieldLatencyMs)
+	}
+	if m.addupload_bytes != nil {
+		fields = append(fields, diagnosticrun.FieldUploadBytes)
+	}
+	if m.adddownload_bytes != nil {
+		fields = append(fields, diagnosticrun.FieldDownloadBytes)
+	}
+	if m.addupload_bps != nil {
+		fields = append(fields, diagnosticrun.FieldUploadBps)
+	}
+	if m.adddownload_bps != nil {
+		fields = append(fields, diagnosticrun.FieldDownloadBps)
+	}
+	return fields
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *DiagnosticRunMutation) AddedField(name string) (ent.Value, bool) {
+	switch name {
+	case diagnosticrun.FieldLatencyMs:
+		return m.AddedLatencyMs()
+	case diagnosticrun.FieldUploadBytes:
+		return m.AddedUploadBytes()
+	case diagnosticrun.FieldDownloadBytes:
+		return m.AddedDownloadBytes()
+	case diagnosticrun.FieldUploadBps:
+		return m.AddedUploadBps()
+	case diagnosticrun.FieldDownloadBps:
+		return m.AddedDownloadBps()
+	}
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *DiagnosticRunMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	case diagnosticrun.FieldLatencyMs:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddLatencyMs(v)
+		return nil
+	case diagnosticrun.FieldUploadBytes:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddUploadBytes(v)
+		return nil
+	case diagnosticrun.FieldDownloadBytes:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddDownloadBytes(v)
+		return nil
+	case diagnosticrun.FieldUploadBps:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddUploadBps(v)
+		return nil
+	case diagnosticrun.FieldDownloadBps:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddDownloadBps(v)
+		return nil
+	}
+	return fmt.Errorf("unknown DiagnosticRun numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *DiagnosticRunMutation) ClearedFields() []string {
+	var fields []string
+	if m.FieldCleared(diagnosticrun.FieldPath) {
+		fields = append(fields, diagnosticrun.FieldPath)
+	}
+	if m.FieldCleared(diagnosticrun.FieldLatencyMs) {
+		fields = append(fields, diagnosticrun.FieldLatencyMs)
+	}
+	if m.FieldCleared(diagnosticrun.FieldErrorCode) {
+		fields = append(fields, diagnosticrun.FieldErrorCode)
+	}
+	if m.FieldCleared(diagnosticrun.FieldFinishedAt) {
+		fields = append(fields, diagnosticrun.FieldFinishedAt)
+	}
+	return fields
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *DiagnosticRunMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *DiagnosticRunMutation) ClearField(name string) error {
+	switch name {
+	case diagnosticrun.FieldPath:
+		m.ClearPath()
+		return nil
+	case diagnosticrun.FieldLatencyMs:
+		m.ClearLatencyMs()
+		return nil
+	case diagnosticrun.FieldErrorCode:
+		m.ClearErrorCode()
+		return nil
+	case diagnosticrun.FieldFinishedAt:
+		m.ClearFinishedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown DiagnosticRun nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *DiagnosticRunMutation) ResetField(name string) error {
+	switch name {
+	case diagnosticrun.FieldUserID:
+		m.ResetUserID()
+		return nil
+	case diagnosticrun.FieldClientID:
+		m.ResetClientID()
+		return nil
+	case diagnosticrun.FieldKind:
+		m.ResetKind()
+		return nil
+	case diagnosticrun.FieldStatus:
+		m.ResetStatus()
+		return nil
+	case diagnosticrun.FieldPath:
+		m.ResetPath()
+		return nil
+	case diagnosticrun.FieldLatencyMs:
+		m.ResetLatencyMs()
+		return nil
+	case diagnosticrun.FieldUploadBytes:
+		m.ResetUploadBytes()
+		return nil
+	case diagnosticrun.FieldDownloadBytes:
+		m.ResetDownloadBytes()
+		return nil
+	case diagnosticrun.FieldUploadBps:
+		m.ResetUploadBps()
+		return nil
+	case diagnosticrun.FieldDownloadBps:
+		m.ResetDownloadBps()
+		return nil
+	case diagnosticrun.FieldErrorCode:
+		m.ResetErrorCode()
+		return nil
+	case diagnosticrun.FieldStartedAt:
+		m.ResetStartedAt()
+		return nil
+	case diagnosticrun.FieldFinishedAt:
+		m.ResetFinishedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown DiagnosticRun field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *DiagnosticRunMutation) AddedEdges() []string {
+	edges := make([]string, 0, 2)
+	if m.owner != nil {
+		edges = append(edges, diagnosticrun.EdgeOwner)
+	}
+	if m.client != nil {
+		edges = append(edges, diagnosticrun.EdgeClient)
+	}
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *DiagnosticRunMutation) AddedIDs(name string) []ent.Value {
+	switch name {
+	case diagnosticrun.EdgeOwner:
+		if id := m.owner; id != nil {
+			return []ent.Value{*id}
+		}
+	case diagnosticrun.EdgeClient:
+		if id := m.client; id != nil {
+			return []ent.Value{*id}
+		}
+	}
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *DiagnosticRunMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 2)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *DiagnosticRunMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *DiagnosticRunMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 2)
+	if m.clearedowner {
+		edges = append(edges, diagnosticrun.EdgeOwner)
+	}
+	if m.clearedclient {
+		edges = append(edges, diagnosticrun.EdgeClient)
+	}
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *DiagnosticRunMutation) EdgeCleared(name string) bool {
+	switch name {
+	case diagnosticrun.EdgeOwner:
+		return m.clearedowner
+	case diagnosticrun.EdgeClient:
+		return m.clearedclient
+	}
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *DiagnosticRunMutation) ClearEdge(name string) error {
+	switch name {
+	case diagnosticrun.EdgeOwner:
+		m.ClearOwner()
+		return nil
+	case diagnosticrun.EdgeClient:
+		m.ClearClient()
+		return nil
+	}
+	return fmt.Errorf("unknown DiagnosticRun unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *DiagnosticRunMutation) ResetEdge(name string) error {
+	switch name {
+	case diagnosticrun.EdgeOwner:
+		m.ResetOwner()
+		return nil
+	case diagnosticrun.EdgeClient:
+		m.ResetClient()
+		return nil
+	}
+	return fmt.Errorf("unknown DiagnosticRun edge %s", name)
 }
 
 // ExitRuleMutation represents an operation that mutates the ExitRule nodes in the graph.
@@ -5586,29 +6929,32 @@ func (m *SessionMutation) ResetEdge(name string) error {
 // TailClientMutation represents an operation that mutates the TailClient nodes in the graph.
 type TailClientMutation struct {
 	config
-	op                  Op
-	typ                 string
-	id                  *string
-	name                *string
-	server_token_cipher *[]byte
-	token_hint          *string
-	key_cipher          *[]byte
-	derp_map_url        *string
-	last_ping_ms        *int64
-	addlast_ping_ms     *int64
-	last_path           *string
-	last_ping_at        *time.Time
-	created_at          *time.Time
-	updated_at          *time.Time
-	clearedFields       map[string]struct{}
-	owner               *string
-	clearedowner        bool
-	routes              map[string]struct{}
-	removedroutes       map[string]struct{}
-	clearedroutes       bool
-	done                bool
-	oldValue            func(context.Context) (*TailClient, error)
-	predicates          []predicate.TailClient
+	op                     Op
+	typ                    string
+	id                     *string
+	name                   *string
+	server_token_cipher    *[]byte
+	token_hint             *string
+	key_cipher             *[]byte
+	derp_map_url           *string
+	last_ping_ms           *int64
+	addlast_ping_ms        *int64
+	last_path              *string
+	last_ping_at           *time.Time
+	created_at             *time.Time
+	updated_at             *time.Time
+	clearedFields          map[string]struct{}
+	owner                  *string
+	clearedowner           bool
+	diagnostic_runs        map[string]struct{}
+	removeddiagnostic_runs map[string]struct{}
+	cleareddiagnostic_runs bool
+	routes                 map[string]struct{}
+	removedroutes          map[string]struct{}
+	clearedroutes          bool
+	done                   bool
+	oldValue               func(context.Context) (*TailClient, error)
+	predicates             []predicate.TailClient
 }
 
 var _ ent.Mutation = (*TailClientMutation)(nil)
@@ -6237,6 +7583,60 @@ func (m *TailClientMutation) ResetOwner() {
 	m.clearedowner = false
 }
 
+// AddDiagnosticRunIDs adds the "diagnostic_runs" edge to the DiagnosticRun entity by ids.
+func (m *TailClientMutation) AddDiagnosticRunIDs(ids ...string) {
+	if m.diagnostic_runs == nil {
+		m.diagnostic_runs = make(map[string]struct{})
+	}
+	for i := range ids {
+		m.diagnostic_runs[ids[i]] = struct{}{}
+	}
+}
+
+// ClearDiagnosticRuns clears the "diagnostic_runs" edge to the DiagnosticRun entity.
+func (m *TailClientMutation) ClearDiagnosticRuns() {
+	m.cleareddiagnostic_runs = true
+}
+
+// DiagnosticRunsCleared reports if the "diagnostic_runs" edge to the DiagnosticRun entity was cleared.
+func (m *TailClientMutation) DiagnosticRunsCleared() bool {
+	return m.cleareddiagnostic_runs
+}
+
+// RemoveDiagnosticRunIDs removes the "diagnostic_runs" edge to the DiagnosticRun entity by IDs.
+func (m *TailClientMutation) RemoveDiagnosticRunIDs(ids ...string) {
+	if m.removeddiagnostic_runs == nil {
+		m.removeddiagnostic_runs = make(map[string]struct{})
+	}
+	for i := range ids {
+		delete(m.diagnostic_runs, ids[i])
+		m.removeddiagnostic_runs[ids[i]] = struct{}{}
+	}
+}
+
+// RemovedDiagnosticRuns returns the removed IDs of the "diagnostic_runs" edge to the DiagnosticRun entity.
+func (m *TailClientMutation) RemovedDiagnosticRunsIDs() (ids []string) {
+	for id := range m.removeddiagnostic_runs {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// DiagnosticRunsIDs returns the "diagnostic_runs" edge IDs in the mutation.
+func (m *TailClientMutation) DiagnosticRunsIDs() (ids []string) {
+	for id := range m.diagnostic_runs {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ResetDiagnosticRuns resets all changes to the "diagnostic_runs" edge.
+func (m *TailClientMutation) ResetDiagnosticRuns() {
+	m.diagnostic_runs = nil
+	m.cleareddiagnostic_runs = false
+	m.removeddiagnostic_runs = nil
+}
+
 // AddRouteIDs adds the "routes" edge to the PublishedRoute entity by ids.
 func (m *TailClientMutation) AddRouteIDs(ids ...string) {
 	if m.routes == nil {
@@ -6642,9 +8042,12 @@ func (m *TailClientMutation) ResetField(name string) error {
 
 // AddedEdges returns all edge names that were set/added in this mutation.
 func (m *TailClientMutation) AddedEdges() []string {
-	edges := make([]string, 0, 2)
+	edges := make([]string, 0, 3)
 	if m.owner != nil {
 		edges = append(edges, tailclient.EdgeOwner)
+	}
+	if m.diagnostic_runs != nil {
+		edges = append(edges, tailclient.EdgeDiagnosticRuns)
 	}
 	if m.routes != nil {
 		edges = append(edges, tailclient.EdgeRoutes)
@@ -6660,6 +8063,12 @@ func (m *TailClientMutation) AddedIDs(name string) []ent.Value {
 		if id := m.owner; id != nil {
 			return []ent.Value{*id}
 		}
+	case tailclient.EdgeDiagnosticRuns:
+		ids := make([]ent.Value, 0, len(m.diagnostic_runs))
+		for id := range m.diagnostic_runs {
+			ids = append(ids, id)
+		}
+		return ids
 	case tailclient.EdgeRoutes:
 		ids := make([]ent.Value, 0, len(m.routes))
 		for id := range m.routes {
@@ -6672,7 +8081,10 @@ func (m *TailClientMutation) AddedIDs(name string) []ent.Value {
 
 // RemovedEdges returns all edge names that were removed in this mutation.
 func (m *TailClientMutation) RemovedEdges() []string {
-	edges := make([]string, 0, 2)
+	edges := make([]string, 0, 3)
+	if m.removeddiagnostic_runs != nil {
+		edges = append(edges, tailclient.EdgeDiagnosticRuns)
+	}
 	if m.removedroutes != nil {
 		edges = append(edges, tailclient.EdgeRoutes)
 	}
@@ -6683,6 +8095,12 @@ func (m *TailClientMutation) RemovedEdges() []string {
 // the given name in this mutation.
 func (m *TailClientMutation) RemovedIDs(name string) []ent.Value {
 	switch name {
+	case tailclient.EdgeDiagnosticRuns:
+		ids := make([]ent.Value, 0, len(m.removeddiagnostic_runs))
+		for id := range m.removeddiagnostic_runs {
+			ids = append(ids, id)
+		}
+		return ids
 	case tailclient.EdgeRoutes:
 		ids := make([]ent.Value, 0, len(m.removedroutes))
 		for id := range m.removedroutes {
@@ -6695,9 +8113,12 @@ func (m *TailClientMutation) RemovedIDs(name string) []ent.Value {
 
 // ClearedEdges returns all edge names that were cleared in this mutation.
 func (m *TailClientMutation) ClearedEdges() []string {
-	edges := make([]string, 0, 2)
+	edges := make([]string, 0, 3)
 	if m.clearedowner {
 		edges = append(edges, tailclient.EdgeOwner)
+	}
+	if m.cleareddiagnostic_runs {
+		edges = append(edges, tailclient.EdgeDiagnosticRuns)
 	}
 	if m.clearedroutes {
 		edges = append(edges, tailclient.EdgeRoutes)
@@ -6711,6 +8132,8 @@ func (m *TailClientMutation) EdgeCleared(name string) bool {
 	switch name {
 	case tailclient.EdgeOwner:
 		return m.clearedowner
+	case tailclient.EdgeDiagnosticRuns:
+		return m.cleareddiagnostic_runs
 	case tailclient.EdgeRoutes:
 		return m.clearedroutes
 	}
@@ -6734,6 +8157,9 @@ func (m *TailClientMutation) ResetEdge(name string) error {
 	switch name {
 	case tailclient.EdgeOwner:
 		m.ResetOwner()
+		return nil
+	case tailclient.EdgeDiagnosticRuns:
+		m.ResetDiagnosticRuns()
 		return nil
 	case tailclient.EdgeRoutes:
 		m.ResetRoutes()
@@ -7976,38 +9402,41 @@ func (m *TailServerMutation) ResetEdge(name string) error {
 // UserMutation represents an operation that mutates the User nodes in the graph.
 type UserMutation struct {
 	config
-	op                  Op
-	typ                 string
-	id                  *string
-	issuer              *string
-	subject             *string
-	email               *string
-	display_name        *string
-	avatar_url          *string
-	created_at          *time.Time
-	updated_at          *time.Time
-	clearedFields       map[string]struct{}
-	sessions            map[string]struct{}
-	removedsessions     map[string]struct{}
-	clearedsessions     bool
-	servers             map[string]struct{}
-	removedservers      map[string]struct{}
-	clearedservers      bool
-	exit_rules          map[string]struct{}
-	removedexit_rules   map[string]struct{}
-	clearedexit_rules   bool
-	clients             map[string]struct{}
-	removedclients      map[string]struct{}
-	clearedclients      bool
-	routes              map[string]struct{}
-	removedroutes       map[string]struct{}
-	clearedroutes       bool
-	audit_events        map[string]struct{}
-	removedaudit_events map[string]struct{}
-	clearedaudit_events bool
-	done                bool
-	oldValue            func(context.Context) (*User, error)
-	predicates          []predicate.User
+	op                     Op
+	typ                    string
+	id                     *string
+	issuer                 *string
+	subject                *string
+	email                  *string
+	display_name           *string
+	avatar_url             *string
+	created_at             *time.Time
+	updated_at             *time.Time
+	clearedFields          map[string]struct{}
+	sessions               map[string]struct{}
+	removedsessions        map[string]struct{}
+	clearedsessions        bool
+	servers                map[string]struct{}
+	removedservers         map[string]struct{}
+	clearedservers         bool
+	exit_rules             map[string]struct{}
+	removedexit_rules      map[string]struct{}
+	clearedexit_rules      bool
+	clients                map[string]struct{}
+	removedclients         map[string]struct{}
+	clearedclients         bool
+	diagnostic_runs        map[string]struct{}
+	removeddiagnostic_runs map[string]struct{}
+	cleareddiagnostic_runs bool
+	routes                 map[string]struct{}
+	removedroutes          map[string]struct{}
+	clearedroutes          bool
+	audit_events           map[string]struct{}
+	removedaudit_events    map[string]struct{}
+	clearedaudit_events    bool
+	done                   bool
+	oldValue               func(context.Context) (*User, error)
+	predicates             []predicate.User
 }
 
 var _ ent.Mutation = (*UserMutation)(nil)
@@ -8621,6 +10050,60 @@ func (m *UserMutation) ResetClients() {
 	m.removedclients = nil
 }
 
+// AddDiagnosticRunIDs adds the "diagnostic_runs" edge to the DiagnosticRun entity by ids.
+func (m *UserMutation) AddDiagnosticRunIDs(ids ...string) {
+	if m.diagnostic_runs == nil {
+		m.diagnostic_runs = make(map[string]struct{})
+	}
+	for i := range ids {
+		m.diagnostic_runs[ids[i]] = struct{}{}
+	}
+}
+
+// ClearDiagnosticRuns clears the "diagnostic_runs" edge to the DiagnosticRun entity.
+func (m *UserMutation) ClearDiagnosticRuns() {
+	m.cleareddiagnostic_runs = true
+}
+
+// DiagnosticRunsCleared reports if the "diagnostic_runs" edge to the DiagnosticRun entity was cleared.
+func (m *UserMutation) DiagnosticRunsCleared() bool {
+	return m.cleareddiagnostic_runs
+}
+
+// RemoveDiagnosticRunIDs removes the "diagnostic_runs" edge to the DiagnosticRun entity by IDs.
+func (m *UserMutation) RemoveDiagnosticRunIDs(ids ...string) {
+	if m.removeddiagnostic_runs == nil {
+		m.removeddiagnostic_runs = make(map[string]struct{})
+	}
+	for i := range ids {
+		delete(m.diagnostic_runs, ids[i])
+		m.removeddiagnostic_runs[ids[i]] = struct{}{}
+	}
+}
+
+// RemovedDiagnosticRuns returns the removed IDs of the "diagnostic_runs" edge to the DiagnosticRun entity.
+func (m *UserMutation) RemovedDiagnosticRunsIDs() (ids []string) {
+	for id := range m.removeddiagnostic_runs {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// DiagnosticRunsIDs returns the "diagnostic_runs" edge IDs in the mutation.
+func (m *UserMutation) DiagnosticRunsIDs() (ids []string) {
+	for id := range m.diagnostic_runs {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ResetDiagnosticRuns resets all changes to the "diagnostic_runs" edge.
+func (m *UserMutation) ResetDiagnosticRuns() {
+	m.diagnostic_runs = nil
+	m.cleareddiagnostic_runs = false
+	m.removeddiagnostic_runs = nil
+}
+
 // AddRouteIDs adds the "routes" edge to the PublishedRoute entity by ids.
 func (m *UserMutation) AddRouteIDs(ids ...string) {
 	if m.routes == nil {
@@ -8985,7 +10468,7 @@ func (m *UserMutation) ResetField(name string) error {
 
 // AddedEdges returns all edge names that were set/added in this mutation.
 func (m *UserMutation) AddedEdges() []string {
-	edges := make([]string, 0, 6)
+	edges := make([]string, 0, 7)
 	if m.sessions != nil {
 		edges = append(edges, user.EdgeSessions)
 	}
@@ -8997,6 +10480,9 @@ func (m *UserMutation) AddedEdges() []string {
 	}
 	if m.clients != nil {
 		edges = append(edges, user.EdgeClients)
+	}
+	if m.diagnostic_runs != nil {
+		edges = append(edges, user.EdgeDiagnosticRuns)
 	}
 	if m.routes != nil {
 		edges = append(edges, user.EdgeRoutes)
@@ -9035,6 +10521,12 @@ func (m *UserMutation) AddedIDs(name string) []ent.Value {
 			ids = append(ids, id)
 		}
 		return ids
+	case user.EdgeDiagnosticRuns:
+		ids := make([]ent.Value, 0, len(m.diagnostic_runs))
+		for id := range m.diagnostic_runs {
+			ids = append(ids, id)
+		}
+		return ids
 	case user.EdgeRoutes:
 		ids := make([]ent.Value, 0, len(m.routes))
 		for id := range m.routes {
@@ -9053,7 +10545,7 @@ func (m *UserMutation) AddedIDs(name string) []ent.Value {
 
 // RemovedEdges returns all edge names that were removed in this mutation.
 func (m *UserMutation) RemovedEdges() []string {
-	edges := make([]string, 0, 6)
+	edges := make([]string, 0, 7)
 	if m.removedsessions != nil {
 		edges = append(edges, user.EdgeSessions)
 	}
@@ -9065,6 +10557,9 @@ func (m *UserMutation) RemovedEdges() []string {
 	}
 	if m.removedclients != nil {
 		edges = append(edges, user.EdgeClients)
+	}
+	if m.removeddiagnostic_runs != nil {
+		edges = append(edges, user.EdgeDiagnosticRuns)
 	}
 	if m.removedroutes != nil {
 		edges = append(edges, user.EdgeRoutes)
@@ -9103,6 +10598,12 @@ func (m *UserMutation) RemovedIDs(name string) []ent.Value {
 			ids = append(ids, id)
 		}
 		return ids
+	case user.EdgeDiagnosticRuns:
+		ids := make([]ent.Value, 0, len(m.removeddiagnostic_runs))
+		for id := range m.removeddiagnostic_runs {
+			ids = append(ids, id)
+		}
+		return ids
 	case user.EdgeRoutes:
 		ids := make([]ent.Value, 0, len(m.removedroutes))
 		for id := range m.removedroutes {
@@ -9121,7 +10622,7 @@ func (m *UserMutation) RemovedIDs(name string) []ent.Value {
 
 // ClearedEdges returns all edge names that were cleared in this mutation.
 func (m *UserMutation) ClearedEdges() []string {
-	edges := make([]string, 0, 6)
+	edges := make([]string, 0, 7)
 	if m.clearedsessions {
 		edges = append(edges, user.EdgeSessions)
 	}
@@ -9133,6 +10634,9 @@ func (m *UserMutation) ClearedEdges() []string {
 	}
 	if m.clearedclients {
 		edges = append(edges, user.EdgeClients)
+	}
+	if m.cleareddiagnostic_runs {
+		edges = append(edges, user.EdgeDiagnosticRuns)
 	}
 	if m.clearedroutes {
 		edges = append(edges, user.EdgeRoutes)
@@ -9155,6 +10659,8 @@ func (m *UserMutation) EdgeCleared(name string) bool {
 		return m.clearedexit_rules
 	case user.EdgeClients:
 		return m.clearedclients
+	case user.EdgeDiagnosticRuns:
+		return m.cleareddiagnostic_runs
 	case user.EdgeRoutes:
 		return m.clearedroutes
 	case user.EdgeAuditEvents:
@@ -9186,6 +10692,9 @@ func (m *UserMutation) ResetEdge(name string) error {
 		return nil
 	case user.EdgeClients:
 		m.ResetClients()
+		return nil
+	case user.EdgeDiagnosticRuns:
+		m.ResetDiagnosticRuns()
 		return nil
 	case user.EdgeRoutes:
 		m.ResetRoutes()

@@ -7,6 +7,7 @@ import (
 
 	"github.com/ca-x/tailcat-webui/ent/allowedclient"
 	"github.com/ca-x/tailcat-webui/ent/auditevent"
+	"github.com/ca-x/tailcat-webui/ent/diagnosticrun"
 	"github.com/ca-x/tailcat-webui/ent/exitrule"
 	"github.com/ca-x/tailcat-webui/ent/loginflow"
 	"github.com/ca-x/tailcat-webui/ent/portmapping"
@@ -54,6 +55,32 @@ func init() {
 	auditeventDescID := auditeventFields[0].Descriptor()
 	// auditevent.DefaultID holds the default value on creation for the id field.
 	auditevent.DefaultID = auditeventDescID.Default.(func() string)
+	diagnosticrunFields := schema.DiagnosticRun{}.Fields()
+	_ = diagnosticrunFields
+	// diagnosticrunDescUploadBytes is the schema descriptor for upload_bytes field.
+	diagnosticrunDescUploadBytes := diagnosticrunFields[7].Descriptor()
+	// diagnosticrun.DefaultUploadBytes holds the default value on creation for the upload_bytes field.
+	diagnosticrun.DefaultUploadBytes = diagnosticrunDescUploadBytes.Default.(int64)
+	// diagnosticrunDescDownloadBytes is the schema descriptor for download_bytes field.
+	diagnosticrunDescDownloadBytes := diagnosticrunFields[8].Descriptor()
+	// diagnosticrun.DefaultDownloadBytes holds the default value on creation for the download_bytes field.
+	diagnosticrun.DefaultDownloadBytes = diagnosticrunDescDownloadBytes.Default.(int64)
+	// diagnosticrunDescUploadBps is the schema descriptor for upload_bps field.
+	diagnosticrunDescUploadBps := diagnosticrunFields[9].Descriptor()
+	// diagnosticrun.DefaultUploadBps holds the default value on creation for the upload_bps field.
+	diagnosticrun.DefaultUploadBps = diagnosticrunDescUploadBps.Default.(int64)
+	// diagnosticrunDescDownloadBps is the schema descriptor for download_bps field.
+	diagnosticrunDescDownloadBps := diagnosticrunFields[10].Descriptor()
+	// diagnosticrun.DefaultDownloadBps holds the default value on creation for the download_bps field.
+	diagnosticrun.DefaultDownloadBps = diagnosticrunDescDownloadBps.Default.(int64)
+	// diagnosticrunDescStartedAt is the schema descriptor for started_at field.
+	diagnosticrunDescStartedAt := diagnosticrunFields[12].Descriptor()
+	// diagnosticrun.DefaultStartedAt holds the default value on creation for the started_at field.
+	diagnosticrun.DefaultStartedAt = diagnosticrunDescStartedAt.Default.(func() time.Time)
+	// diagnosticrunDescID is the schema descriptor for id field.
+	diagnosticrunDescID := diagnosticrunFields[0].Descriptor()
+	// diagnosticrun.DefaultID holds the default value on creation for the id field.
+	diagnosticrun.DefaultID = diagnosticrunDescID.Default.(func() string)
 	exitruleFields := schema.ExitRule{}.Fields()
 	_ = exitruleFields
 	// exitruleDescPrefix is the schema descriptor for prefix field.

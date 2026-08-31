@@ -13,6 +13,7 @@ import (
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
 	"github.com/ca-x/tailcat-webui/ent/auditevent"
+	"github.com/ca-x/tailcat-webui/ent/diagnosticrun"
 	"github.com/ca-x/tailcat-webui/ent/exitrule"
 	"github.com/ca-x/tailcat-webui/ent/predicate"
 	"github.com/ca-x/tailcat-webui/ent/publishedroute"
@@ -25,16 +26,17 @@ import (
 // UserQuery is the builder for querying User entities.
 type UserQuery struct {
 	config
-	ctx             *QueryContext
-	order           []user.OrderOption
-	inters          []Interceptor
-	predicates      []predicate.User
-	withSessions    *SessionQuery
-	withServers     *TailServerQuery
-	withExitRules   *ExitRuleQuery
-	withClients     *TailClientQuery
-	withRoutes      *PublishedRouteQuery
-	withAuditEvents *AuditEventQuery
+	ctx                *QueryContext
+	order              []user.OrderOption
+	inters             []Interceptor
+	predicates         []predicate.User
+	withSessions       *SessionQuery
+	withServers        *TailServerQuery
+	withExitRules      *ExitRuleQuery
+	withClients        *TailClientQuery
+	withDiagnosticRuns *DiagnosticRunQuery
+	withRoutes         *PublishedRouteQuery
+	withAuditEvents    *AuditEventQuery
 	// intermediate query (i.e. traversal path).
 	sql  *sql.Selector
 	path func(context.Context) (*sql.Selector, error)
@@ -152,6 +154,28 @@ func (_q *UserQuery) QueryClients() *TailClientQuery {
 			sqlgraph.From(user.Table, user.FieldID, selector),
 			sqlgraph.To(tailclient.Table, tailclient.FieldID),
 			sqlgraph.Edge(sqlgraph.O2M, false, user.ClientsTable, user.ClientsColumn),
+		)
+		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
+		return fromU, nil
+	}
+	return query
+}
+
+// QueryDiagnosticRuns chains the current query on the "diagnostic_runs" edge.
+func (_q *UserQuery) QueryDiagnosticRuns() *DiagnosticRunQuery {
+	query := (&DiagnosticRunClient{config: _q.config}).Query()
+	query.path = func(ctx context.Context) (fromU *sql.Selector, err error) {
+		if err := _q.prepareQuery(ctx); err != nil {
+			return nil, err
+		}
+		selector := _q.sqlQuery(ctx)
+		if err := selector.Err(); err != nil {
+			return nil, err
+		}
+		step := sqlgraph.NewStep(
+			sqlgraph.From(user.Table, user.FieldID, selector),
+			sqlgraph.To(diagnosticrun.Table, diagnosticrun.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, user.DiagnosticRunsTable, user.DiagnosticRunsColumn),
 		)
 		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
 		return fromU, nil
@@ -390,17 +414,18 @@ func (_q *UserQuery) Clone() *UserQuery {
 		return nil
 	}
 	return &UserQuery{
-		config:          _q.config,
-		ctx:             _q.ctx.Clone(),
-		order:           append([]user.OrderOption{}, _q.order...),
-		inters:          append([]Interceptor{}, _q.inters...),
-		predicates:      append([]predicate.User{}, _q.predicates...),
-		withSessions:    _q.withSessions.Clone(),
-		withServers:     _q.withServers.Clone(),
-		withExitRules:   _q.withExitRules.Clone(),
-		withClients:     _q.withClients.Clone(),
-		withRoutes:      _q.withRoutes.Clone(),
-		withAuditEvents: _q.withAuditEvents.Clone(),
+		config:             _q.config,
+		ctx:                _q.ctx.Clone(),
+		order:              append([]user.OrderOption{}, _q.order...),
+		inters:             append([]Interceptor{}, _q.inters...),
+		predicates:         append([]predicate.User{}, _q.predicates...),
+		withSessions:       _q.withSessions.Clone(),
+		withServers:        _q.withServers.Clone(),
+		withExitRules:      _q.withExitRules.Clone(),
+		withClients:        _q.withClients.Clone(),
+		withDiagnosticRuns: _q.withDiagnosticRuns.Clone(),
+		withRoutes:         _q.withRoutes.Clone(),
+		withAuditEvents:    _q.withAuditEvents.Clone(),
 		// clone intermediate query.
 		sql:  _q.sql.Clone(),
 		path: _q.path,
@@ -448,6 +473,17 @@ func (_q *UserQuery) WithClients(opts ...func(*TailClientQuery)) *UserQuery {
 		opt(query)
 	}
 	_q.withClients = query
+	return _q
+}
+
+// WithDiagnosticRuns tells the query-builder to eager-load the nodes that are connected to
+// the "diagnostic_runs" edge. The optional arguments are used to configure the query builder of the edge.
+func (_q *UserQuery) WithDiagnosticRuns(opts ...func(*DiagnosticRunQuery)) *UserQuery {
+	query := (&DiagnosticRunClient{config: _q.config}).Query()
+	for _, opt := range opts {
+		opt(query)
+	}
+	_q.withDiagnosticRuns = query
 	return _q
 }
 
@@ -551,11 +587,12 @@ func (_q *UserQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*User, e
 	var (
 		nodes       = []*User{}
 		_spec       = _q.querySpec()
-		loadedTypes = [6]bool{
+		loadedTypes = [7]bool{
 			_q.withSessions != nil,
 			_q.withServers != nil,
 			_q.withExitRules != nil,
 			_q.withClients != nil,
+			_q.withDiagnosticRuns != nil,
 			_q.withRoutes != nil,
 			_q.withAuditEvents != nil,
 		}
@@ -603,6 +640,13 @@ func (_q *UserQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*User, e
 		if err := _q.loadClients(ctx, query, nodes,
 			func(n *User) { n.Edges.Clients = []*TailClient{} },
 			func(n *User, e *TailClient) { n.Edges.Clients = append(n.Edges.Clients, e) }); err != nil {
+			return nil, err
+		}
+	}
+	if query := _q.withDiagnosticRuns; query != nil {
+		if err := _q.loadDiagnosticRuns(ctx, query, nodes,
+			func(n *User) { n.Edges.DiagnosticRuns = []*DiagnosticRun{} },
+			func(n *User, e *DiagnosticRun) { n.Edges.DiagnosticRuns = append(n.Edges.DiagnosticRuns, e) }); err != nil {
 			return nil, err
 		}
 	}
@@ -728,6 +772,36 @@ func (_q *UserQuery) loadClients(ctx context.Context, query *TailClientQuery, no
 	}
 	query.Where(predicate.TailClient(func(s *sql.Selector) {
 		s.Where(sql.InValues(s.C(user.ClientsColumn), fks...))
+	}))
+	neighbors, err := query.All(ctx)
+	if err != nil {
+		return err
+	}
+	for _, n := range neighbors {
+		fk := n.UserID
+		node, ok := nodeids[fk]
+		if !ok {
+			return fmt.Errorf(`unexpected referenced foreign-key "user_id" returned %v for node %v`, fk, n.ID)
+		}
+		assign(node, n)
+	}
+	return nil
+}
+func (_q *UserQuery) loadDiagnosticRuns(ctx context.Context, query *DiagnosticRunQuery, nodes []*User, init func(*User), assign func(*User, *DiagnosticRun)) error {
+	fks := make([]driver.Value, 0, len(nodes))
+	nodeids := make(map[string]*User)
+	for i := range nodes {
+		fks = append(fks, nodes[i].ID)
+		nodeids[nodes[i].ID] = nodes[i]
+		if init != nil {
+			init(nodes[i])
+		}
+	}
+	if len(query.ctx.Fields) > 0 {
+		query.ctx.AppendFieldOnce(diagnosticrun.FieldUserID)
+	}
+	query.Where(predicate.DiagnosticRun(func(s *sql.Selector) {
+		s.Where(sql.InValues(s.C(user.DiagnosticRunsColumn), fks...))
 	}))
 	neighbors, err := query.All(ctx)
 	if err != nil {
