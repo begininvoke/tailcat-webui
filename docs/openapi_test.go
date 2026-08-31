@@ -34,6 +34,14 @@ func TestOpenAPIIsValidYAMLWithPaths(t *testing.T) {
 			t.Errorf("OpenAPI operation %s %s is missing", method, path)
 		}
 	}
+	startDiagnostic, ok := document.Paths["/clients/{id}/diagnostics"]["post"].(map[string]any)
+	if !ok {
+		t.Fatal("OpenAPI start diagnostic operation is missing")
+	}
+	responses, ok := startDiagnostic["responses"].(map[string]any)
+	if !ok || responses["400"] == nil {
+		t.Error("OpenAPI start diagnostic 400 BAD_REQUEST response is missing")
+	}
 	for schema, fields := range map[string][]string{"Server": {"allowlist_enabled", "mapping_count", "created_at"}, "ExitRule": {"server_id", "prefix", "start_port", "end_port", "enabled", "created_at", "updated_at"}, "Client": {"saved_key", "last_ping_at", "created_at"}, "Route": {"allowed_methods", "enabled", "updated_at"}} {
 		for _, field := range fields {
 			if document.Components.Schemas[schema].Properties[field] == nil {

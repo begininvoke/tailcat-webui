@@ -36,6 +36,25 @@ func TestPublishedAndDiagnosticWorkExitBeforeTailcatRuntimeClose(t *testing.T) {
 	}
 }
 
+func TestDiagnosticCloseFailureIsSurfacedAfterTailcatClose(t *testing.T) {
+	diagnosticErr := errors.New("diagnostic lifecycle unresolved")
+	runtimeClosed := false
+	err := closeServicesBeforeTailnet(
+		closeFunc(func() {}),
+		closeErrorFunc(func() error { return diagnosticErr }),
+		closeErrorFunc(func() error {
+			runtimeClosed = true
+			return nil
+		}),
+	)
+	if !errors.Is(err, diagnosticErr) {
+		t.Fatalf("close error = %v, want diagnostic failure", err)
+	}
+	if !runtimeClosed {
+		t.Fatal("Tailcat runtime was not closed after diagnostic failure")
+	}
+}
+
 type closeFunc func()
 
 func (f closeFunc) Close() { f() }

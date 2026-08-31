@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"runtime"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -24,6 +25,8 @@ import (
 
 var serviceDatabaseSequence atomic.Uint64
 
+var errInjectedLifecycle = errors.New("injected diagnostic lifecycle failure")
+
 type dialPortFunc func(context.Context, string, string, uint16) (net.Conn, error)
 
 func (f dialPortFunc) DialPort(ctx context.Context, ownerID, clientID string, port uint16) (net.Conn, error) {
@@ -40,6 +43,17 @@ type eventPublisherFunc func(string, string, events.RuntimePhase, EventPayload)
 
 func (f eventPublisherFunc) PublishDiagnostic(ownerID, runID string, phase events.RuntimePhase, payload EventPayload) {
 	f(ownerID, runID, phase, payload)
+}
+
+type closeNotifyConn struct {
+	net.Conn
+	once   sync.Once
+	closed chan struct{}
+}
+
+func (c *closeNotifyConn) Close() error {
+	c.once.Do(func() { close(c.closed) })
+	return c.Conn.Close()
 }
 
 func TestServiceCreatesRunningSummaryBeforeDial(t *testing.T) {
@@ -134,6 +148,246 @@ func TestServicePersistsThroughputTerminalSummary(t *testing.T) {
 	finished := waitForRunStatus(t, service, owner.ID, run.ID, RunStatusSucceeded)
 	if finished.UploadBytes != 64<<10 || finished.DownloadBytes != 64<<10 || finished.UploadBPS <= 0 || finished.DownloadBPS <= 0 || finished.ErrorCode != "" {
 		t.Fatalf("throughput summary = %+v", finished)
+	}
+}
+
+func TestServiceStartDoesNotDialWhenAuditCannotBeRecorded(t *testing.T) {
+	db, owner, client := newServiceTestData(t)
+	var auditCalls atomic.Int64
+	var dialCalls atomic.Int64
+	recorder := auditRecorderFunc(func(context.Context, audit.Entry) error {
+		auditCalls.Add(1)
+		return errInjectedLifecycle
+	})
+	dialer := dialPortFunc(func(context.Context, string, string, uint16) (net.Conn, error) {
+		dialCalls.Add(1)
+		return nil, errInjectedLifecycle
+	})
+	service, err := NewService(t.Context(), db, dialer, recorder, eventPublisherFunc(func(string, string, events.RuntimePhase, EventPayload) {}), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, startErr := service.Start(t.Context(), owner.ID, client.ID, StartInput{Kind: RunKindPing, Duration: time.Second})
+	closeErr := service.Close()
+	if !errors.Is(startErr, errInjectedLifecycle) {
+		t.Errorf("Start error = %v, want injected audit failure", startErr)
+	}
+	if got := auditCalls.Load(); got != 3 {
+		t.Errorf("audit attempts = %d, want 3", got)
+	}
+	if got := dialCalls.Load(); got != 0 {
+		t.Errorf("dial attempts = %d, want 0", got)
+	}
+	row := db.DiagnosticRun.Query().OnlyX(t.Context())
+	if row.Status != diagnosticrun.StatusRunning || row.FinishedAt != nil {
+		t.Errorf("unresolved durable row = %+v", row)
+	}
+	if !errors.Is(closeErr, errInjectedLifecycle) {
+		t.Errorf("Close error = %v, want unresolved audit failure", closeErr)
+	}
+}
+
+func TestServiceRetriesTransientTerminalPersistenceFailure(t *testing.T) {
+	db, owner, client := newServiceTestData(t)
+	var remaining atomic.Int64
+	remaining.Store(2)
+	var attempts atomic.Int64
+	db.DiagnosticRun.Use(func(next ent.Mutator) ent.Mutator {
+		return ent.MutateFunc(func(ctx context.Context, mutation ent.Mutation) (ent.Value, error) {
+			if diagnosticMutation, ok := mutation.(*ent.DiagnosticRunMutation); ok {
+				if status, exists := diagnosticMutation.Status(); exists && status != diagnosticrun.StatusRunning {
+					attempts.Add(1)
+					if remaining.Load() > 0 {
+						remaining.Add(-1)
+						return nil, errInjectedLifecycle
+					}
+				}
+			}
+			return next.Mutate(ctx, mutation)
+		})
+	})
+	runnerClosed := make(chan struct{})
+	service := newServiceForTest(t, db, successfulNotifyingDialer(runnerClosed))
+	run, err := service.Start(t.Context(), owner.ID, client.ID, StartInput{Kind: RunKindPing, Duration: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-runnerClosed
+	closeErr := service.Close()
+	if closeErr != nil {
+		t.Fatalf("Close after transient persistence failure: %v", closeErr)
+	}
+	if got := attempts.Load(); got != 3 {
+		t.Fatalf("terminal persistence attempts = %d, want 3", got)
+	}
+	row := db.DiagnosticRun.GetX(t.Context(), run.ID)
+	if row.Status == diagnosticrun.StatusRunning || row.FinishedAt == nil {
+		t.Fatalf("terminal row after retry = %+v", row)
+	}
+}
+
+func TestServiceSurfacesTerminalPersistenceFailureAndRecoversDurableRow(t *testing.T) {
+	db, owner, client := newServiceTestData(t)
+	var failPersistence atomic.Bool
+	failPersistence.Store(true)
+	var attempts atomic.Int64
+	db.DiagnosticRun.Use(func(next ent.Mutator) ent.Mutator {
+		return ent.MutateFunc(func(ctx context.Context, mutation ent.Mutation) (ent.Value, error) {
+			if diagnosticMutation, ok := mutation.(*ent.DiagnosticRunMutation); ok {
+				if status, exists := diagnosticMutation.Status(); exists && status != diagnosticrun.StatusRunning && failPersistence.Load() {
+					attempts.Add(1)
+					return nil, errInjectedLifecycle
+				}
+			}
+			return next.Mutate(ctx, mutation)
+		})
+	})
+	recorder := auditRecorderFunc(func(context.Context, audit.Entry) error { return nil })
+	publisher := eventPublisherFunc(func(string, string, events.RuntimePhase, EventPayload) {})
+	runnerClosed := make(chan struct{})
+	service, err := NewService(t.Context(), db, successfulNotifyingDialer(runnerClosed), recorder, publisher, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := service.Start(t.Context(), owner.ID, client.ID, StartInput{Kind: RunKindPing, Duration: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-runnerClosed
+	closeErr := service.Close()
+	if !errors.Is(closeErr, errInjectedLifecycle) {
+		t.Fatalf("Close error = %v, want terminal persistence failure", closeErr)
+	}
+	if got := attempts.Load(); got != 3 {
+		t.Fatalf("terminal persistence attempts = %d, want 3", got)
+	}
+	stale := db.DiagnosticRun.GetX(t.Context(), run.ID)
+	if stale.Status != diagnosticrun.StatusRunning || stale.FinishedAt != nil {
+		t.Fatalf("unresolved durable row = %+v", stale)
+	}
+
+	failPersistence.Store(false)
+	recoveredService, err := NewService(t.Context(), db, blockedDialer(t), recorder, publisher, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("restart recovery: %v", err)
+	}
+	t.Cleanup(func() { _ = recoveredService.Close() })
+	recovered := db.DiagnosticRun.GetX(t.Context(), run.ID)
+	if recovered.Status != diagnosticrun.StatusInterrupted || recovered.FinishedAt == nil {
+		t.Fatalf("recovered durable row = %+v", recovered)
+	}
+}
+
+func TestServiceRetriesTransientTerminalAuditFailure(t *testing.T) {
+	db, owner, client := newServiceTestData(t)
+	auditService, err := audit.NewService(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var remaining atomic.Int64
+	remaining.Store(2)
+	var terminalCalls atomic.Int64
+	recorder := auditRecorderFunc(func(ctx context.Context, entry audit.Entry) error {
+		if entry.Action != "diagnostic.start" {
+			terminalCalls.Add(1)
+			if remaining.Load() > 0 {
+				remaining.Add(-1)
+				return errInjectedLifecycle
+			}
+		}
+		return auditService.Record(ctx, entry)
+	})
+	runnerClosed := make(chan struct{})
+	service, err := NewService(t.Context(), db, successfulNotifyingDialer(runnerClosed), recorder, eventPublisherFunc(func(string, string, events.RuntimePhase, EventPayload) {}), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Start(t.Context(), owner.ID, client.ID, StartInput{Kind: RunKindPing, Duration: time.Second}); err != nil {
+		t.Fatal(err)
+	}
+	<-runnerClosed
+	if err := service.Close(); err != nil {
+		t.Fatalf("Close after transient terminal audit failure: %v", err)
+	}
+	if got := terminalCalls.Load(); got != 3 {
+		t.Fatalf("terminal audit attempts = %d, want 3", got)
+	}
+	if got := db.AuditEvent.Query().CountX(t.Context()); got != 2 {
+		t.Fatalf("durable audit rows = %d, want start and terminal", got)
+	}
+}
+
+func TestServiceSurfacesPermanentTerminalAuditFailureFromClose(t *testing.T) {
+	db, owner, client := newServiceTestData(t)
+	auditService, err := audit.NewService(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var terminalCalls atomic.Int64
+	recorder := auditRecorderFunc(func(ctx context.Context, entry audit.Entry) error {
+		if entry.Action != "diagnostic.start" {
+			terminalCalls.Add(1)
+			return errInjectedLifecycle
+		}
+		return auditService.Record(ctx, entry)
+	})
+	runnerClosed := make(chan struct{})
+	service, err := NewService(t.Context(), db, successfulNotifyingDialer(runnerClosed), recorder, eventPublisherFunc(func(string, string, events.RuntimePhase, EventPayload) {}), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := service.Start(t.Context(), owner.ID, client.ID, StartInput{Kind: RunKindPing, Duration: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-runnerClosed
+	closeErr := service.Close()
+	if !errors.Is(closeErr, errInjectedLifecycle) {
+		t.Fatalf("Close error = %v, want terminal audit failure", closeErr)
+	}
+	if got := terminalCalls.Load(); got != 3 {
+		t.Fatalf("terminal audit attempts = %d, want 3", got)
+	}
+	if got := db.AuditEvent.Query().CountX(t.Context()); got != 1 {
+		t.Fatalf("durable audit rows = %d, want only start", got)
+	}
+	if row := db.DiagnosticRun.GetX(t.Context(), run.ID); row.Status == diagnosticrun.StatusRunning || row.FinishedAt == nil {
+		t.Fatalf("terminal row was not persisted before audit failure: %+v", row)
+	}
+}
+
+func TestServiceSurfacesRecoveryAuditFailure(t *testing.T) {
+	db, owner, client := newServiceTestData(t)
+	stale := db.DiagnosticRun.Create().SetUserID(owner.ID).SetClientID(client.ID).SetKind(diagnosticrun.KindPing).SetStatus(diagnosticrun.StatusRunning).SaveX(t.Context())
+	var calls atomic.Int64
+	recorder := auditRecorderFunc(func(context.Context, audit.Entry) error {
+		calls.Add(1)
+		return errInjectedLifecycle
+	})
+	_, err := NewService(t.Context(), db, blockedDialer(t), recorder, eventPublisherFunc(func(string, string, events.RuntimePhase, EventPayload) {}), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if !errors.Is(err, errInjectedLifecycle) {
+		t.Fatalf("NewService recovery error = %v, want audit failure", err)
+	}
+	if got := calls.Load(); got != 3 {
+		t.Fatalf("recovery audit attempts = %d, want 3", got)
+	}
+	recovered := db.DiagnosticRun.GetX(t.Context(), stale.ID)
+	if recovered.Status != diagnosticrun.StatusRunning || recovered.FinishedAt != nil {
+		t.Fatalf("recovery audit failure consumed durable retry marker: %+v", recovered)
+	}
+	retryService, err := NewService(
+		t.Context(), db, blockedDialer(t),
+		auditRecorderFunc(func(context.Context, audit.Entry) error { return nil }),
+		eventPublisherFunc(func(string, string, events.RuntimePhase, EventPayload) {}),
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+	if err != nil {
+		t.Fatalf("retry recovery: %v", err)
+	}
+	t.Cleanup(func() { _ = retryService.Close() })
+	if retried := db.DiagnosticRun.GetX(t.Context(), stale.ID); retried.Status != diagnosticrun.StatusInterrupted || retried.FinishedAt == nil {
+		t.Fatalf("retried recovery row = %+v", retried)
 	}
 }
 
@@ -320,6 +574,66 @@ func TestServiceCloseDrainsAndInterruptsRuns(t *testing.T) {
 	}
 }
 
+func TestServiceCloseWaitsForStartOwnershipQuery(t *testing.T) {
+	db, owner, client := newServiceTestData(t)
+	service := newServiceForTest(t, db, blockedDialer(t))
+	queryStarted := make(chan struct{})
+	releaseQuery := make(chan struct{})
+	var interceptOnce sync.Once
+	db.TailClient.Intercept(ent.InterceptFunc(func(next ent.Querier) ent.Querier {
+		return ent.QuerierFunc(func(ctx context.Context, query ent.Query) (ent.Value, error) {
+			interceptOnce.Do(func() {
+				close(queryStarted)
+				<-releaseQuery
+			})
+			return next.Query(ctx, query)
+		})
+	}))
+
+	startResult := make(chan error, 1)
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		_, err := service.Start(t.Context(), owner.ID, client.ID, StartInput{Kind: RunKindPing, Duration: time.Second})
+		startResult <- err
+	})
+	<-queryStarted
+	service.mu.Lock()
+	pending := service.pending
+	service.mu.Unlock()
+	if pending != 1 {
+		close(releaseQuery)
+		wg.Wait()
+		t.Fatalf("pending operations during ownership query = %d, want 1", pending)
+	}
+
+	closeResult := make(chan error, 1)
+	wg.Go(func() { closeResult <- service.Close() })
+	for {
+		service.mu.Lock()
+		closed := service.closed
+		service.mu.Unlock()
+		if closed {
+			break
+		}
+		runtime.Gosched()
+	}
+	select {
+	case err := <-closeResult:
+		close(releaseQuery)
+		wg.Wait()
+		t.Fatalf("Close returned during ownership query: %v", err)
+	default:
+	}
+	close(releaseQuery)
+	if err := <-startResult; !errors.Is(err, ErrClosed) {
+		t.Fatalf("Start racing Close error = %v, want closed", err)
+	}
+	if err := <-closeResult; err != nil {
+		t.Fatal(err)
+	}
+	wg.Wait()
+}
+
 func TestServiceStartupInterruptsStaleRunningRows(t *testing.T) {
 	db, owner, client := newServiceTestData(t)
 	stale := db.DiagnosticRun.Create().SetUserID(owner.ID).SetClientID(client.ID).SetKind(diagnosticrun.KindPing).SetStatus(diagnosticrun.StatusRunning).SaveX(t.Context())
@@ -431,6 +745,17 @@ func blockedDialer(t *testing.T) ClientDialer {
 		server, peer := net.Pipe()
 		t.Cleanup(func() { _ = server.Close() })
 		return peer, nil
+	})
+}
+
+func successfulNotifyingDialer(runnerClosed chan struct{}) ClientDialer {
+	return dialPortFunc(func(ctx context.Context, _, _ string, _ uint16) (net.Conn, error) {
+		server, peer := net.Pipe()
+		go func() {
+			defer server.Close()
+			_ = (Handler{}).Serve(ctx, server)
+		}()
+		return &closeNotifyConn{Conn: peer, closed: runnerClosed}, nil
 	})
 }
 

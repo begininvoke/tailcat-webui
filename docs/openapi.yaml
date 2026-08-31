@@ -281,6 +281,7 @@ paths:
                 bytes: { type: integer, minimum: 0, maximum: 33554432, description: Must be zero for ping and positive for throughput; applies independently to upload and download. }
       responses:
         '201': { description: Durable running summary created before the peer dial, content: { application/json: { schema: { $ref: '#/components/schemas/DiagnosticRun' } } } }
+        '400': { $ref: '#/components/responses/Error' }
         '404': { $ref: '#/components/responses/Error' }
         '409': { $ref: '#/components/responses/Error' }
         '422': { $ref: '#/components/responses/Error' }

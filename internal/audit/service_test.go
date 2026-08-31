@@ -23,3 +23,22 @@ func TestRecordPersistsSecurityEvent(t *testing.T) {
 		t.Fatalf("audit record = %#v", record)
 	}
 }
+
+func TestRecordWithStableIDIsIdempotent(t *testing.T) {
+	db := enttest.Open(t, "sqlite3", "file:audit-idempotent?mode=memory&cache=shared&_pragma=foreign_keys(1)")
+	user := db.User.Create().SetIssuer("test").SetSubject("idempotent-operator").SaveX(t.Context())
+	service, err := NewService(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := Entry{ID: "run-id:diagnostic.succeeded", UserID: user.ID, Action: "diagnostic.succeeded", ResourceKind: "diagnostic", ResourceID: "run-id", Outcome: "success", Detail: "client_id=client-id"}
+	if err := service.Record(t.Context(), entry); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Record(t.Context(), entry); err != nil {
+		t.Fatalf("idempotent retry: %v", err)
+	}
+	if got := db.AuditEvent.Query().CountX(t.Context()); got != 1 {
+		t.Fatalf("audit rows = %d, want 1", got)
+	}
+}

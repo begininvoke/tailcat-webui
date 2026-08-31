@@ -18,9 +18,11 @@ import (
 )
 
 const (
-	maxActiveRunsPerOwner = 2
-	retainedRunsPerOwner  = 100
-	retentionAge          = 30 * 24 * time.Hour
+	maxActiveRunsPerOwner  = 2
+	retainedRunsPerOwner   = 100
+	retentionAge           = 30 * 24 * time.Hour
+	lifecycleRetryAttempts = 3
+	lifecycleRetryDelay    = 10 * time.Millisecond
 )
 
 var (
@@ -107,6 +109,7 @@ type Service struct {
 	active      map[string]*activeRun
 	clientRuns  map[string]string
 	ownerRuns   map[string]int
+	failures    []error
 	wg          sync.WaitGroup
 }
 
@@ -144,6 +147,20 @@ func (s *Service) List(ctx context.Context, ownerID string) ([]RunView, error) {
 }
 
 func (s *Service) Start(ctx context.Context, ownerID, clientID string, input StartInput) (RunView, error) {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return RunView{}, ErrClosed
+	}
+	s.pending++
+	s.mu.Unlock()
+	pending := true
+	defer func() {
+		if pending {
+			s.leavePending()
+		}
+	}()
+
 	client, err := s.db.TailClient.Query().Where(tailclient.IDEQ(clientID), tailclient.UserIDEQ(ownerID)).Only(ctx)
 	if ent.IsNotFound(err) {
 		return RunView{}, ErrNotFound
@@ -177,7 +194,6 @@ func (s *Service) Start(ctx context.Context, ownerID, clientID string, input Sta
 	s.active[runID] = active
 	s.clientRuns[clientID] = runID
 	s.ownerRuns[ownerID]++
-	s.pending++
 	s.mu.Unlock()
 
 	create := s.db.DiagnosticRun.Create().
@@ -192,18 +208,26 @@ func (s *Service) Start(ctx context.Context, ownerID, clientID string, input Sta
 	}
 	row, err := create.Save(ctx)
 	if err != nil {
-		s.failPendingStart(runID)
+		cancel(errCanceledByOwner)
+		s.release(runID)
 		return RunView{}, fmt.Errorf("create diagnostic run: %w", err)
 	}
 	view := runView(row)
 	if err := s.prune(ctx, ownerID); err != nil {
 		s.logger.ErrorContext(ctx, "Prune diagnostic history failed", "owner_id", ownerID, "error", err)
 	}
-	s.recordLifecycle(ownerID, clientID, runID, RunStatusRunning)
+	if err := s.recordLifecycle(ctx, ownerID, clientID, runID, RunStatusRunning); err != nil {
+		failure := fmt.Errorf("record diagnostic start lifecycle: %w", err)
+		s.recordFailure(failure)
+		cancel(errCanceledByOwner)
+		s.release(runID)
+		return RunView{}, failure
+	}
 	s.publisher.PublishDiagnostic(ownerID, runID, events.RuntimePhaseRunning, eventPayload(view, 0))
 
 	s.mu.Lock()
 	s.wg.Go(func() { s.execute(runCtx, runID, input) })
+	pending = false
 	s.pending--
 	s.pendingCond.Broadcast()
 	s.mu.Unlock()
@@ -244,7 +268,10 @@ func (s *Service) Close() error {
 	}
 	s.mu.Unlock()
 	s.wg.Wait()
-	return nil
+	s.mu.Lock()
+	failure := errors.Join(s.failures...)
+	s.mu.Unlock()
+	return failure
 }
 
 func (s *Service) execute(ctx context.Context, runID string, input StartInput) {
@@ -310,27 +337,34 @@ func (s *Service) finish(runID string, result Result, runErr error) {
 	}
 	status, phase, code := terminalOutcome(context.Cause(active.ctx), runErr)
 	finishedAt := time.Now()
-	update := s.db.DiagnosticRun.Update().Where(
-		diagnosticrun.IDEQ(runID),
-		diagnosticrun.UserIDEQ(active.ownerID),
-		diagnosticrun.StatusEQ(diagnosticrun.StatusRunning),
-	).SetStatus(diagnosticrun.Status(status)).SetFinishedAt(finishedAt)
-	if result.Kind == RunKindPing && runErr == nil {
-		update.SetLatencyMs(result.Latency.Milliseconds())
-	}
-	if result.Kind == RunKindThroughput && runErr == nil {
-		update.SetUploadBytes(result.UploadBytes).
-			SetDownloadBytes(result.DownloadBytes).
-			SetUploadBps(bitsPerSecond(result.UploadBytes, result.Duration)).
-			SetDownloadBps(bitsPerSecond(result.DownloadBytes, result.Duration))
-	}
-	if code != "" {
-		update.SetErrorCode(code)
-	}
 	terminalCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	updated, err := update.Save(terminalCtx)
+	var updated int
+	err := retryLifecycle(terminalCtx, "persist diagnostic terminal state", func() error {
+		update := s.db.DiagnosticRun.Update().Where(
+			diagnosticrun.IDEQ(runID),
+			diagnosticrun.UserIDEQ(active.ownerID),
+			diagnosticrun.StatusEQ(diagnosticrun.StatusRunning),
+		).SetStatus(diagnosticrun.Status(status)).SetFinishedAt(finishedAt)
+		if result.Kind == RunKindPing && runErr == nil {
+			update.SetLatencyMs(result.Latency.Milliseconds())
+		}
+		if result.Kind == RunKindThroughput && runErr == nil {
+			update.SetUploadBytes(result.UploadBytes).
+				SetDownloadBytes(result.DownloadBytes).
+				SetUploadBps(bitsPerSecond(result.UploadBytes, result.Duration)).
+				SetDownloadBps(bitsPerSecond(result.DownloadBytes, result.Duration))
+		}
+		if code != "" {
+			update.SetErrorCode(code)
+		}
+		var saveErr error
+		updated, saveErr = update.Save(terminalCtx)
+		return saveErr
+	})
 	if err != nil {
+		failure := fmt.Errorf("finalize diagnostic run %s: %w", runID, err)
+		s.recordFailure(failure)
 		s.logger.ErrorContext(terminalCtx, "Persist diagnostic terminal state failed", "run_id", runID, "client_id", active.clientID, "error", err)
 		return
 	}
@@ -340,7 +374,11 @@ func (s *Service) finish(runID string, result Result, runErr error) {
 	// The terminal row is now observable. Free both admission reservations
 	// before audit/event/pruning work so a caller can immediately start again.
 	s.release(runID)
-	s.recordLifecycle(active.ownerID, active.clientID, runID, status)
+	if err := s.recordLifecycle(terminalCtx, active.ownerID, active.clientID, runID, status); err != nil {
+		failure := fmt.Errorf("record diagnostic terminal lifecycle for run %s: %w", runID, err)
+		s.recordFailure(failure)
+		return
+	}
 	s.publisher.PublishDiagnostic(active.ownerID, runID, phase, terminalEventPayload(active, status, code, result, runErr))
 	if err := s.prune(terminalCtx, active.ownerID); err != nil {
 		s.logger.ErrorContext(terminalCtx, "Prune diagnostic history failed", "owner_id", active.ownerID, "error", err)
@@ -355,14 +393,25 @@ func (s *Service) recover(ctx context.Context) error {
 	finishedAt := time.Now()
 	owners := make(map[string]struct{})
 	for _, row := range rows {
-		updated, err := s.db.DiagnosticRun.Update().Where(
-			diagnosticrun.IDEQ(row.ID),
-			diagnosticrun.UserIDEQ(row.UserID),
-			diagnosticrun.StatusEQ(diagnosticrun.StatusRunning),
-		).SetStatus(diagnosticrun.StatusInterrupted).
-			SetErrorCode(diagnosticrun.ErrorCodeDiagnosticIo).
-			SetFinishedAt(finishedAt).
-			Save(ctx)
+		// The running row is the durable recovery marker. Establish its
+		// idempotent audit record first so an audit failure leaves the marker
+		// available for the next startup attempt.
+		if err := s.recordLifecycle(ctx, row.UserID, row.ClientID, row.ID, RunStatusInterrupted); err != nil {
+			return fmt.Errorf("record recovered diagnostic lifecycle for run %s: %w", row.ID, err)
+		}
+		var updated int
+		err := retryLifecycle(ctx, "persist recovered diagnostic state", func() error {
+			update := s.db.DiagnosticRun.Update().Where(
+				diagnosticrun.IDEQ(row.ID),
+				diagnosticrun.UserIDEQ(row.UserID),
+				diagnosticrun.StatusEQ(diagnosticrun.StatusRunning),
+			).SetStatus(diagnosticrun.StatusInterrupted).
+				SetErrorCode(diagnosticrun.ErrorCodeDiagnosticIo).
+				SetFinishedAt(finishedAt)
+			var saveErr error
+			updated, saveErr = update.Save(ctx)
+			return saveErr
+		})
 		if err != nil {
 			return fmt.Errorf("interrupt stale diagnostic run: %w", err)
 		}
@@ -373,7 +422,6 @@ func (s *Service) recover(ctx context.Context) error {
 		row.ErrorCode = diagnosticrun.ErrorCodeDiagnosticIo
 		row.FinishedAt = new(finishedAt)
 		view := runView(row)
-		s.recordLifecycle(row.UserID, row.ClientID, row.ID, RunStatusInterrupted)
 		s.publisher.PublishDiagnostic(row.UserID, row.ID, events.RuntimePhaseInterrupted, eventPayload(view, 100))
 		owners[row.UserID] = struct{}{}
 	}
@@ -406,18 +454,9 @@ func (s *Service) prune(ctx context.Context, ownerID string) error {
 	return nil
 }
 
-func (s *Service) failPendingStart(runID string) {
+func (s *Service) leavePending() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if run := s.active[runID]; run != nil {
-		run.cancel(errCanceledByOwner)
-		delete(s.active, runID)
-		delete(s.clientRuns, run.clientID)
-		s.ownerRuns[run.ownerID]--
-		if s.ownerRuns[run.ownerID] == 0 {
-			delete(s.ownerRuns, run.ownerID)
-		}
-	}
 	s.pending--
 	s.pendingCond.Broadcast()
 }
@@ -435,20 +474,46 @@ func (s *Service) release(runID string) {
 	}
 }
 
-func (s *Service) recordLifecycle(ownerID, clientID, runID string, status RunStatus) {
+func (s *Service) recordLifecycle(ctx context.Context, ownerID, clientID, runID string, status RunStatus) error {
 	action := "diagnostic." + string(status)
 	if status == RunStatusRunning {
 		action = "diagnostic.start"
 	}
-	entry := audit.Entry{UserID: ownerID, Action: action, ResourceKind: "diagnostic", ResourceID: runID, Outcome: "success", Detail: "client_id=" + clientID}
+	entry := audit.Entry{ID: runID + ":" + action, UserID: ownerID, Action: action, ResourceKind: "diagnostic", ResourceID: runID, Outcome: "success", Detail: "client_id=" + clientID}
 	if status == RunStatusFailed || status == RunStatusInterrupted {
 		entry.Outcome = "failure"
 	}
-	auditCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	if err := s.auditor.Record(auditCtx, entry); err != nil {
-		s.logger.ErrorContext(auditCtx, "Write diagnostic audit event failed", "run_id", runID, "client_id", clientID, "error", err)
+	return retryLifecycle(ctx, "record diagnostic audit", func() error { return s.auditor.Record(ctx, entry) })
+}
+
+func retryLifecycle(ctx context.Context, operation string, run func() error) error {
+	var lastErr error
+	for attempt := range lifecycleRetryAttempts {
+		if err := run(); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+		if attempt == lifecycleRetryAttempts-1 {
+			break
+		}
+		timer := time.NewTimer(lifecycleRetryDelay)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return fmt.Errorf("%s: %w", operation, errors.Join(lastErr, ctx.Err()))
+		}
 	}
+	return fmt.Errorf("%s after %d attempts: %w", operation, lifecycleRetryAttempts, lastErr)
+}
+
+func (s *Service) recordFailure(err error) {
+	s.mu.Lock()
+	s.failures = append(s.failures, err)
+	s.mu.Unlock()
 }
 
 func validateStartInput(input StartInput) error {
