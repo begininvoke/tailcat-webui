@@ -24,7 +24,7 @@
 
 ## Gonc-inspired operations extension
 
-- [ ] Runtime phases, typed event envelope and exhaustive UI labels
+- [x] Runtime phases, typed event envelope and exhaustive UI labels
 - [ ] Injectable Tailcat server/client runtime adapter
 - [ ] Route-scoped reusable HTTP transport registry and invalidation
 - [ ] Port-aware operator target-rule parser and resolver
