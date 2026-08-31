@@ -673,6 +673,98 @@ func HasRoutesWith(preds ...predicate.PublishedRoute) predicate.User {
 	})
 }
 
+// HasTransferShares applies the HasEdge predicate on the "transfer_shares" edge.
+func HasTransferShares() predicate.User {
+	return predicate.User(func(s *sql.Selector) {
+		step := sqlgraph.NewStep(
+			sqlgraph.From(Table, FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, TransferSharesTable, TransferSharesColumn),
+		)
+		sqlgraph.HasNeighbors(s, step)
+	})
+}
+
+// HasTransferSharesWith applies the HasEdge predicate on the "transfer_shares" edge with a given conditions (other predicates).
+func HasTransferSharesWith(preds ...predicate.TransferShare) predicate.User {
+	return predicate.User(func(s *sql.Selector) {
+		step := newTransferSharesStep()
+		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
+			for _, p := range preds {
+				p(s)
+			}
+		})
+	})
+}
+
+// HasShareFiles applies the HasEdge predicate on the "share_files" edge.
+func HasShareFiles() predicate.User {
+	return predicate.User(func(s *sql.Selector) {
+		step := sqlgraph.NewStep(
+			sqlgraph.From(Table, FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, ShareFilesTable, ShareFilesColumn),
+		)
+		sqlgraph.HasNeighbors(s, step)
+	})
+}
+
+// HasShareFilesWith applies the HasEdge predicate on the "share_files" edge with a given conditions (other predicates).
+func HasShareFilesWith(preds ...predicate.ShareFile) predicate.User {
+	return predicate.User(func(s *sql.Selector) {
+		step := newShareFilesStep()
+		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
+			for _, p := range preds {
+				p(s)
+			}
+		})
+	})
+}
+
+// HasTransferJobs applies the HasEdge predicate on the "transfer_jobs" edge.
+func HasTransferJobs() predicate.User {
+	return predicate.User(func(s *sql.Selector) {
+		step := sqlgraph.NewStep(
+			sqlgraph.From(Table, FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, TransferJobsTable, TransferJobsColumn),
+		)
+		sqlgraph.HasNeighbors(s, step)
+	})
+}
+
+// HasTransferJobsWith applies the HasEdge predicate on the "transfer_jobs" edge with a given conditions (other predicates).
+func HasTransferJobsWith(preds ...predicate.TransferJob) predicate.User {
+	return predicate.User(func(s *sql.Selector) {
+		step := newTransferJobsStep()
+		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
+			for _, p := range preds {
+				p(s)
+			}
+		})
+	})
+}
+
+// HasTransferItems applies the HasEdge predicate on the "transfer_items" edge.
+func HasTransferItems() predicate.User {
+	return predicate.User(func(s *sql.Selector) {
+		step := sqlgraph.NewStep(
+			sqlgraph.From(Table, FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, TransferItemsTable, TransferItemsColumn),
+		)
+		sqlgraph.HasNeighbors(s, step)
+	})
+}
+
+// HasTransferItemsWith applies the HasEdge predicate on the "transfer_items" edge with a given conditions (other predicates).
+func HasTransferItemsWith(preds ...predicate.TransferItem) predicate.User {
+	return predicate.User(func(s *sql.Selector) {
+		step := newTransferItemsStep()
+		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
+			for _, p := range preds {
+				p(s)
+			}
+		})
+	})
+}
+
 // HasAuditEvents applies the HasEdge predicate on the "audit_events" edge.
 func HasAuditEvents() predicate.User {
 	return predicate.User(func(s *sql.Selector) {

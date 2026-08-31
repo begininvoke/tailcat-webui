@@ -54,9 +54,11 @@ type TailClientEdges struct {
 	DiagnosticRuns []*DiagnosticRun `json:"diagnostic_runs,omitempty"`
 	// Routes holds the value of the routes edge.
 	Routes []*PublishedRoute `json:"routes,omitempty"`
+	// TransferJobs holds the value of the transfer_jobs edge.
+	TransferJobs []*TransferJob `json:"transfer_jobs,omitempty"`
 	// loadedTypes holds the information for reporting if a
 	// type was loaded (or requested) in eager-loading or not.
-	loadedTypes [3]bool
+	loadedTypes [4]bool
 }
 
 // OwnerOrErr returns the Owner value or an error if the edge
@@ -86,6 +88,15 @@ func (e TailClientEdges) RoutesOrErr() ([]*PublishedRoute, error) {
 		return e.Routes, nil
 	}
 	return nil, &NotLoadedError{edge: "routes"}
+}
+
+// TransferJobsOrErr returns the TransferJobs value or an error if the edge
+// was not loaded in eager-loading.
+func (e TailClientEdges) TransferJobsOrErr() ([]*TransferJob, error) {
+	if e.loadedTypes[3] {
+		return e.TransferJobs, nil
+	}
+	return nil, &NotLoadedError{edge: "transfer_jobs"}
 }
 
 // scanValues returns the types for scanning values from sql.Rows.
@@ -216,6 +227,11 @@ func (_m *TailClient) QueryDiagnosticRuns() *DiagnosticRunQuery {
 // QueryRoutes queries the "routes" edge of the TailClient entity.
 func (_m *TailClient) QueryRoutes() *PublishedRouteQuery {
 	return NewTailClientClient(_m.config).QueryRoutes(_m)
+}
+
+// QueryTransferJobs queries the "transfer_jobs" edge of the TailClient entity.
+func (_m *TailClient) QueryTransferJobs() *TransferJobQuery {
+	return NewTailClientClient(_m.config).QueryTransferJobs(_m)
 }
 
 // Update returns a builder for updating this TailClient.

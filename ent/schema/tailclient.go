@@ -36,5 +36,6 @@ func (TailClient) Edges() []ent.Edge {
 		edge.From("owner", User.Type).Ref("clients").Field("user_id").Unique().Required().Immutable().Annotations(entsql.OnDelete(entsql.Cascade)),
 		edge.To("diagnostic_runs", DiagnosticRun.Type).Annotations(entsql.OnDelete(entsql.Cascade)),
 		edge.To("routes", PublishedRoute.Type).Annotations(entsql.OnDelete(entsql.Cascade)),
+		edge.To("transfer_jobs", TransferJob.Type).Annotations(entsql.OnDelete(entsql.Cascade)),
 	}
 }

@@ -20,8 +20,12 @@ import (
 	"github.com/ca-x/tailcat-webui/ent/portmapping"
 	"github.com/ca-x/tailcat-webui/ent/publishedroute"
 	"github.com/ca-x/tailcat-webui/ent/session"
+	"github.com/ca-x/tailcat-webui/ent/sharefile"
 	"github.com/ca-x/tailcat-webui/ent/tailclient"
 	"github.com/ca-x/tailcat-webui/ent/tailserver"
+	"github.com/ca-x/tailcat-webui/ent/transferitem"
+	"github.com/ca-x/tailcat-webui/ent/transferjob"
+	"github.com/ca-x/tailcat-webui/ent/transfershare"
 	"github.com/ca-x/tailcat-webui/ent/user"
 )
 
@@ -91,8 +95,12 @@ func checkColumn(t, c string) error {
 			portmapping.Table:    portmapping.ValidColumn,
 			publishedroute.Table: publishedroute.ValidColumn,
 			session.Table:        session.ValidColumn,
+			sharefile.Table:      sharefile.ValidColumn,
 			tailclient.Table:     tailclient.ValidColumn,
 			tailserver.Table:     tailserver.ValidColumn,
+			transferitem.Table:   transferitem.ValidColumn,
+			transferjob.Table:    transferjob.ValidColumn,
+			transfershare.Table:  transfershare.ValidColumn,
 			user.Table:           user.ValidColumn,
 		})
 	})

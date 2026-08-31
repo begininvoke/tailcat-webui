@@ -15,6 +15,7 @@ import (
 	"github.com/ca-x/tailcat-webui/ent/predicate"
 	"github.com/ca-x/tailcat-webui/ent/publishedroute"
 	"github.com/ca-x/tailcat-webui/ent/tailclient"
+	"github.com/ca-x/tailcat-webui/ent/transferjob"
 )
 
 // TailClientUpdate is the builder for updating TailClient entities.
@@ -199,6 +200,21 @@ func (_u *TailClientUpdate) AddRoutes(v ...*PublishedRoute) *TailClientUpdate {
 	return _u.AddRouteIDs(ids...)
 }
 
+// AddTransferJobIDs adds the "transfer_jobs" edge to the TransferJob entity by IDs.
+func (_u *TailClientUpdate) AddTransferJobIDs(ids ...string) *TailClientUpdate {
+	_u.mutation.AddTransferJobIDs(ids...)
+	return _u
+}
+
+// AddTransferJobs adds the "transfer_jobs" edges to the TransferJob entity.
+func (_u *TailClientUpdate) AddTransferJobs(v ...*TransferJob) *TailClientUpdate {
+	ids := make([]string, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddTransferJobIDs(ids...)
+}
+
 // Mutation returns the TailClientMutation object of the builder.
 func (_u *TailClientUpdate) Mutation() *TailClientMutation {
 	return _u.mutation
@@ -244,6 +260,27 @@ func (_u *TailClientUpdate) RemoveRoutes(v ...*PublishedRoute) *TailClientUpdate
 		ids[i] = v[i].ID
 	}
 	return _u.RemoveRouteIDs(ids...)
+}
+
+// ClearTransferJobs clears all "transfer_jobs" edges to the TransferJob entity.
+func (_u *TailClientUpdate) ClearTransferJobs() *TailClientUpdate {
+	_u.mutation.ClearTransferJobs()
+	return _u
+}
+
+// RemoveTransferJobIDs removes the "transfer_jobs" edge to TransferJob entities by IDs.
+func (_u *TailClientUpdate) RemoveTransferJobIDs(ids ...string) *TailClientUpdate {
+	_u.mutation.RemoveTransferJobIDs(ids...)
+	return _u
+}
+
+// RemoveTransferJobs removes "transfer_jobs" edges to TransferJob entities.
+func (_u *TailClientUpdate) RemoveTransferJobs(v ...*TransferJob) *TailClientUpdate {
+	ids := make([]string, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveTransferJobIDs(ids...)
 }
 
 // Save executes the query and returns the number of nodes affected by the update operation.
@@ -452,6 +489,51 @@ func (_u *TailClientUpdate) sqlSave(ctx context.Context) (_node int, err error) 
 		}
 		_spec.Edges.Add = append(_spec.Edges.Add, edge)
 	}
+	if _u.mutation.TransferJobsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   tailclient.TransferJobsTable,
+			Columns: []string{tailclient.TransferJobsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(transferjob.FieldID, field.TypeString),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedTransferJobsIDs(); len(nodes) > 0 && !_u.mutation.TransferJobsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   tailclient.TransferJobsTable,
+			Columns: []string{tailclient.TransferJobsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(transferjob.FieldID, field.TypeString),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.TransferJobsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   tailclient.TransferJobsTable,
+			Columns: []string{tailclient.TransferJobsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(transferjob.FieldID, field.TypeString),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
 	if _node, err = sqlgraph.UpdateNodes(ctx, _u.driver, _spec); err != nil {
 		if _, ok := err.(*sqlgraph.NotFoundError); ok {
 			err = &NotFoundError{tailclient.Label}
@@ -641,6 +723,21 @@ func (_u *TailClientUpdateOne) AddRoutes(v ...*PublishedRoute) *TailClientUpdate
 	return _u.AddRouteIDs(ids...)
 }
 
+// AddTransferJobIDs adds the "transfer_jobs" edge to the TransferJob entity by IDs.
+func (_u *TailClientUpdateOne) AddTransferJobIDs(ids ...string) *TailClientUpdateOne {
+	_u.mutation.AddTransferJobIDs(ids...)
+	return _u
+}
+
+// AddTransferJobs adds the "transfer_jobs" edges to the TransferJob entity.
+func (_u *TailClientUpdateOne) AddTransferJobs(v ...*TransferJob) *TailClientUpdateOne {
+	ids := make([]string, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddTransferJobIDs(ids...)
+}
+
 // Mutation returns the TailClientMutation object of the builder.
 func (_u *TailClientUpdateOne) Mutation() *TailClientMutation {
 	return _u.mutation
@@ -686,6 +783,27 @@ func (_u *TailClientUpdateOne) RemoveRoutes(v ...*PublishedRoute) *TailClientUpd
 		ids[i] = v[i].ID
 	}
 	return _u.RemoveRouteIDs(ids...)
+}
+
+// ClearTransferJobs clears all "transfer_jobs" edges to the TransferJob entity.
+func (_u *TailClientUpdateOne) ClearTransferJobs() *TailClientUpdateOne {
+	_u.mutation.ClearTransferJobs()
+	return _u
+}
+
+// RemoveTransferJobIDs removes the "transfer_jobs" edge to TransferJob entities by IDs.
+func (_u *TailClientUpdateOne) RemoveTransferJobIDs(ids ...string) *TailClientUpdateOne {
+	_u.mutation.RemoveTransferJobIDs(ids...)
+	return _u
+}
+
+// RemoveTransferJobs removes "transfer_jobs" edges to TransferJob entities.
+func (_u *TailClientUpdateOne) RemoveTransferJobs(v ...*TransferJob) *TailClientUpdateOne {
+	ids := make([]string, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveTransferJobIDs(ids...)
 }
 
 // Where appends a list predicates to the TailClientUpdate builder.
@@ -917,6 +1035,51 @@ func (_u *TailClientUpdateOne) sqlSave(ctx context.Context) (_node *TailClient, 
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(publishedroute.FieldID, field.TypeString),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.TransferJobsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   tailclient.TransferJobsTable,
+			Columns: []string{tailclient.TransferJobsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(transferjob.FieldID, field.TypeString),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedTransferJobsIDs(); len(nodes) > 0 && !_u.mutation.TransferJobsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   tailclient.TransferJobsTable,
+			Columns: []string{tailclient.TransferJobsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(transferjob.FieldID, field.TypeString),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.TransferJobsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   tailclient.TransferJobsTable,
+			Columns: []string{tailclient.TransferJobsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(transferjob.FieldID, field.TypeString),
 			},
 		}
 		for _, k := range nodes {

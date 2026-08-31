@@ -20,8 +20,12 @@ import (
 	"github.com/ca-x/tailcat-webui/ent/predicate"
 	"github.com/ca-x/tailcat-webui/ent/publishedroute"
 	"github.com/ca-x/tailcat-webui/ent/session"
+	"github.com/ca-x/tailcat-webui/ent/sharefile"
 	"github.com/ca-x/tailcat-webui/ent/tailclient"
 	"github.com/ca-x/tailcat-webui/ent/tailserver"
+	"github.com/ca-x/tailcat-webui/ent/transferitem"
+	"github.com/ca-x/tailcat-webui/ent/transferjob"
+	"github.com/ca-x/tailcat-webui/ent/transfershare"
 	"github.com/ca-x/tailcat-webui/ent/user"
 )
 
@@ -42,8 +46,12 @@ const (
 	TypePortMapping    = "PortMapping"
 	TypePublishedRoute = "PublishedRoute"
 	TypeSession        = "Session"
+	TypeShareFile      = "ShareFile"
 	TypeTailClient     = "TailClient"
 	TypeTailServer     = "TailServer"
+	TypeTransferItem   = "TransferItem"
+	TypeTransferJob    = "TransferJob"
+	TypeTransferShare  = "TransferShare"
 	TypeUser           = "User"
 )
 
@@ -6926,6 +6934,1022 @@ func (m *SessionMutation) ResetEdge(name string) error {
 	return fmt.Errorf("unknown Session edge %s", name)
 }
 
+// ShareFileMutation represents an operation that mutates the ShareFile nodes in the graph.
+type ShareFileMutation struct {
+	config
+	op                 Op
+	typ                string
+	id                 *string
+	storage_name       *string
+	virtual_path       *string
+	size_bytes         *int64
+	addsize_bytes      *int64
+	mtime              *time.Time
+	blake3             *string
+	block_size         *int64
+	addblock_size      *int64
+	block_hashes       *[]string
+	appendblock_hashes []string
+	created_at         *time.Time
+	clearedFields      map[string]struct{}
+	owner              *string
+	clearedowner       bool
+	share              *string
+	clearedshare       bool
+	done               bool
+	oldValue           func(context.Context) (*ShareFile, error)
+	predicates         []predicate.ShareFile
+}
+
+var _ ent.Mutation = (*ShareFileMutation)(nil)
+
+// sharefileOption allows management of the mutation configuration using functional options.
+type sharefileOption func(*ShareFileMutation)
+
+// newShareFileMutation creates new mutation for the ShareFile entity.
+func newShareFileMutation(c config, op Op, opts ...sharefileOption) *ShareFileMutation {
+	m := &ShareFileMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeShareFile,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withShareFileID sets the ID field of the mutation.
+func withShareFileID(id string) sharefileOption {
+	return func(m *ShareFileMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *ShareFile
+		)
+		m.oldValue = func(ctx context.Context) (*ShareFile, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().ShareFile.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withShareFile sets the old ShareFile of the mutation.
+func withShareFile(node *ShareFile) sharefileOption {
+	return func(m *ShareFileMutation) {
+		m.oldValue = func(context.Context) (*ShareFile, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m ShareFileMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m ShareFileMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// SetID sets the value of the id field. Note that this
+// operation is only accepted on creation of ShareFile entities.
+func (m *ShareFileMutation) SetID(id string) {
+	m.id = &id
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *ShareFileMutation) ID() (id string, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *ShareFileMutation) IDs(ctx context.Context) ([]string, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []string{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().ShareFile.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetUserID sets the "user_id" field.
+func (m *ShareFileMutation) SetUserID(s string) {
+	m.owner = &s
+}
+
+// UserID returns the value of the "user_id" field in the mutation.
+func (m *ShareFileMutation) UserID() (r string, exists bool) {
+	v := m.owner
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUserID returns the old "user_id" field's value of the ShareFile entity.
+// If the ShareFile object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ShareFileMutation) OldUserID(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUserID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUserID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUserID: %w", err)
+	}
+	return oldValue.UserID, nil
+}
+
+// ResetUserID resets all changes to the "user_id" field.
+func (m *ShareFileMutation) ResetUserID() {
+	m.owner = nil
+}
+
+// SetShareID sets the "share_id" field.
+func (m *ShareFileMutation) SetShareID(s string) {
+	m.share = &s
+}
+
+// ShareID returns the value of the "share_id" field in the mutation.
+func (m *ShareFileMutation) ShareID() (r string, exists bool) {
+	v := m.share
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldShareID returns the old "share_id" field's value of the ShareFile entity.
+// If the ShareFile object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ShareFileMutation) OldShareID(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldShareID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldShareID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldShareID: %w", err)
+	}
+	return oldValue.ShareID, nil
+}
+
+// ResetShareID resets all changes to the "share_id" field.
+func (m *ShareFileMutation) ResetShareID() {
+	m.share = nil
+}
+
+// SetStorageName sets the "storage_name" field.
+func (m *ShareFileMutation) SetStorageName(s string) {
+	m.storage_name = &s
+}
+
+// StorageName returns the value of the "storage_name" field in the mutation.
+func (m *ShareFileMutation) StorageName() (r string, exists bool) {
+	v := m.storage_name
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldStorageName returns the old "storage_name" field's value of the ShareFile entity.
+// If the ShareFile object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ShareFileMutation) OldStorageName(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldStorageName is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldStorageName requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldStorageName: %w", err)
+	}
+	return oldValue.StorageName, nil
+}
+
+// ResetStorageName resets all changes to the "storage_name" field.
+func (m *ShareFileMutation) ResetStorageName() {
+	m.storage_name = nil
+}
+
+// SetVirtualPath sets the "virtual_path" field.
+func (m *ShareFileMutation) SetVirtualPath(s string) {
+	m.virtual_path = &s
+}
+
+// VirtualPath returns the value of the "virtual_path" field in the mutation.
+func (m *ShareFileMutation) VirtualPath() (r string, exists bool) {
+	v := m.virtual_path
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldVirtualPath returns the old "virtual_path" field's value of the ShareFile entity.
+// If the ShareFile object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ShareFileMutation) OldVirtualPath(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldVirtualPath is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldVirtualPath requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldVirtualPath: %w", err)
+	}
+	return oldValue.VirtualPath, nil
+}
+
+// ResetVirtualPath resets all changes to the "virtual_path" field.
+func (m *ShareFileMutation) ResetVirtualPath() {
+	m.virtual_path = nil
+}
+
+// SetSizeBytes sets the "size_bytes" field.
+func (m *ShareFileMutation) SetSizeBytes(i int64) {
+	m.size_bytes = &i
+	m.addsize_bytes = nil
+}
+
+// SizeBytes returns the value of the "size_bytes" field in the mutation.
+func (m *ShareFileMutation) SizeBytes() (r int64, exists bool) {
+	v := m.size_bytes
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSizeBytes returns the old "size_bytes" field's value of the ShareFile entity.
+// If the ShareFile object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ShareFileMutation) OldSizeBytes(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSizeBytes is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSizeBytes requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSizeBytes: %w", err)
+	}
+	return oldValue.SizeBytes, nil
+}
+
+// AddSizeBytes adds i to the "size_bytes" field.
+func (m *ShareFileMutation) AddSizeBytes(i int64) {
+	if m.addsize_bytes != nil {
+		*m.addsize_bytes += i
+	} else {
+		m.addsize_bytes = &i
+	}
+}
+
+// AddedSizeBytes returns the value that was added to the "size_bytes" field in this mutation.
+func (m *ShareFileMutation) AddedSizeBytes() (r int64, exists bool) {
+	v := m.addsize_bytes
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetSizeBytes resets all changes to the "size_bytes" field.
+func (m *ShareFileMutation) ResetSizeBytes() {
+	m.size_bytes = nil
+	m.addsize_bytes = nil
+}
+
+// SetMtime sets the "mtime" field.
+func (m *ShareFileMutation) SetMtime(t time.Time) {
+	m.mtime = &t
+}
+
+// Mtime returns the value of the "mtime" field in the mutation.
+func (m *ShareFileMutation) Mtime() (r time.Time, exists bool) {
+	v := m.mtime
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldMtime returns the old "mtime" field's value of the ShareFile entity.
+// If the ShareFile object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ShareFileMutation) OldMtime(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldMtime is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldMtime requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldMtime: %w", err)
+	}
+	return oldValue.Mtime, nil
+}
+
+// ResetMtime resets all changes to the "mtime" field.
+func (m *ShareFileMutation) ResetMtime() {
+	m.mtime = nil
+}
+
+// SetBlake3 sets the "blake3" field.
+func (m *ShareFileMutation) SetBlake3(s string) {
+	m.blake3 = &s
+}
+
+// Blake3 returns the value of the "blake3" field in the mutation.
+func (m *ShareFileMutation) Blake3() (r string, exists bool) {
+	v := m.blake3
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldBlake3 returns the old "blake3" field's value of the ShareFile entity.
+// If the ShareFile object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ShareFileMutation) OldBlake3(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldBlake3 is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldBlake3 requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldBlake3: %w", err)
+	}
+	return oldValue.Blake3, nil
+}
+
+// ResetBlake3 resets all changes to the "blake3" field.
+func (m *ShareFileMutation) ResetBlake3() {
+	m.blake3 = nil
+}
+
+// SetBlockSize sets the "block_size" field.
+func (m *ShareFileMutation) SetBlockSize(i int64) {
+	m.block_size = &i
+	m.addblock_size = nil
+}
+
+// BlockSize returns the value of the "block_size" field in the mutation.
+func (m *ShareFileMutation) BlockSize() (r int64, exists bool) {
+	v := m.block_size
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldBlockSize returns the old "block_size" field's value of the ShareFile entity.
+// If the ShareFile object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ShareFileMutation) OldBlockSize(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldBlockSize is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldBlockSize requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldBlockSize: %w", err)
+	}
+	return oldValue.BlockSize, nil
+}
+
+// AddBlockSize adds i to the "block_size" field.
+func (m *ShareFileMutation) AddBlockSize(i int64) {
+	if m.addblock_size != nil {
+		*m.addblock_size += i
+	} else {
+		m.addblock_size = &i
+	}
+}
+
+// AddedBlockSize returns the value that was added to the "block_size" field in this mutation.
+func (m *ShareFileMutation) AddedBlockSize() (r int64, exists bool) {
+	v := m.addblock_size
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetBlockSize resets all changes to the "block_size" field.
+func (m *ShareFileMutation) ResetBlockSize() {
+	m.block_size = nil
+	m.addblock_size = nil
+}
+
+// SetBlockHashes sets the "block_hashes" field.
+func (m *ShareFileMutation) SetBlockHashes(s []string) {
+	m.block_hashes = &s
+	m.appendblock_hashes = nil
+}
+
+// BlockHashes returns the value of the "block_hashes" field in the mutation.
+func (m *ShareFileMutation) BlockHashes() (r []string, exists bool) {
+	v := m.block_hashes
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldBlockHashes returns the old "block_hashes" field's value of the ShareFile entity.
+// If the ShareFile object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ShareFileMutation) OldBlockHashes(ctx context.Context) (v []string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldBlockHashes is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldBlockHashes requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldBlockHashes: %w", err)
+	}
+	return oldValue.BlockHashes, nil
+}
+
+// AppendBlockHashes adds s to the "block_hashes" field.
+func (m *ShareFileMutation) AppendBlockHashes(s []string) {
+	m.appendblock_hashes = append(m.appendblock_hashes, s...)
+}
+
+// AppendedBlockHashes returns the list of values that were appended to the "block_hashes" field in this mutation.
+func (m *ShareFileMutation) AppendedBlockHashes() ([]string, bool) {
+	if len(m.appendblock_hashes) == 0 {
+		return nil, false
+	}
+	return m.appendblock_hashes, true
+}
+
+// ResetBlockHashes resets all changes to the "block_hashes" field.
+func (m *ShareFileMutation) ResetBlockHashes() {
+	m.block_hashes = nil
+	m.appendblock_hashes = nil
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (m *ShareFileMutation) SetCreatedAt(t time.Time) {
+	m.created_at = &t
+}
+
+// CreatedAt returns the value of the "created_at" field in the mutation.
+func (m *ShareFileMutation) CreatedAt() (r time.Time, exists bool) {
+	v := m.created_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedAt returns the old "created_at" field's value of the ShareFile entity.
+// If the ShareFile object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ShareFileMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
+	}
+	return oldValue.CreatedAt, nil
+}
+
+// ResetCreatedAt resets all changes to the "created_at" field.
+func (m *ShareFileMutation) ResetCreatedAt() {
+	m.created_at = nil
+}
+
+// SetOwnerID sets the "owner" edge to the User entity by id.
+func (m *ShareFileMutation) SetOwnerID(id string) {
+	m.owner = &id
+}
+
+// ClearOwner clears the "owner" edge to the User entity.
+func (m *ShareFileMutation) ClearOwner() {
+	m.clearedowner = true
+	m.clearedFields[sharefile.FieldUserID] = struct{}{}
+}
+
+// OwnerCleared reports if the "owner" edge to the User entity was cleared.
+func (m *ShareFileMutation) OwnerCleared() bool {
+	return m.clearedowner
+}
+
+// OwnerID returns the "owner" edge ID in the mutation.
+func (m *ShareFileMutation) OwnerID() (id string, exists bool) {
+	if m.owner != nil {
+		return *m.owner, true
+	}
+	return
+}
+
+// OwnerIDs returns the "owner" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// OwnerID instead. It exists only for internal usage by the builders.
+func (m *ShareFileMutation) OwnerIDs() (ids []string) {
+	if id := m.owner; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetOwner resets all changes to the "owner" edge.
+func (m *ShareFileMutation) ResetOwner() {
+	m.owner = nil
+	m.clearedowner = false
+}
+
+// ClearShare clears the "share" edge to the TransferShare entity.
+func (m *ShareFileMutation) ClearShare() {
+	m.clearedshare = true
+	m.clearedFields[sharefile.FieldShareID] = struct{}{}
+}
+
+// ShareCleared reports if the "share" edge to the TransferShare entity was cleared.
+func (m *ShareFileMutation) ShareCleared() bool {
+	return m.clearedshare
+}
+
+// ShareIDs returns the "share" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// ShareID instead. It exists only for internal usage by the builders.
+func (m *ShareFileMutation) ShareIDs() (ids []string) {
+	if id := m.share; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetShare resets all changes to the "share" edge.
+func (m *ShareFileMutation) ResetShare() {
+	m.share = nil
+	m.clearedshare = false
+}
+
+// Where appends a list predicates to the ShareFileMutation builder.
+func (m *ShareFileMutation) Where(ps ...predicate.ShareFile) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the ShareFileMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *ShareFileMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.ShareFile, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *ShareFileMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *ShareFileMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (ShareFile).
+func (m *ShareFileMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *ShareFileMutation) Fields() []string {
+	fields := make([]string, 0, 10)
+	if m.owner != nil {
+		fields = append(fields, sharefile.FieldUserID)
+	}
+	if m.share != nil {
+		fields = append(fields, sharefile.FieldShareID)
+	}
+	if m.storage_name != nil {
+		fields = append(fields, sharefile.FieldStorageName)
+	}
+	if m.virtual_path != nil {
+		fields = append(fields, sharefile.FieldVirtualPath)
+	}
+	if m.size_bytes != nil {
+		fields = append(fields, sharefile.FieldSizeBytes)
+	}
+	if m.mtime != nil {
+		fields = append(fields, sharefile.FieldMtime)
+	}
+	if m.blake3 != nil {
+		fields = append(fields, sharefile.FieldBlake3)
+	}
+	if m.block_size != nil {
+		fields = append(fields, sharefile.FieldBlockSize)
+	}
+	if m.block_hashes != nil {
+		fields = append(fields, sharefile.FieldBlockHashes)
+	}
+	if m.created_at != nil {
+		fields = append(fields, sharefile.FieldCreatedAt)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *ShareFileMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case sharefile.FieldUserID:
+		return m.UserID()
+	case sharefile.FieldShareID:
+		return m.ShareID()
+	case sharefile.FieldStorageName:
+		return m.StorageName()
+	case sharefile.FieldVirtualPath:
+		return m.VirtualPath()
+	case sharefile.FieldSizeBytes:
+		return m.SizeBytes()
+	case sharefile.FieldMtime:
+		return m.Mtime()
+	case sharefile.FieldBlake3:
+		return m.Blake3()
+	case sharefile.FieldBlockSize:
+		return m.BlockSize()
+	case sharefile.FieldBlockHashes:
+		return m.BlockHashes()
+	case sharefile.FieldCreatedAt:
+		return m.CreatedAt()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *ShareFileMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case sharefile.FieldUserID:
+		return m.OldUserID(ctx)
+	case sharefile.FieldShareID:
+		return m.OldShareID(ctx)
+	case sharefile.FieldStorageName:
+		return m.OldStorageName(ctx)
+	case sharefile.FieldVirtualPath:
+		return m.OldVirtualPath(ctx)
+	case sharefile.FieldSizeBytes:
+		return m.OldSizeBytes(ctx)
+	case sharefile.FieldMtime:
+		return m.OldMtime(ctx)
+	case sharefile.FieldBlake3:
+		return m.OldBlake3(ctx)
+	case sharefile.FieldBlockSize:
+		return m.OldBlockSize(ctx)
+	case sharefile.FieldBlockHashes:
+		return m.OldBlockHashes(ctx)
+	case sharefile.FieldCreatedAt:
+		return m.OldCreatedAt(ctx)
+	}
+	return nil, fmt.Errorf("unknown ShareFile field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *ShareFileMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case sharefile.FieldUserID:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUserID(v)
+		return nil
+	case sharefile.FieldShareID:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetShareID(v)
+		return nil
+	case sharefile.FieldStorageName:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetStorageName(v)
+		return nil
+	case sharefile.FieldVirtualPath:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetVirtualPath(v)
+		return nil
+	case sharefile.FieldSizeBytes:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSizeBytes(v)
+		return nil
+	case sharefile.FieldMtime:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetMtime(v)
+		return nil
+	case sharefile.FieldBlake3:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetBlake3(v)
+		return nil
+	case sharefile.FieldBlockSize:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetBlockSize(v)
+		return nil
+	case sharefile.FieldBlockHashes:
+		v, ok := value.([]string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetBlockHashes(v)
+		return nil
+	case sharefile.FieldCreatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedAt(v)
+		return nil
+	}
+	return fmt.Errorf("unknown ShareFile field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *ShareFileMutation) AddedFields() []string {
+	var fields []string
+	if m.addsize_bytes != nil {
+		fields = append(fields, sharefile.FieldSizeBytes)
+	}
+	if m.addblock_size != nil {
+		fields = append(fields, sharefile.FieldBlockSize)
+	}
+	return fields
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *ShareFileMutation) AddedField(name string) (ent.Value, bool) {
+	switch name {
+	case sharefile.FieldSizeBytes:
+		return m.AddedSizeBytes()
+	case sharefile.FieldBlockSize:
+		return m.AddedBlockSize()
+	}
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *ShareFileMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	case sharefile.FieldSizeBytes:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddSizeBytes(v)
+		return nil
+	case sharefile.FieldBlockSize:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddBlockSize(v)
+		return nil
+	}
+	return fmt.Errorf("unknown ShareFile numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *ShareFileMutation) ClearedFields() []string {
+	return nil
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *ShareFileMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *ShareFileMutation) ClearField(name string) error {
+	return fmt.Errorf("unknown ShareFile nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *ShareFileMutation) ResetField(name string) error {
+	switch name {
+	case sharefile.FieldUserID:
+		m.ResetUserID()
+		return nil
+	case sharefile.FieldShareID:
+		m.ResetShareID()
+		return nil
+	case sharefile.FieldStorageName:
+		m.ResetStorageName()
+		return nil
+	case sharefile.FieldVirtualPath:
+		m.ResetVirtualPath()
+		return nil
+	case sharefile.FieldSizeBytes:
+		m.ResetSizeBytes()
+		return nil
+	case sharefile.FieldMtime:
+		m.ResetMtime()
+		return nil
+	case sharefile.FieldBlake3:
+		m.ResetBlake3()
+		return nil
+	case sharefile.FieldBlockSize:
+		m.ResetBlockSize()
+		return nil
+	case sharefile.FieldBlockHashes:
+		m.ResetBlockHashes()
+		return nil
+	case sharefile.FieldCreatedAt:
+		m.ResetCreatedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown ShareFile field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *ShareFileMutation) AddedEdges() []string {
+	edges := make([]string, 0, 2)
+	if m.owner != nil {
+		edges = append(edges, sharefile.EdgeOwner)
+	}
+	if m.share != nil {
+		edges = append(edges, sharefile.EdgeShare)
+	}
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *ShareFileMutation) AddedIDs(name string) []ent.Value {
+	switch name {
+	case sharefile.EdgeOwner:
+		if id := m.owner; id != nil {
+			return []ent.Value{*id}
+		}
+	case sharefile.EdgeShare:
+		if id := m.share; id != nil {
+			return []ent.Value{*id}
+		}
+	}
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *ShareFileMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 2)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *ShareFileMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *ShareFileMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 2)
+	if m.clearedowner {
+		edges = append(edges, sharefile.EdgeOwner)
+	}
+	if m.clearedshare {
+		edges = append(edges, sharefile.EdgeShare)
+	}
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *ShareFileMutation) EdgeCleared(name string) bool {
+	switch name {
+	case sharefile.EdgeOwner:
+		return m.clearedowner
+	case sharefile.EdgeShare:
+		return m.clearedshare
+	}
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *ShareFileMutation) ClearEdge(name string) error {
+	switch name {
+	case sharefile.EdgeOwner:
+		m.ClearOwner()
+		return nil
+	case sharefile.EdgeShare:
+		m.ClearShare()
+		return nil
+	}
+	return fmt.Errorf("unknown ShareFile unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *ShareFileMutation) ResetEdge(name string) error {
+	switch name {
+	case sharefile.EdgeOwner:
+		m.ResetOwner()
+		return nil
+	case sharefile.EdgeShare:
+		m.ResetShare()
+		return nil
+	}
+	return fmt.Errorf("unknown ShareFile edge %s", name)
+}
+
 // TailClientMutation represents an operation that mutates the TailClient nodes in the graph.
 type TailClientMutation struct {
 	config
@@ -6952,6 +7976,9 @@ type TailClientMutation struct {
 	routes                 map[string]struct{}
 	removedroutes          map[string]struct{}
 	clearedroutes          bool
+	transfer_jobs          map[string]struct{}
+	removedtransfer_jobs   map[string]struct{}
+	clearedtransfer_jobs   bool
 	done                   bool
 	oldValue               func(context.Context) (*TailClient, error)
 	predicates             []predicate.TailClient
@@ -7691,6 +8718,60 @@ func (m *TailClientMutation) ResetRoutes() {
 	m.removedroutes = nil
 }
 
+// AddTransferJobIDs adds the "transfer_jobs" edge to the TransferJob entity by ids.
+func (m *TailClientMutation) AddTransferJobIDs(ids ...string) {
+	if m.transfer_jobs == nil {
+		m.transfer_jobs = make(map[string]struct{})
+	}
+	for i := range ids {
+		m.transfer_jobs[ids[i]] = struct{}{}
+	}
+}
+
+// ClearTransferJobs clears the "transfer_jobs" edge to the TransferJob entity.
+func (m *TailClientMutation) ClearTransferJobs() {
+	m.clearedtransfer_jobs = true
+}
+
+// TransferJobsCleared reports if the "transfer_jobs" edge to the TransferJob entity was cleared.
+func (m *TailClientMutation) TransferJobsCleared() bool {
+	return m.clearedtransfer_jobs
+}
+
+// RemoveTransferJobIDs removes the "transfer_jobs" edge to the TransferJob entity by IDs.
+func (m *TailClientMutation) RemoveTransferJobIDs(ids ...string) {
+	if m.removedtransfer_jobs == nil {
+		m.removedtransfer_jobs = make(map[string]struct{})
+	}
+	for i := range ids {
+		delete(m.transfer_jobs, ids[i])
+		m.removedtransfer_jobs[ids[i]] = struct{}{}
+	}
+}
+
+// RemovedTransferJobs returns the removed IDs of the "transfer_jobs" edge to the TransferJob entity.
+func (m *TailClientMutation) RemovedTransferJobsIDs() (ids []string) {
+	for id := range m.removedtransfer_jobs {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// TransferJobsIDs returns the "transfer_jobs" edge IDs in the mutation.
+func (m *TailClientMutation) TransferJobsIDs() (ids []string) {
+	for id := range m.transfer_jobs {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ResetTransferJobs resets all changes to the "transfer_jobs" edge.
+func (m *TailClientMutation) ResetTransferJobs() {
+	m.transfer_jobs = nil
+	m.clearedtransfer_jobs = false
+	m.removedtransfer_jobs = nil
+}
+
 // Where appends a list predicates to the TailClientMutation builder.
 func (m *TailClientMutation) Where(ps ...predicate.TailClient) {
 	m.predicates = append(m.predicates, ps...)
@@ -8042,7 +9123,7 @@ func (m *TailClientMutation) ResetField(name string) error {
 
 // AddedEdges returns all edge names that were set/added in this mutation.
 func (m *TailClientMutation) AddedEdges() []string {
-	edges := make([]string, 0, 3)
+	edges := make([]string, 0, 4)
 	if m.owner != nil {
 		edges = append(edges, tailclient.EdgeOwner)
 	}
@@ -8051,6 +9132,9 @@ func (m *TailClientMutation) AddedEdges() []string {
 	}
 	if m.routes != nil {
 		edges = append(edges, tailclient.EdgeRoutes)
+	}
+	if m.transfer_jobs != nil {
+		edges = append(edges, tailclient.EdgeTransferJobs)
 	}
 	return edges
 }
@@ -8075,18 +9159,27 @@ func (m *TailClientMutation) AddedIDs(name string) []ent.Value {
 			ids = append(ids, id)
 		}
 		return ids
+	case tailclient.EdgeTransferJobs:
+		ids := make([]ent.Value, 0, len(m.transfer_jobs))
+		for id := range m.transfer_jobs {
+			ids = append(ids, id)
+		}
+		return ids
 	}
 	return nil
 }
 
 // RemovedEdges returns all edge names that were removed in this mutation.
 func (m *TailClientMutation) RemovedEdges() []string {
-	edges := make([]string, 0, 3)
+	edges := make([]string, 0, 4)
 	if m.removeddiagnostic_runs != nil {
 		edges = append(edges, tailclient.EdgeDiagnosticRuns)
 	}
 	if m.removedroutes != nil {
 		edges = append(edges, tailclient.EdgeRoutes)
+	}
+	if m.removedtransfer_jobs != nil {
+		edges = append(edges, tailclient.EdgeTransferJobs)
 	}
 	return edges
 }
@@ -8107,13 +9200,19 @@ func (m *TailClientMutation) RemovedIDs(name string) []ent.Value {
 			ids = append(ids, id)
 		}
 		return ids
+	case tailclient.EdgeTransferJobs:
+		ids := make([]ent.Value, 0, len(m.removedtransfer_jobs))
+		for id := range m.removedtransfer_jobs {
+			ids = append(ids, id)
+		}
+		return ids
 	}
 	return nil
 }
 
 // ClearedEdges returns all edge names that were cleared in this mutation.
 func (m *TailClientMutation) ClearedEdges() []string {
-	edges := make([]string, 0, 3)
+	edges := make([]string, 0, 4)
 	if m.clearedowner {
 		edges = append(edges, tailclient.EdgeOwner)
 	}
@@ -8122,6 +9221,9 @@ func (m *TailClientMutation) ClearedEdges() []string {
 	}
 	if m.clearedroutes {
 		edges = append(edges, tailclient.EdgeRoutes)
+	}
+	if m.clearedtransfer_jobs {
+		edges = append(edges, tailclient.EdgeTransferJobs)
 	}
 	return edges
 }
@@ -8136,6 +9238,8 @@ func (m *TailClientMutation) EdgeCleared(name string) bool {
 		return m.cleareddiagnostic_runs
 	case tailclient.EdgeRoutes:
 		return m.clearedroutes
+	case tailclient.EdgeTransferJobs:
+		return m.clearedtransfer_jobs
 	}
 	return false
 }
@@ -8163,6 +9267,9 @@ func (m *TailClientMutation) ResetEdge(name string) error {
 		return nil
 	case tailclient.EdgeRoutes:
 		m.ResetRoutes()
+		return nil
+	case tailclient.EdgeTransferJobs:
+		m.ResetTransferJobs()
 		return nil
 	}
 	return fmt.Errorf("unknown TailClient edge %s", name)
@@ -8196,6 +9303,9 @@ type TailServerMutation struct {
 	exit_rules             map[string]struct{}
 	removedexit_rules      map[string]struct{}
 	clearedexit_rules      bool
+	transfer_shares        map[string]struct{}
+	removedtransfer_shares map[string]struct{}
+	clearedtransfer_shares bool
 	done                   bool
 	oldValue               func(context.Context) (*TailServer, error)
 	predicates             []predicate.TailServer
@@ -8929,6 +10039,60 @@ func (m *TailServerMutation) ResetExitRules() {
 	m.removedexit_rules = nil
 }
 
+// AddTransferShareIDs adds the "transfer_shares" edge to the TransferShare entity by ids.
+func (m *TailServerMutation) AddTransferShareIDs(ids ...string) {
+	if m.transfer_shares == nil {
+		m.transfer_shares = make(map[string]struct{})
+	}
+	for i := range ids {
+		m.transfer_shares[ids[i]] = struct{}{}
+	}
+}
+
+// ClearTransferShares clears the "transfer_shares" edge to the TransferShare entity.
+func (m *TailServerMutation) ClearTransferShares() {
+	m.clearedtransfer_shares = true
+}
+
+// TransferSharesCleared reports if the "transfer_shares" edge to the TransferShare entity was cleared.
+func (m *TailServerMutation) TransferSharesCleared() bool {
+	return m.clearedtransfer_shares
+}
+
+// RemoveTransferShareIDs removes the "transfer_shares" edge to the TransferShare entity by IDs.
+func (m *TailServerMutation) RemoveTransferShareIDs(ids ...string) {
+	if m.removedtransfer_shares == nil {
+		m.removedtransfer_shares = make(map[string]struct{})
+	}
+	for i := range ids {
+		delete(m.transfer_shares, ids[i])
+		m.removedtransfer_shares[ids[i]] = struct{}{}
+	}
+}
+
+// RemovedTransferShares returns the removed IDs of the "transfer_shares" edge to the TransferShare entity.
+func (m *TailServerMutation) RemovedTransferSharesIDs() (ids []string) {
+	for id := range m.removedtransfer_shares {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// TransferSharesIDs returns the "transfer_shares" edge IDs in the mutation.
+func (m *TailServerMutation) TransferSharesIDs() (ids []string) {
+	for id := range m.transfer_shares {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ResetTransferShares resets all changes to the "transfer_shares" edge.
+func (m *TailServerMutation) ResetTransferShares() {
+	m.transfer_shares = nil
+	m.clearedtransfer_shares = false
+	m.removedtransfer_shares = nil
+}
+
 // Where appends a list predicates to the TailServerMutation builder.
 func (m *TailServerMutation) Where(ps ...predicate.TailServer) {
 	m.predicates = append(m.predicates, ps...)
@@ -9247,7 +10411,7 @@ func (m *TailServerMutation) ResetField(name string) error {
 
 // AddedEdges returns all edge names that were set/added in this mutation.
 func (m *TailServerMutation) AddedEdges() []string {
-	edges := make([]string, 0, 4)
+	edges := make([]string, 0, 5)
 	if m.owner != nil {
 		edges = append(edges, tailserver.EdgeOwner)
 	}
@@ -9259,6 +10423,9 @@ func (m *TailServerMutation) AddedEdges() []string {
 	}
 	if m.exit_rules != nil {
 		edges = append(edges, tailserver.EdgeExitRules)
+	}
+	if m.transfer_shares != nil {
+		edges = append(edges, tailserver.EdgeTransferShares)
 	}
 	return edges
 }
@@ -9289,13 +10456,19 @@ func (m *TailServerMutation) AddedIDs(name string) []ent.Value {
 			ids = append(ids, id)
 		}
 		return ids
+	case tailserver.EdgeTransferShares:
+		ids := make([]ent.Value, 0, len(m.transfer_shares))
+		for id := range m.transfer_shares {
+			ids = append(ids, id)
+		}
+		return ids
 	}
 	return nil
 }
 
 // RemovedEdges returns all edge names that were removed in this mutation.
 func (m *TailServerMutation) RemovedEdges() []string {
-	edges := make([]string, 0, 4)
+	edges := make([]string, 0, 5)
 	if m.removedmappings != nil {
 		edges = append(edges, tailserver.EdgeMappings)
 	}
@@ -9304,6 +10477,9 @@ func (m *TailServerMutation) RemovedEdges() []string {
 	}
 	if m.removedexit_rules != nil {
 		edges = append(edges, tailserver.EdgeExitRules)
+	}
+	if m.removedtransfer_shares != nil {
+		edges = append(edges, tailserver.EdgeTransferShares)
 	}
 	return edges
 }
@@ -9330,13 +10506,19 @@ func (m *TailServerMutation) RemovedIDs(name string) []ent.Value {
 			ids = append(ids, id)
 		}
 		return ids
+	case tailserver.EdgeTransferShares:
+		ids := make([]ent.Value, 0, len(m.removedtransfer_shares))
+		for id := range m.removedtransfer_shares {
+			ids = append(ids, id)
+		}
+		return ids
 	}
 	return nil
 }
 
 // ClearedEdges returns all edge names that were cleared in this mutation.
 func (m *TailServerMutation) ClearedEdges() []string {
-	edges := make([]string, 0, 4)
+	edges := make([]string, 0, 5)
 	if m.clearedowner {
 		edges = append(edges, tailserver.EdgeOwner)
 	}
@@ -9348,6 +10530,9 @@ func (m *TailServerMutation) ClearedEdges() []string {
 	}
 	if m.clearedexit_rules {
 		edges = append(edges, tailserver.EdgeExitRules)
+	}
+	if m.clearedtransfer_shares {
+		edges = append(edges, tailserver.EdgeTransferShares)
 	}
 	return edges
 }
@@ -9364,6 +10549,8 @@ func (m *TailServerMutation) EdgeCleared(name string) bool {
 		return m.clearedallowed_clients
 	case tailserver.EdgeExitRules:
 		return m.clearedexit_rules
+	case tailserver.EdgeTransferShares:
+		return m.clearedtransfer_shares
 	}
 	return false
 }
@@ -9395,8 +10582,4128 @@ func (m *TailServerMutation) ResetEdge(name string) error {
 	case tailserver.EdgeExitRules:
 		m.ResetExitRules()
 		return nil
+	case tailserver.EdgeTransferShares:
+		m.ResetTransferShares()
+		return nil
 	}
 	return fmt.Errorf("unknown TailServer edge %s", name)
+}
+
+// TransferItemMutation represents an operation that mutates the TransferItem nodes in the graph.
+type TransferItemMutation struct {
+	config
+	op                     Op
+	typ                    string
+	id                     *string
+	remote_file_id         *string
+	storage_name           *string
+	virtual_path           *string
+	size_bytes             *int64
+	addsize_bytes          *int64
+	mtime                  *time.Time
+	blake3                 *string
+	block_size             *int64
+	addblock_size          *int64
+	block_hashes           *[]string
+	appendblock_hashes     []string
+	completed_blocks       *[]int
+	appendcompleted_blocks []int
+	received_bytes         *int64
+	addreceived_bytes      *int64
+	status                 *transferitem.Status
+	started_at             *time.Time
+	finished_at            *time.Time
+	error_code             *transferitem.ErrorCode
+	created_at             *time.Time
+	updated_at             *time.Time
+	clearedFields          map[string]struct{}
+	owner                  *string
+	clearedowner           bool
+	job                    *string
+	clearedjob             bool
+	done                   bool
+	oldValue               func(context.Context) (*TransferItem, error)
+	predicates             []predicate.TransferItem
+}
+
+var _ ent.Mutation = (*TransferItemMutation)(nil)
+
+// transferitemOption allows management of the mutation configuration using functional options.
+type transferitemOption func(*TransferItemMutation)
+
+// newTransferItemMutation creates new mutation for the TransferItem entity.
+func newTransferItemMutation(c config, op Op, opts ...transferitemOption) *TransferItemMutation {
+	m := &TransferItemMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeTransferItem,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withTransferItemID sets the ID field of the mutation.
+func withTransferItemID(id string) transferitemOption {
+	return func(m *TransferItemMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *TransferItem
+		)
+		m.oldValue = func(ctx context.Context) (*TransferItem, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().TransferItem.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withTransferItem sets the old TransferItem of the mutation.
+func withTransferItem(node *TransferItem) transferitemOption {
+	return func(m *TransferItemMutation) {
+		m.oldValue = func(context.Context) (*TransferItem, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m TransferItemMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m TransferItemMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// SetID sets the value of the id field. Note that this
+// operation is only accepted on creation of TransferItem entities.
+func (m *TransferItemMutation) SetID(id string) {
+	m.id = &id
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *TransferItemMutation) ID() (id string, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *TransferItemMutation) IDs(ctx context.Context) ([]string, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []string{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().TransferItem.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetUserID sets the "user_id" field.
+func (m *TransferItemMutation) SetUserID(s string) {
+	m.owner = &s
+}
+
+// UserID returns the value of the "user_id" field in the mutation.
+func (m *TransferItemMutation) UserID() (r string, exists bool) {
+	v := m.owner
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUserID returns the old "user_id" field's value of the TransferItem entity.
+// If the TransferItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TransferItemMutation) OldUserID(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUserID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUserID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUserID: %w", err)
+	}
+	return oldValue.UserID, nil
+}
+
+// ResetUserID resets all changes to the "user_id" field.
+func (m *TransferItemMutation) ResetUserID() {
+	m.owner = nil
+}
+
+// SetJobID sets the "job_id" field.
+func (m *TransferItemMutation) SetJobID(s string) {
+	m.job = &s
+}
+
+// JobID returns the value of the "job_id" field in the mutation.
+func (m *TransferItemMutation) JobID() (r string, exists bool) {
+	v := m.job
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldJobID returns the old "job_id" field's value of the TransferItem entity.
+// If the TransferItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TransferItemMutation) OldJobID(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldJobID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldJobID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldJobID: %w", err)
+	}
+	return oldValue.JobID, nil
+}
+
+// ResetJobID resets all changes to the "job_id" field.
+func (m *TransferItemMutation) ResetJobID() {
+	m.job = nil
+}
+
+// SetRemoteFileID sets the "remote_file_id" field.
+func (m *TransferItemMutation) SetRemoteFileID(s string) {
+	m.remote_file_id = &s
+}
+
+// RemoteFileID returns the value of the "remote_file_id" field in the mutation.
+func (m *TransferItemMutation) RemoteFileID() (r string, exists bool) {
+	v := m.remote_file_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldRemoteFileID returns the old "remote_file_id" field's value of the TransferItem entity.
+// If the TransferItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TransferItemMutation) OldRemoteFileID(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldRemoteFileID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldRemoteFileID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldRemoteFileID: %w", err)
+	}
+	return oldValue.RemoteFileID, nil
+}
+
+// ResetRemoteFileID resets all changes to the "remote_file_id" field.
+func (m *TransferItemMutation) ResetRemoteFileID() {
+	m.remote_file_id = nil
+}
+
+// SetStorageName sets the "storage_name" field.
+func (m *TransferItemMutation) SetStorageName(s string) {
+	m.storage_name = &s
+}
+
+// StorageName returns the value of the "storage_name" field in the mutation.
+func (m *TransferItemMutation) StorageName() (r string, exists bool) {
+	v := m.storage_name
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldStorageName returns the old "storage_name" field's value of the TransferItem entity.
+// If the TransferItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TransferItemMutation) OldStorageName(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldStorageName is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldStorageName requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldStorageName: %w", err)
+	}
+	return oldValue.StorageName, nil
+}
+
+// ResetStorageName resets all changes to the "storage_name" field.
+func (m *TransferItemMutation) ResetStorageName() {
+	m.storage_name = nil
+}
+
+// SetVirtualPath sets the "virtual_path" field.
+func (m *TransferItemMutation) SetVirtualPath(s string) {
+	m.virtual_path = &s
+}
+
+// VirtualPath returns the value of the "virtual_path" field in the mutation.
+func (m *TransferItemMutation) VirtualPath() (r string, exists bool) {
+	v := m.virtual_path
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldVirtualPath returns the old "virtual_path" field's value of the TransferItem entity.
+// If the TransferItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TransferItemMutation) OldVirtualPath(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldVirtualPath is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldVirtualPath requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldVirtualPath: %w", err)
+	}
+	return oldValue.VirtualPath, nil
+}
+
+// ResetVirtualPath resets all changes to the "virtual_path" field.
+func (m *TransferItemMutation) ResetVirtualPath() {
+	m.virtual_path = nil
+}
+
+// SetSizeBytes sets the "size_bytes" field.
+func (m *TransferItemMutation) SetSizeBytes(i int64) {
+	m.size_bytes = &i
+	m.addsize_bytes = nil
+}
+
+// SizeBytes returns the value of the "size_bytes" field in the mutation.
+func (m *TransferItemMutation) SizeBytes() (r int64, exists bool) {
+	v := m.size_bytes
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSizeBytes returns the old "size_bytes" field's value of the TransferItem entity.
+// If the TransferItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TransferItemMutation) OldSizeBytes(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSizeBytes is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSizeBytes requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSizeBytes: %w", err)
+	}
+	return oldValue.SizeBytes, nil
+}
+
+// AddSizeBytes adds i to the "size_bytes" field.
+func (m *TransferItemMutation) AddSizeBytes(i int64) {
+	if m.addsize_bytes != nil {
+		*m.addsize_bytes += i
+	} else {
+		m.addsize_bytes = &i
+	}
+}
+
+// AddedSizeBytes returns the value that was added to the "size_bytes" field in this mutation.
+func (m *TransferItemMutation) AddedSizeBytes() (r int64, exists bool) {
+	v := m.addsize_bytes
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetSizeBytes resets all changes to the "size_bytes" field.
+func (m *TransferItemMutation) ResetSizeBytes() {
+	m.size_bytes = nil
+	m.addsize_bytes = nil
+}
+
+// SetMtime sets the "mtime" field.
+func (m *TransferItemMutation) SetMtime(t time.Time) {
+	m.mtime = &t
+}
+
+// Mtime returns the value of the "mtime" field in the mutation.
+func (m *TransferItemMutation) Mtime() (r time.Time, exists bool) {
+	v := m.mtime
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldMtime returns the old "mtime" field's value of the TransferItem entity.
+// If the TransferItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TransferItemMutation) OldMtime(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldMtime is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldMtime requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldMtime: %w", err)
+	}
+	return oldValue.Mtime, nil
+}
+
+// ResetMtime resets all changes to the "mtime" field.
+func (m *TransferItemMutation) ResetMtime() {
+	m.mtime = nil
+}
+
+// SetBlake3 sets the "blake3" field.
+func (m *TransferItemMutation) SetBlake3(s string) {
+	m.blake3 = &s
+}
+
+// Blake3 returns the value of the "blake3" field in the mutation.
+func (m *TransferItemMutation) Blake3() (r string, exists bool) {
+	v := m.blake3
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldBlake3 returns the old "blake3" field's value of the TransferItem entity.
+// If the TransferItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TransferItemMutation) OldBlake3(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldBlake3 is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldBlake3 requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldBlake3: %w", err)
+	}
+	return oldValue.Blake3, nil
+}
+
+// ResetBlake3 resets all changes to the "blake3" field.
+func (m *TransferItemMutation) ResetBlake3() {
+	m.blake3 = nil
+}
+
+// SetBlockSize sets the "block_size" field.
+func (m *TransferItemMutation) SetBlockSize(i int64) {
+	m.block_size = &i
+	m.addblock_size = nil
+}
+
+// BlockSize returns the value of the "block_size" field in the mutation.
+func (m *TransferItemMutation) BlockSize() (r int64, exists bool) {
+	v := m.block_size
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldBlockSize returns the old "block_size" field's value of the TransferItem entity.
+// If the TransferItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TransferItemMutation) OldBlockSize(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldBlockSize is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldBlockSize requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldBlockSize: %w", err)
+	}
+	return oldValue.BlockSize, nil
+}
+
+// AddBlockSize adds i to the "block_size" field.
+func (m *TransferItemMutation) AddBlockSize(i int64) {
+	if m.addblock_size != nil {
+		*m.addblock_size += i
+	} else {
+		m.addblock_size = &i
+	}
+}
+
+// AddedBlockSize returns the value that was added to the "block_size" field in this mutation.
+func (m *TransferItemMutation) AddedBlockSize() (r int64, exists bool) {
+	v := m.addblock_size
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetBlockSize resets all changes to the "block_size" field.
+func (m *TransferItemMutation) ResetBlockSize() {
+	m.block_size = nil
+	m.addblock_size = nil
+}
+
+// SetBlockHashes sets the "block_hashes" field.
+func (m *TransferItemMutation) SetBlockHashes(s []string) {
+	m.block_hashes = &s
+	m.appendblock_hashes = nil
+}
+
+// BlockHashes returns the value of the "block_hashes" field in the mutation.
+func (m *TransferItemMutation) BlockHashes() (r []string, exists bool) {
+	v := m.block_hashes
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldBlockHashes returns the old "block_hashes" field's value of the TransferItem entity.
+// If the TransferItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TransferItemMutation) OldBlockHashes(ctx context.Context) (v []string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldBlockHashes is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldBlockHashes requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldBlockHashes: %w", err)
+	}
+	return oldValue.BlockHashes, nil
+}
+
+// AppendBlockHashes adds s to the "block_hashes" field.
+func (m *TransferItemMutation) AppendBlockHashes(s []string) {
+	m.appendblock_hashes = append(m.appendblock_hashes, s...)
+}
+
+// AppendedBlockHashes returns the list of values that were appended to the "block_hashes" field in this mutation.
+func (m *TransferItemMutation) AppendedBlockHashes() ([]string, bool) {
+	if len(m.appendblock_hashes) == 0 {
+		return nil, false
+	}
+	return m.appendblock_hashes, true
+}
+
+// ResetBlockHashes resets all changes to the "block_hashes" field.
+func (m *TransferItemMutation) ResetBlockHashes() {
+	m.block_hashes = nil
+	m.appendblock_hashes = nil
+}
+
+// SetCompletedBlocks sets the "completed_blocks" field.
+func (m *TransferItemMutation) SetCompletedBlocks(i []int) {
+	m.completed_blocks = &i
+	m.appendcompleted_blocks = nil
+}
+
+// CompletedBlocks returns the value of the "completed_blocks" field in the mutation.
+func (m *TransferItemMutation) CompletedBlocks() (r []int, exists bool) {
+	v := m.completed_blocks
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCompletedBlocks returns the old "completed_blocks" field's value of the TransferItem entity.
+// If the TransferItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TransferItemMutation) OldCompletedBlocks(ctx context.Context) (v []int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCompletedBlocks is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCompletedBlocks requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCompletedBlocks: %w", err)
+	}
+	return oldValue.CompletedBlocks, nil
+}
+
+// AppendCompletedBlocks adds i to the "completed_blocks" field.
+func (m *TransferItemMutation) AppendCompletedBlocks(i []int) {
+	m.appendcompleted_blocks = append(m.appendcompleted_blocks, i...)
+}
+
+// AppendedCompletedBlocks returns the list of values that were appended to the "completed_blocks" field in this mutation.
+func (m *TransferItemMutation) AppendedCompletedBlocks() ([]int, bool) {
+	if len(m.appendcompleted_blocks) == 0 {
+		return nil, false
+	}
+	return m.appendcompleted_blocks, true
+}
+
+// ResetCompletedBlocks resets all changes to the "completed_blocks" field.
+func (m *TransferItemMutation) ResetCompletedBlocks() {
+	m.completed_blocks = nil
+	m.appendcompleted_blocks = nil
+}
+
+// SetReceivedBytes sets the "received_bytes" field.
+func (m *TransferItemMutation) SetReceivedBytes(i int64) {
+	m.received_bytes = &i
+	m.addreceived_bytes = nil
+}
+
+// ReceivedBytes returns the value of the "received_bytes" field in the mutation.
+func (m *TransferItemMutation) ReceivedBytes() (r int64, exists bool) {
+	v := m.received_bytes
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldReceivedBytes returns the old "received_bytes" field's value of the TransferItem entity.
+// If the TransferItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TransferItemMutation) OldReceivedBytes(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldReceivedBytes is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldReceivedBytes requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldReceivedBytes: %w", err)
+	}
+	return oldValue.ReceivedBytes, nil
+}
+
+// AddReceivedBytes adds i to the "received_bytes" field.
+func (m *TransferItemMutation) AddReceivedBytes(i int64) {
+	if m.addreceived_bytes != nil {
+		*m.addreceived_bytes += i
+	} else {
+		m.addreceived_bytes = &i
+	}
+}
+
+// AddedReceivedBytes returns the value that was added to the "received_bytes" field in this mutation.
+func (m *TransferItemMutation) AddedReceivedBytes() (r int64, exists bool) {
+	v := m.addreceived_bytes
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetReceivedBytes resets all changes to the "received_bytes" field.
+func (m *TransferItemMutation) ResetReceivedBytes() {
+	m.received_bytes = nil
+	m.addreceived_bytes = nil
+}
+
+// SetStatus sets the "status" field.
+func (m *TransferItemMutation) SetStatus(t transferitem.Status) {
+	m.status = &t
+}
+
+// Status returns the value of the "status" field in the mutation.
+func (m *TransferItemMutation) Status() (r transferitem.Status, exists bool) {
+	v := m.status
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldStatus returns the old "status" field's value of the TransferItem entity.
+// If the TransferItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TransferItemMutation) OldStatus(ctx context.Context) (v transferitem.Status, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldStatus is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldStatus requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldStatus: %w", err)
+	}
+	return oldValue.Status, nil
+}
+
+// ResetStatus resets all changes to the "status" field.
+func (m *TransferItemMutation) ResetStatus() {
+	m.status = nil
+}
+
+// SetStartedAt sets the "started_at" field.
+func (m *TransferItemMutation) SetStartedAt(t time.Time) {
+	m.started_at = &t
+}
+
+// StartedAt returns the value of the "started_at" field in the mutation.
+func (m *TransferItemMutation) StartedAt() (r time.Time, exists bool) {
+	v := m.started_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldStartedAt returns the old "started_at" field's value of the TransferItem entity.
+// If the TransferItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TransferItemMutation) OldStartedAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldStartedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldStartedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldStartedAt: %w", err)
+	}
+	return oldValue.StartedAt, nil
+}
+
+// ClearStartedAt clears the value of the "started_at" field.
+func (m *TransferItemMutation) ClearStartedAt() {
+	m.started_at = nil
+	m.clearedFields[transferitem.FieldStartedAt] = struct{}{}
+}
+
+// StartedAtCleared returns if the "started_at" field was cleared in this mutation.
+func (m *TransferItemMutation) StartedAtCleared() bool {
+	_, ok := m.clearedFields[transferitem.FieldStartedAt]
+	return ok
+}
+
+// ResetStartedAt resets all changes to the "started_at" field.
+func (m *TransferItemMutation) ResetStartedAt() {
+	m.started_at = nil
+	delete(m.clearedFields, transferitem.FieldStartedAt)
+}
+
+// SetFinishedAt sets the "finished_at" field.
+func (m *TransferItemMutation) SetFinishedAt(t time.Time) {
+	m.finished_at = &t
+}
+
+// FinishedAt returns the value of the "finished_at" field in the mutation.
+func (m *TransferItemMutation) FinishedAt() (r time.Time, exists bool) {
+	v := m.finished_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldFinishedAt returns the old "finished_at" field's value of the TransferItem entity.
+// If the TransferItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TransferItemMutation) OldFinishedAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldFinishedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldFinishedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldFinishedAt: %w", err)
+	}
+	return oldValue.FinishedAt, nil
+}
+
+// ClearFinishedAt clears the value of the "finished_at" field.
+func (m *TransferItemMutation) ClearFinishedAt() {
+	m.finished_at = nil
+	m.clearedFields[transferitem.FieldFinishedAt] = struct{}{}
+}
+
+// FinishedAtCleared returns if the "finished_at" field was cleared in this mutation.
+func (m *TransferItemMutation) FinishedAtCleared() bool {
+	_, ok := m.clearedFields[transferitem.FieldFinishedAt]
+	return ok
+}
+
+// ResetFinishedAt resets all changes to the "finished_at" field.
+func (m *TransferItemMutation) ResetFinishedAt() {
+	m.finished_at = nil
+	delete(m.clearedFields, transferitem.FieldFinishedAt)
+}
+
+// SetErrorCode sets the "error_code" field.
+func (m *TransferItemMutation) SetErrorCode(tc transferitem.ErrorCode) {
+	m.error_code = &tc
+}
+
+// ErrorCode returns the value of the "error_code" field in the mutation.
+func (m *TransferItemMutation) ErrorCode() (r transferitem.ErrorCode, exists bool) {
+	v := m.error_code
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldErrorCode returns the old "error_code" field's value of the TransferItem entity.
+// If the TransferItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TransferItemMutation) OldErrorCode(ctx context.Context) (v transferitem.ErrorCode, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldErrorCode is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldErrorCode requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldErrorCode: %w", err)
+	}
+	return oldValue.ErrorCode, nil
+}
+
+// ClearErrorCode clears the value of the "error_code" field.
+func (m *TransferItemMutation) ClearErrorCode() {
+	m.error_code = nil
+	m.clearedFields[transferitem.FieldErrorCode] = struct{}{}
+}
+
+// ErrorCodeCleared returns if the "error_code" field was cleared in this mutation.
+func (m *TransferItemMutation) ErrorCodeCleared() bool {
+	_, ok := m.clearedFields[transferitem.FieldErrorCode]
+	return ok
+}
+
+// ResetErrorCode resets all changes to the "error_code" field.
+func (m *TransferItemMutation) ResetErrorCode() {
+	m.error_code = nil
+	delete(m.clearedFields, transferitem.FieldErrorCode)
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (m *TransferItemMutation) SetCreatedAt(t time.Time) {
+	m.created_at = &t
+}
+
+// CreatedAt returns the value of the "created_at" field in the mutation.
+func (m *TransferItemMutation) CreatedAt() (r time.Time, exists bool) {
+	v := m.created_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedAt returns the old "created_at" field's value of the TransferItem entity.
+// If the TransferItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TransferItemMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
+	}
+	return oldValue.CreatedAt, nil
+}
+
+// ResetCreatedAt resets all changes to the "created_at" field.
+func (m *TransferItemMutation) ResetCreatedAt() {
+	m.created_at = nil
+}
+
+// SetUpdatedAt sets the "updated_at" field.
+func (m *TransferItemMutation) SetUpdatedAt(t time.Time) {
+	m.updated_at = &t
+}
+
+// UpdatedAt returns the value of the "updated_at" field in the mutation.
+func (m *TransferItemMutation) UpdatedAt() (r time.Time, exists bool) {
+	v := m.updated_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUpdatedAt returns the old "updated_at" field's value of the TransferItem entity.
+// If the TransferItem object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TransferItemMutation) OldUpdatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUpdatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUpdatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUpdatedAt: %w", err)
+	}
+	return oldValue.UpdatedAt, nil
+}
+
+// ResetUpdatedAt resets all changes to the "updated_at" field.
+func (m *TransferItemMutation) ResetUpdatedAt() {
+	m.updated_at = nil
+}
+
+// SetOwnerID sets the "owner" edge to the User entity by id.
+func (m *TransferItemMutation) SetOwnerID(id string) {
+	m.owner = &id
+}
+
+// ClearOwner clears the "owner" edge to the User entity.
+func (m *TransferItemMutation) ClearOwner() {
+	m.clearedowner = true
+	m.clearedFields[transferitem.FieldUserID] = struct{}{}
+}
+
+// OwnerCleared reports if the "owner" edge to the User entity was cleared.
+func (m *TransferItemMutation) OwnerCleared() bool {
+	return m.clearedowner
+}
+
+// OwnerID returns the "owner" edge ID in the mutation.
+func (m *TransferItemMutation) OwnerID() (id string, exists bool) {
+	if m.owner != nil {
+		return *m.owner, true
+	}
+	return
+}
+
+// OwnerIDs returns the "owner" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// OwnerID instead. It exists only for internal usage by the builders.
+func (m *TransferItemMutation) OwnerIDs() (ids []string) {
+	if id := m.owner; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetOwner resets all changes to the "owner" edge.
+func (m *TransferItemMutation) ResetOwner() {
+	m.owner = nil
+	m.clearedowner = false
+}
+
+// ClearJob clears the "job" edge to the TransferJob entity.
+func (m *TransferItemMutation) ClearJob() {
+	m.clearedjob = true
+	m.clearedFields[transferitem.FieldJobID] = struct{}{}
+}
+
+// JobCleared reports if the "job" edge to the TransferJob entity was cleared.
+func (m *TransferItemMutation) JobCleared() bool {
+	return m.clearedjob
+}
+
+// JobIDs returns the "job" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// JobID instead. It exists only for internal usage by the builders.
+func (m *TransferItemMutation) JobIDs() (ids []string) {
+	if id := m.job; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetJob resets all changes to the "job" edge.
+func (m *TransferItemMutation) ResetJob() {
+	m.job = nil
+	m.clearedjob = false
+}
+
+// Where appends a list predicates to the TransferItemMutation builder.
+func (m *TransferItemMutation) Where(ps ...predicate.TransferItem) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the TransferItemMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *TransferItemMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.TransferItem, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *TransferItemMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *TransferItemMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (TransferItem).
+func (m *TransferItemMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *TransferItemMutation) Fields() []string {
+	fields := make([]string, 0, 18)
+	if m.owner != nil {
+		fields = append(fields, transferitem.FieldUserID)
+	}
+	if m.job != nil {
+		fields = append(fields, transferitem.FieldJobID)
+	}
+	if m.remote_file_id != nil {
+		fields = append(fields, transferitem.FieldRemoteFileID)
+	}
+	if m.storage_name != nil {
+		fields = append(fields, transferitem.FieldStorageName)
+	}
+	if m.virtual_path != nil {
+		fields = append(fields, transferitem.FieldVirtualPath)
+	}
+	if m.size_bytes != nil {
+		fields = append(fields, transferitem.FieldSizeBytes)
+	}
+	if m.mtime != nil {
+		fields = append(fields, transferitem.FieldMtime)
+	}
+	if m.blake3 != nil {
+		fields = append(fields, transferitem.FieldBlake3)
+	}
+	if m.block_size != nil {
+		fields = append(fields, transferitem.FieldBlockSize)
+	}
+	if m.block_hashes != nil {
+		fields = append(fields, transferitem.FieldBlockHashes)
+	}
+	if m.completed_blocks != nil {
+		fields = append(fields, transferitem.FieldCompletedBlocks)
+	}
+	if m.received_bytes != nil {
+		fields = append(fields, transferitem.FieldReceivedBytes)
+	}
+	if m.status != nil {
+		fields = append(fields, transferitem.FieldStatus)
+	}
+	if m.started_at != nil {
+		fields = append(fields, transferitem.FieldStartedAt)
+	}
+	if m.finished_at != nil {
+		fields = append(fields, transferitem.FieldFinishedAt)
+	}
+	if m.error_code != nil {
+		fields = append(fields, transferitem.FieldErrorCode)
+	}
+	if m.created_at != nil {
+		fields = append(fields, transferitem.FieldCreatedAt)
+	}
+	if m.updated_at != nil {
+		fields = append(fields, transferitem.FieldUpdatedAt)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *TransferItemMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case transferitem.FieldUserID:
+		return m.UserID()
+	case transferitem.FieldJobID:
+		return m.JobID()
+	case transferitem.FieldRemoteFileID:
+		return m.RemoteFileID()
+	case transferitem.FieldStorageName:
+		return m.StorageName()
+	case transferitem.FieldVirtualPath:
+		return m.VirtualPath()
+	case transferitem.FieldSizeBytes:
+		return m.SizeBytes()
+	case transferitem.FieldMtime:
+		return m.Mtime()
+	case transferitem.FieldBlake3:
+		return m.Blake3()
+	case transferitem.FieldBlockSize:
+		return m.BlockSize()
+	case transferitem.FieldBlockHashes:
+		return m.BlockHashes()
+	case transferitem.FieldCompletedBlocks:
+		return m.CompletedBlocks()
+	case transferitem.FieldReceivedBytes:
+		return m.ReceivedBytes()
+	case transferitem.FieldStatus:
+		return m.Status()
+	case transferitem.FieldStartedAt:
+		return m.StartedAt()
+	case transferitem.FieldFinishedAt:
+		return m.FinishedAt()
+	case transferitem.FieldErrorCode:
+		return m.ErrorCode()
+	case transferitem.FieldCreatedAt:
+		return m.CreatedAt()
+	case transferitem.FieldUpdatedAt:
+		return m.UpdatedAt()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *TransferItemMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case transferitem.FieldUserID:
+		return m.OldUserID(ctx)
+	case transferitem.FieldJobID:
+		return m.OldJobID(ctx)
+	case transferitem.FieldRemoteFileID:
+		return m.OldRemoteFileID(ctx)
+	case transferitem.FieldStorageName:
+		return m.OldStorageName(ctx)
+	case transferitem.FieldVirtualPath:
+		return m.OldVirtualPath(ctx)
+	case transferitem.FieldSizeBytes:
+		return m.OldSizeBytes(ctx)
+	case transferitem.FieldMtime:
+		return m.OldMtime(ctx)
+	case transferitem.FieldBlake3:
+		return m.OldBlake3(ctx)
+	case transferitem.FieldBlockSize:
+		return m.OldBlockSize(ctx)
+	case transferitem.FieldBlockHashes:
+		return m.OldBlockHashes(ctx)
+	case transferitem.FieldCompletedBlocks:
+		return m.OldCompletedBlocks(ctx)
+	case transferitem.FieldReceivedBytes:
+		return m.OldReceivedBytes(ctx)
+	case transferitem.FieldStatus:
+		return m.OldStatus(ctx)
+	case transferitem.FieldStartedAt:
+		return m.OldStartedAt(ctx)
+	case transferitem.FieldFinishedAt:
+		return m.OldFinishedAt(ctx)
+	case transferitem.FieldErrorCode:
+		return m.OldErrorCode(ctx)
+	case transferitem.FieldCreatedAt:
+		return m.OldCreatedAt(ctx)
+	case transferitem.FieldUpdatedAt:
+		return m.OldUpdatedAt(ctx)
+	}
+	return nil, fmt.Errorf("unknown TransferItem field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *TransferItemMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case transferitem.FieldUserID:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUserID(v)
+		return nil
+	case transferitem.FieldJobID:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetJobID(v)
+		return nil
+	case transferitem.FieldRemoteFileID:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetRemoteFileID(v)
+		return nil
+	case transferitem.FieldStorageName:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetStorageName(v)
+		return nil
+	case transferitem.FieldVirtualPath:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetVirtualPath(v)
+		return nil
+	case transferitem.FieldSizeBytes:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSizeBytes(v)
+		return nil
+	case transferitem.FieldMtime:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetMtime(v)
+		return nil
+	case transferitem.FieldBlake3:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetBlake3(v)
+		return nil
+	case transferitem.FieldBlockSize:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetBlockSize(v)
+		return nil
+	case transferitem.FieldBlockHashes:
+		v, ok := value.([]string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetBlockHashes(v)
+		return nil
+	case transferitem.FieldCompletedBlocks:
+		v, ok := value.([]int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCompletedBlocks(v)
+		return nil
+	case transferitem.FieldReceivedBytes:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetReceivedBytes(v)
+		return nil
+	case transferitem.FieldStatus:
+		v, ok := value.(transferitem.Status)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetStatus(v)
+		return nil
+	case transferitem.FieldStartedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetStartedAt(v)
+		return nil
+	case transferitem.FieldFinishedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetFinishedAt(v)
+		return nil
+	case transferitem.FieldErrorCode:
+		v, ok := value.(transferitem.ErrorCode)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetErrorCode(v)
+		return nil
+	case transferitem.FieldCreatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedAt(v)
+		return nil
+	case transferitem.FieldUpdatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUpdatedAt(v)
+		return nil
+	}
+	return fmt.Errorf("unknown TransferItem field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *TransferItemMutation) AddedFields() []string {
+	var fields []string
+	if m.addsize_bytes != nil {
+		fields = append(fields, transferitem.FieldSizeBytes)
+	}
+	if m.addblock_size != nil {
+		fields = append(fields, transferitem.FieldBlockSize)
+	}
+	if m.addreceived_bytes != nil {
+		fields = append(fields, transferitem.FieldReceivedBytes)
+	}
+	return fields
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *TransferItemMutation) AddedField(name string) (ent.Value, bool) {
+	switch name {
+	case transferitem.FieldSizeBytes:
+		return m.AddedSizeBytes()
+	case transferitem.FieldBlockSize:
+		return m.AddedBlockSize()
+	case transferitem.FieldReceivedBytes:
+		return m.AddedReceivedBytes()
+	}
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *TransferItemMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	case transferitem.FieldSizeBytes:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddSizeBytes(v)
+		return nil
+	case transferitem.FieldBlockSize:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddBlockSize(v)
+		return nil
+	case transferitem.FieldReceivedBytes:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddReceivedBytes(v)
+		return nil
+	}
+	return fmt.Errorf("unknown TransferItem numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *TransferItemMutation) ClearedFields() []string {
+	var fields []string
+	if m.FieldCleared(transferitem.FieldStartedAt) {
+		fields = append(fields, transferitem.FieldStartedAt)
+	}
+	if m.FieldCleared(transferitem.FieldFinishedAt) {
+		fields = append(fields, transferitem.FieldFinishedAt)
+	}
+	if m.FieldCleared(transferitem.FieldErrorCode) {
+		fields = append(fields, transferitem.FieldErrorCode)
+	}
+	return fields
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *TransferItemMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *TransferItemMutation) ClearField(name string) error {
+	switch name {
+	case transferitem.FieldStartedAt:
+		m.ClearStartedAt()
+		return nil
+	case transferitem.FieldFinishedAt:
+		m.ClearFinishedAt()
+		return nil
+	case transferitem.FieldErrorCode:
+		m.ClearErrorCode()
+		return nil
+	}
+	return fmt.Errorf("unknown TransferItem nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *TransferItemMutation) ResetField(name string) error {
+	switch name {
+	case transferitem.FieldUserID:
+		m.ResetUserID()
+		return nil
+	case transferitem.FieldJobID:
+		m.ResetJobID()
+		return nil
+	case transferitem.FieldRemoteFileID:
+		m.ResetRemoteFileID()
+		return nil
+	case transferitem.FieldStorageName:
+		m.ResetStorageName()
+		return nil
+	case transferitem.FieldVirtualPath:
+		m.ResetVirtualPath()
+		return nil
+	case transferitem.FieldSizeBytes:
+		m.ResetSizeBytes()
+		return nil
+	case transferitem.FieldMtime:
+		m.ResetMtime()
+		return nil
+	case transferitem.FieldBlake3:
+		m.ResetBlake3()
+		return nil
+	case transferitem.FieldBlockSize:
+		m.ResetBlockSize()
+		return nil
+	case transferitem.FieldBlockHashes:
+		m.ResetBlockHashes()
+		return nil
+	case transferitem.FieldCompletedBlocks:
+		m.ResetCompletedBlocks()
+		return nil
+	case transferitem.FieldReceivedBytes:
+		m.ResetReceivedBytes()
+		return nil
+	case transferitem.FieldStatus:
+		m.ResetStatus()
+		return nil
+	case transferitem.FieldStartedAt:
+		m.ResetStartedAt()
+		return nil
+	case transferitem.FieldFinishedAt:
+		m.ResetFinishedAt()
+		return nil
+	case transferitem.FieldErrorCode:
+		m.ResetErrorCode()
+		return nil
+	case transferitem.FieldCreatedAt:
+		m.ResetCreatedAt()
+		return nil
+	case transferitem.FieldUpdatedAt:
+		m.ResetUpdatedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown TransferItem field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *TransferItemMutation) AddedEdges() []string {
+	edges := make([]string, 0, 2)
+	if m.owner != nil {
+		edges = append(edges, transferitem.EdgeOwner)
+	}
+	if m.job != nil {
+		edges = append(edges, transferitem.EdgeJob)
+	}
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *TransferItemMutation) AddedIDs(name string) []ent.Value {
+	switch name {
+	case transferitem.EdgeOwner:
+		if id := m.owner; id != nil {
+			return []ent.Value{*id}
+		}
+	case transferitem.EdgeJob:
+		if id := m.job; id != nil {
+			return []ent.Value{*id}
+		}
+	}
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *TransferItemMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 2)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *TransferItemMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *TransferItemMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 2)
+	if m.clearedowner {
+		edges = append(edges, transferitem.EdgeOwner)
+	}
+	if m.clearedjob {
+		edges = append(edges, transferitem.EdgeJob)
+	}
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *TransferItemMutation) EdgeCleared(name string) bool {
+	switch name {
+	case transferitem.EdgeOwner:
+		return m.clearedowner
+	case transferitem.EdgeJob:
+		return m.clearedjob
+	}
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *TransferItemMutation) ClearEdge(name string) error {
+	switch name {
+	case transferitem.EdgeOwner:
+		m.ClearOwner()
+		return nil
+	case transferitem.EdgeJob:
+		m.ClearJob()
+		return nil
+	}
+	return fmt.Errorf("unknown TransferItem unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *TransferItemMutation) ResetEdge(name string) error {
+	switch name {
+	case transferitem.EdgeOwner:
+		m.ResetOwner()
+		return nil
+	case transferitem.EdgeJob:
+		m.ResetJob()
+		return nil
+	}
+	return fmt.Errorf("unknown TransferItem edge %s", name)
+}
+
+// TransferJobMutation represents an operation that mutates the TransferJob nodes in the graph.
+type TransferJobMutation struct {
+	config
+	op                       Op
+	typ                      string
+	id                       *string
+	remote_share_id          *string
+	remote_capability_cipher *[]byte
+	status                   *transferjob.Status
+	total_bytes              *int64
+	addtotal_bytes           *int64
+	received_bytes           *int64
+	addreceived_bytes        *int64
+	started_at               *time.Time
+	finished_at              *time.Time
+	expires_at               *time.Time
+	error_code               *transferjob.ErrorCode
+	created_at               *time.Time
+	updated_at               *time.Time
+	clearedFields            map[string]struct{}
+	owner                    *string
+	clearedowner             bool
+	client                   *string
+	clearedclient            bool
+	items                    map[string]struct{}
+	removeditems             map[string]struct{}
+	cleareditems             bool
+	done                     bool
+	oldValue                 func(context.Context) (*TransferJob, error)
+	predicates               []predicate.TransferJob
+}
+
+var _ ent.Mutation = (*TransferJobMutation)(nil)
+
+// transferjobOption allows management of the mutation configuration using functional options.
+type transferjobOption func(*TransferJobMutation)
+
+// newTransferJobMutation creates new mutation for the TransferJob entity.
+func newTransferJobMutation(c config, op Op, opts ...transferjobOption) *TransferJobMutation {
+	m := &TransferJobMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeTransferJob,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withTransferJobID sets the ID field of the mutation.
+func withTransferJobID(id string) transferjobOption {
+	return func(m *TransferJobMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *TransferJob
+		)
+		m.oldValue = func(ctx context.Context) (*TransferJob, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().TransferJob.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withTransferJob sets the old TransferJob of the mutation.
+func withTransferJob(node *TransferJob) transferjobOption {
+	return func(m *TransferJobMutation) {
+		m.oldValue = func(context.Context) (*TransferJob, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m TransferJobMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m TransferJobMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// SetID sets the value of the id field. Note that this
+// operation is only accepted on creation of TransferJob entities.
+func (m *TransferJobMutation) SetID(id string) {
+	m.id = &id
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *TransferJobMutation) ID() (id string, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *TransferJobMutation) IDs(ctx context.Context) ([]string, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []string{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().TransferJob.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetUserID sets the "user_id" field.
+func (m *TransferJobMutation) SetUserID(s string) {
+	m.owner = &s
+}
+
+// UserID returns the value of the "user_id" field in the mutation.
+func (m *TransferJobMutation) UserID() (r string, exists bool) {
+	v := m.owner
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUserID returns the old "user_id" field's value of the TransferJob entity.
+// If the TransferJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TransferJobMutation) OldUserID(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUserID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUserID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUserID: %w", err)
+	}
+	return oldValue.UserID, nil
+}
+
+// ResetUserID resets all changes to the "user_id" field.
+func (m *TransferJobMutation) ResetUserID() {
+	m.owner = nil
+}
+
+// SetClientID sets the "client_id" field.
+func (m *TransferJobMutation) SetClientID(s string) {
+	m.client = &s
+}
+
+// ClientID returns the value of the "client_id" field in the mutation.
+func (m *TransferJobMutation) ClientID() (r string, exists bool) {
+	v := m.client
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldClientID returns the old "client_id" field's value of the TransferJob entity.
+// If the TransferJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TransferJobMutation) OldClientID(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldClientID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldClientID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldClientID: %w", err)
+	}
+	return oldValue.ClientID, nil
+}
+
+// ResetClientID resets all changes to the "client_id" field.
+func (m *TransferJobMutation) ResetClientID() {
+	m.client = nil
+}
+
+// SetRemoteShareID sets the "remote_share_id" field.
+func (m *TransferJobMutation) SetRemoteShareID(s string) {
+	m.remote_share_id = &s
+}
+
+// RemoteShareID returns the value of the "remote_share_id" field in the mutation.
+func (m *TransferJobMutation) RemoteShareID() (r string, exists bool) {
+	v := m.remote_share_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldRemoteShareID returns the old "remote_share_id" field's value of the TransferJob entity.
+// If the TransferJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TransferJobMutation) OldRemoteShareID(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldRemoteShareID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldRemoteShareID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldRemoteShareID: %w", err)
+	}
+	return oldValue.RemoteShareID, nil
+}
+
+// ResetRemoteShareID resets all changes to the "remote_share_id" field.
+func (m *TransferJobMutation) ResetRemoteShareID() {
+	m.remote_share_id = nil
+}
+
+// SetRemoteCapabilityCipher sets the "remote_capability_cipher" field.
+func (m *TransferJobMutation) SetRemoteCapabilityCipher(b []byte) {
+	m.remote_capability_cipher = &b
+}
+
+// RemoteCapabilityCipher returns the value of the "remote_capability_cipher" field in the mutation.
+func (m *TransferJobMutation) RemoteCapabilityCipher() (r []byte, exists bool) {
+	v := m.remote_capability_cipher
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldRemoteCapabilityCipher returns the old "remote_capability_cipher" field's value of the TransferJob entity.
+// If the TransferJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TransferJobMutation) OldRemoteCapabilityCipher(ctx context.Context) (v []byte, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldRemoteCapabilityCipher is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldRemoteCapabilityCipher requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldRemoteCapabilityCipher: %w", err)
+	}
+	return oldValue.RemoteCapabilityCipher, nil
+}
+
+// ResetRemoteCapabilityCipher resets all changes to the "remote_capability_cipher" field.
+func (m *TransferJobMutation) ResetRemoteCapabilityCipher() {
+	m.remote_capability_cipher = nil
+}
+
+// SetStatus sets the "status" field.
+func (m *TransferJobMutation) SetStatus(t transferjob.Status) {
+	m.status = &t
+}
+
+// Status returns the value of the "status" field in the mutation.
+func (m *TransferJobMutation) Status() (r transferjob.Status, exists bool) {
+	v := m.status
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldStatus returns the old "status" field's value of the TransferJob entity.
+// If the TransferJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TransferJobMutation) OldStatus(ctx context.Context) (v transferjob.Status, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldStatus is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldStatus requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldStatus: %w", err)
+	}
+	return oldValue.Status, nil
+}
+
+// ResetStatus resets all changes to the "status" field.
+func (m *TransferJobMutation) ResetStatus() {
+	m.status = nil
+}
+
+// SetTotalBytes sets the "total_bytes" field.
+func (m *TransferJobMutation) SetTotalBytes(i int64) {
+	m.total_bytes = &i
+	m.addtotal_bytes = nil
+}
+
+// TotalBytes returns the value of the "total_bytes" field in the mutation.
+func (m *TransferJobMutation) TotalBytes() (r int64, exists bool) {
+	v := m.total_bytes
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldTotalBytes returns the old "total_bytes" field's value of the TransferJob entity.
+// If the TransferJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TransferJobMutation) OldTotalBytes(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldTotalBytes is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldTotalBytes requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldTotalBytes: %w", err)
+	}
+	return oldValue.TotalBytes, nil
+}
+
+// AddTotalBytes adds i to the "total_bytes" field.
+func (m *TransferJobMutation) AddTotalBytes(i int64) {
+	if m.addtotal_bytes != nil {
+		*m.addtotal_bytes += i
+	} else {
+		m.addtotal_bytes = &i
+	}
+}
+
+// AddedTotalBytes returns the value that was added to the "total_bytes" field in this mutation.
+func (m *TransferJobMutation) AddedTotalBytes() (r int64, exists bool) {
+	v := m.addtotal_bytes
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetTotalBytes resets all changes to the "total_bytes" field.
+func (m *TransferJobMutation) ResetTotalBytes() {
+	m.total_bytes = nil
+	m.addtotal_bytes = nil
+}
+
+// SetReceivedBytes sets the "received_bytes" field.
+func (m *TransferJobMutation) SetReceivedBytes(i int64) {
+	m.received_bytes = &i
+	m.addreceived_bytes = nil
+}
+
+// ReceivedBytes returns the value of the "received_bytes" field in the mutation.
+func (m *TransferJobMutation) ReceivedBytes() (r int64, exists bool) {
+	v := m.received_bytes
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldReceivedBytes returns the old "received_bytes" field's value of the TransferJob entity.
+// If the TransferJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TransferJobMutation) OldReceivedBytes(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldReceivedBytes is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldReceivedBytes requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldReceivedBytes: %w", err)
+	}
+	return oldValue.ReceivedBytes, nil
+}
+
+// AddReceivedBytes adds i to the "received_bytes" field.
+func (m *TransferJobMutation) AddReceivedBytes(i int64) {
+	if m.addreceived_bytes != nil {
+		*m.addreceived_bytes += i
+	} else {
+		m.addreceived_bytes = &i
+	}
+}
+
+// AddedReceivedBytes returns the value that was added to the "received_bytes" field in this mutation.
+func (m *TransferJobMutation) AddedReceivedBytes() (r int64, exists bool) {
+	v := m.addreceived_bytes
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetReceivedBytes resets all changes to the "received_bytes" field.
+func (m *TransferJobMutation) ResetReceivedBytes() {
+	m.received_bytes = nil
+	m.addreceived_bytes = nil
+}
+
+// SetStartedAt sets the "started_at" field.
+func (m *TransferJobMutation) SetStartedAt(t time.Time) {
+	m.started_at = &t
+}
+
+// StartedAt returns the value of the "started_at" field in the mutation.
+func (m *TransferJobMutation) StartedAt() (r time.Time, exists bool) {
+	v := m.started_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldStartedAt returns the old "started_at" field's value of the TransferJob entity.
+// If the TransferJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TransferJobMutation) OldStartedAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldStartedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldStartedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldStartedAt: %w", err)
+	}
+	return oldValue.StartedAt, nil
+}
+
+// ClearStartedAt clears the value of the "started_at" field.
+func (m *TransferJobMutation) ClearStartedAt() {
+	m.started_at = nil
+	m.clearedFields[transferjob.FieldStartedAt] = struct{}{}
+}
+
+// StartedAtCleared returns if the "started_at" field was cleared in this mutation.
+func (m *TransferJobMutation) StartedAtCleared() bool {
+	_, ok := m.clearedFields[transferjob.FieldStartedAt]
+	return ok
+}
+
+// ResetStartedAt resets all changes to the "started_at" field.
+func (m *TransferJobMutation) ResetStartedAt() {
+	m.started_at = nil
+	delete(m.clearedFields, transferjob.FieldStartedAt)
+}
+
+// SetFinishedAt sets the "finished_at" field.
+func (m *TransferJobMutation) SetFinishedAt(t time.Time) {
+	m.finished_at = &t
+}
+
+// FinishedAt returns the value of the "finished_at" field in the mutation.
+func (m *TransferJobMutation) FinishedAt() (r time.Time, exists bool) {
+	v := m.finished_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldFinishedAt returns the old "finished_at" field's value of the TransferJob entity.
+// If the TransferJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TransferJobMutation) OldFinishedAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldFinishedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldFinishedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldFinishedAt: %w", err)
+	}
+	return oldValue.FinishedAt, nil
+}
+
+// ClearFinishedAt clears the value of the "finished_at" field.
+func (m *TransferJobMutation) ClearFinishedAt() {
+	m.finished_at = nil
+	m.clearedFields[transferjob.FieldFinishedAt] = struct{}{}
+}
+
+// FinishedAtCleared returns if the "finished_at" field was cleared in this mutation.
+func (m *TransferJobMutation) FinishedAtCleared() bool {
+	_, ok := m.clearedFields[transferjob.FieldFinishedAt]
+	return ok
+}
+
+// ResetFinishedAt resets all changes to the "finished_at" field.
+func (m *TransferJobMutation) ResetFinishedAt() {
+	m.finished_at = nil
+	delete(m.clearedFields, transferjob.FieldFinishedAt)
+}
+
+// SetExpiresAt sets the "expires_at" field.
+func (m *TransferJobMutation) SetExpiresAt(t time.Time) {
+	m.expires_at = &t
+}
+
+// ExpiresAt returns the value of the "expires_at" field in the mutation.
+func (m *TransferJobMutation) ExpiresAt() (r time.Time, exists bool) {
+	v := m.expires_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldExpiresAt returns the old "expires_at" field's value of the TransferJob entity.
+// If the TransferJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TransferJobMutation) OldExpiresAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldExpiresAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldExpiresAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldExpiresAt: %w", err)
+	}
+	return oldValue.ExpiresAt, nil
+}
+
+// ResetExpiresAt resets all changes to the "expires_at" field.
+func (m *TransferJobMutation) ResetExpiresAt() {
+	m.expires_at = nil
+}
+
+// SetErrorCode sets the "error_code" field.
+func (m *TransferJobMutation) SetErrorCode(tc transferjob.ErrorCode) {
+	m.error_code = &tc
+}
+
+// ErrorCode returns the value of the "error_code" field in the mutation.
+func (m *TransferJobMutation) ErrorCode() (r transferjob.ErrorCode, exists bool) {
+	v := m.error_code
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldErrorCode returns the old "error_code" field's value of the TransferJob entity.
+// If the TransferJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TransferJobMutation) OldErrorCode(ctx context.Context) (v transferjob.ErrorCode, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldErrorCode is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldErrorCode requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldErrorCode: %w", err)
+	}
+	return oldValue.ErrorCode, nil
+}
+
+// ClearErrorCode clears the value of the "error_code" field.
+func (m *TransferJobMutation) ClearErrorCode() {
+	m.error_code = nil
+	m.clearedFields[transferjob.FieldErrorCode] = struct{}{}
+}
+
+// ErrorCodeCleared returns if the "error_code" field was cleared in this mutation.
+func (m *TransferJobMutation) ErrorCodeCleared() bool {
+	_, ok := m.clearedFields[transferjob.FieldErrorCode]
+	return ok
+}
+
+// ResetErrorCode resets all changes to the "error_code" field.
+func (m *TransferJobMutation) ResetErrorCode() {
+	m.error_code = nil
+	delete(m.clearedFields, transferjob.FieldErrorCode)
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (m *TransferJobMutation) SetCreatedAt(t time.Time) {
+	m.created_at = &t
+}
+
+// CreatedAt returns the value of the "created_at" field in the mutation.
+func (m *TransferJobMutation) CreatedAt() (r time.Time, exists bool) {
+	v := m.created_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedAt returns the old "created_at" field's value of the TransferJob entity.
+// If the TransferJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TransferJobMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
+	}
+	return oldValue.CreatedAt, nil
+}
+
+// ResetCreatedAt resets all changes to the "created_at" field.
+func (m *TransferJobMutation) ResetCreatedAt() {
+	m.created_at = nil
+}
+
+// SetUpdatedAt sets the "updated_at" field.
+func (m *TransferJobMutation) SetUpdatedAt(t time.Time) {
+	m.updated_at = &t
+}
+
+// UpdatedAt returns the value of the "updated_at" field in the mutation.
+func (m *TransferJobMutation) UpdatedAt() (r time.Time, exists bool) {
+	v := m.updated_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUpdatedAt returns the old "updated_at" field's value of the TransferJob entity.
+// If the TransferJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TransferJobMutation) OldUpdatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUpdatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUpdatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUpdatedAt: %w", err)
+	}
+	return oldValue.UpdatedAt, nil
+}
+
+// ResetUpdatedAt resets all changes to the "updated_at" field.
+func (m *TransferJobMutation) ResetUpdatedAt() {
+	m.updated_at = nil
+}
+
+// SetOwnerID sets the "owner" edge to the User entity by id.
+func (m *TransferJobMutation) SetOwnerID(id string) {
+	m.owner = &id
+}
+
+// ClearOwner clears the "owner" edge to the User entity.
+func (m *TransferJobMutation) ClearOwner() {
+	m.clearedowner = true
+	m.clearedFields[transferjob.FieldUserID] = struct{}{}
+}
+
+// OwnerCleared reports if the "owner" edge to the User entity was cleared.
+func (m *TransferJobMutation) OwnerCleared() bool {
+	return m.clearedowner
+}
+
+// OwnerID returns the "owner" edge ID in the mutation.
+func (m *TransferJobMutation) OwnerID() (id string, exists bool) {
+	if m.owner != nil {
+		return *m.owner, true
+	}
+	return
+}
+
+// OwnerIDs returns the "owner" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// OwnerID instead. It exists only for internal usage by the builders.
+func (m *TransferJobMutation) OwnerIDs() (ids []string) {
+	if id := m.owner; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetOwner resets all changes to the "owner" edge.
+func (m *TransferJobMutation) ResetOwner() {
+	m.owner = nil
+	m.clearedowner = false
+}
+
+// ClearClient clears the "client" edge to the TailClient entity.
+func (m *TransferJobMutation) ClearClient() {
+	m.clearedclient = true
+	m.clearedFields[transferjob.FieldClientID] = struct{}{}
+}
+
+// ClientCleared reports if the "client" edge to the TailClient entity was cleared.
+func (m *TransferJobMutation) ClientCleared() bool {
+	return m.clearedclient
+}
+
+// ClientIDs returns the "client" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// ClientID instead. It exists only for internal usage by the builders.
+func (m *TransferJobMutation) ClientIDs() (ids []string) {
+	if id := m.client; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetClient resets all changes to the "client" edge.
+func (m *TransferJobMutation) ResetClient() {
+	m.client = nil
+	m.clearedclient = false
+}
+
+// AddItemIDs adds the "items" edge to the TransferItem entity by ids.
+func (m *TransferJobMutation) AddItemIDs(ids ...string) {
+	if m.items == nil {
+		m.items = make(map[string]struct{})
+	}
+	for i := range ids {
+		m.items[ids[i]] = struct{}{}
+	}
+}
+
+// ClearItems clears the "items" edge to the TransferItem entity.
+func (m *TransferJobMutation) ClearItems() {
+	m.cleareditems = true
+}
+
+// ItemsCleared reports if the "items" edge to the TransferItem entity was cleared.
+func (m *TransferJobMutation) ItemsCleared() bool {
+	return m.cleareditems
+}
+
+// RemoveItemIDs removes the "items" edge to the TransferItem entity by IDs.
+func (m *TransferJobMutation) RemoveItemIDs(ids ...string) {
+	if m.removeditems == nil {
+		m.removeditems = make(map[string]struct{})
+	}
+	for i := range ids {
+		delete(m.items, ids[i])
+		m.removeditems[ids[i]] = struct{}{}
+	}
+}
+
+// RemovedItems returns the removed IDs of the "items" edge to the TransferItem entity.
+func (m *TransferJobMutation) RemovedItemsIDs() (ids []string) {
+	for id := range m.removeditems {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ItemsIDs returns the "items" edge IDs in the mutation.
+func (m *TransferJobMutation) ItemsIDs() (ids []string) {
+	for id := range m.items {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ResetItems resets all changes to the "items" edge.
+func (m *TransferJobMutation) ResetItems() {
+	m.items = nil
+	m.cleareditems = false
+	m.removeditems = nil
+}
+
+// Where appends a list predicates to the TransferJobMutation builder.
+func (m *TransferJobMutation) Where(ps ...predicate.TransferJob) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the TransferJobMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *TransferJobMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.TransferJob, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *TransferJobMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *TransferJobMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (TransferJob).
+func (m *TransferJobMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *TransferJobMutation) Fields() []string {
+	fields := make([]string, 0, 13)
+	if m.owner != nil {
+		fields = append(fields, transferjob.FieldUserID)
+	}
+	if m.client != nil {
+		fields = append(fields, transferjob.FieldClientID)
+	}
+	if m.remote_share_id != nil {
+		fields = append(fields, transferjob.FieldRemoteShareID)
+	}
+	if m.remote_capability_cipher != nil {
+		fields = append(fields, transferjob.FieldRemoteCapabilityCipher)
+	}
+	if m.status != nil {
+		fields = append(fields, transferjob.FieldStatus)
+	}
+	if m.total_bytes != nil {
+		fields = append(fields, transferjob.FieldTotalBytes)
+	}
+	if m.received_bytes != nil {
+		fields = append(fields, transferjob.FieldReceivedBytes)
+	}
+	if m.started_at != nil {
+		fields = append(fields, transferjob.FieldStartedAt)
+	}
+	if m.finished_at != nil {
+		fields = append(fields, transferjob.FieldFinishedAt)
+	}
+	if m.expires_at != nil {
+		fields = append(fields, transferjob.FieldExpiresAt)
+	}
+	if m.error_code != nil {
+		fields = append(fields, transferjob.FieldErrorCode)
+	}
+	if m.created_at != nil {
+		fields = append(fields, transferjob.FieldCreatedAt)
+	}
+	if m.updated_at != nil {
+		fields = append(fields, transferjob.FieldUpdatedAt)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *TransferJobMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case transferjob.FieldUserID:
+		return m.UserID()
+	case transferjob.FieldClientID:
+		return m.ClientID()
+	case transferjob.FieldRemoteShareID:
+		return m.RemoteShareID()
+	case transferjob.FieldRemoteCapabilityCipher:
+		return m.RemoteCapabilityCipher()
+	case transferjob.FieldStatus:
+		return m.Status()
+	case transferjob.FieldTotalBytes:
+		return m.TotalBytes()
+	case transferjob.FieldReceivedBytes:
+		return m.ReceivedBytes()
+	case transferjob.FieldStartedAt:
+		return m.StartedAt()
+	case transferjob.FieldFinishedAt:
+		return m.FinishedAt()
+	case transferjob.FieldExpiresAt:
+		return m.ExpiresAt()
+	case transferjob.FieldErrorCode:
+		return m.ErrorCode()
+	case transferjob.FieldCreatedAt:
+		return m.CreatedAt()
+	case transferjob.FieldUpdatedAt:
+		return m.UpdatedAt()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *TransferJobMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case transferjob.FieldUserID:
+		return m.OldUserID(ctx)
+	case transferjob.FieldClientID:
+		return m.OldClientID(ctx)
+	case transferjob.FieldRemoteShareID:
+		return m.OldRemoteShareID(ctx)
+	case transferjob.FieldRemoteCapabilityCipher:
+		return m.OldRemoteCapabilityCipher(ctx)
+	case transferjob.FieldStatus:
+		return m.OldStatus(ctx)
+	case transferjob.FieldTotalBytes:
+		return m.OldTotalBytes(ctx)
+	case transferjob.FieldReceivedBytes:
+		return m.OldReceivedBytes(ctx)
+	case transferjob.FieldStartedAt:
+		return m.OldStartedAt(ctx)
+	case transferjob.FieldFinishedAt:
+		return m.OldFinishedAt(ctx)
+	case transferjob.FieldExpiresAt:
+		return m.OldExpiresAt(ctx)
+	case transferjob.FieldErrorCode:
+		return m.OldErrorCode(ctx)
+	case transferjob.FieldCreatedAt:
+		return m.OldCreatedAt(ctx)
+	case transferjob.FieldUpdatedAt:
+		return m.OldUpdatedAt(ctx)
+	}
+	return nil, fmt.Errorf("unknown TransferJob field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *TransferJobMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case transferjob.FieldUserID:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUserID(v)
+		return nil
+	case transferjob.FieldClientID:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetClientID(v)
+		return nil
+	case transferjob.FieldRemoteShareID:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetRemoteShareID(v)
+		return nil
+	case transferjob.FieldRemoteCapabilityCipher:
+		v, ok := value.([]byte)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetRemoteCapabilityCipher(v)
+		return nil
+	case transferjob.FieldStatus:
+		v, ok := value.(transferjob.Status)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetStatus(v)
+		return nil
+	case transferjob.FieldTotalBytes:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetTotalBytes(v)
+		return nil
+	case transferjob.FieldReceivedBytes:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetReceivedBytes(v)
+		return nil
+	case transferjob.FieldStartedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetStartedAt(v)
+		return nil
+	case transferjob.FieldFinishedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetFinishedAt(v)
+		return nil
+	case transferjob.FieldExpiresAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetExpiresAt(v)
+		return nil
+	case transferjob.FieldErrorCode:
+		v, ok := value.(transferjob.ErrorCode)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetErrorCode(v)
+		return nil
+	case transferjob.FieldCreatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedAt(v)
+		return nil
+	case transferjob.FieldUpdatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUpdatedAt(v)
+		return nil
+	}
+	return fmt.Errorf("unknown TransferJob field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *TransferJobMutation) AddedFields() []string {
+	var fields []string
+	if m.addtotal_bytes != nil {
+		fields = append(fields, transferjob.FieldTotalBytes)
+	}
+	if m.addreceived_bytes != nil {
+		fields = append(fields, transferjob.FieldReceivedBytes)
+	}
+	return fields
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *TransferJobMutation) AddedField(name string) (ent.Value, bool) {
+	switch name {
+	case transferjob.FieldTotalBytes:
+		return m.AddedTotalBytes()
+	case transferjob.FieldReceivedBytes:
+		return m.AddedReceivedBytes()
+	}
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *TransferJobMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	case transferjob.FieldTotalBytes:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddTotalBytes(v)
+		return nil
+	case transferjob.FieldReceivedBytes:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddReceivedBytes(v)
+		return nil
+	}
+	return fmt.Errorf("unknown TransferJob numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *TransferJobMutation) ClearedFields() []string {
+	var fields []string
+	if m.FieldCleared(transferjob.FieldStartedAt) {
+		fields = append(fields, transferjob.FieldStartedAt)
+	}
+	if m.FieldCleared(transferjob.FieldFinishedAt) {
+		fields = append(fields, transferjob.FieldFinishedAt)
+	}
+	if m.FieldCleared(transferjob.FieldErrorCode) {
+		fields = append(fields, transferjob.FieldErrorCode)
+	}
+	return fields
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *TransferJobMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *TransferJobMutation) ClearField(name string) error {
+	switch name {
+	case transferjob.FieldStartedAt:
+		m.ClearStartedAt()
+		return nil
+	case transferjob.FieldFinishedAt:
+		m.ClearFinishedAt()
+		return nil
+	case transferjob.FieldErrorCode:
+		m.ClearErrorCode()
+		return nil
+	}
+	return fmt.Errorf("unknown TransferJob nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *TransferJobMutation) ResetField(name string) error {
+	switch name {
+	case transferjob.FieldUserID:
+		m.ResetUserID()
+		return nil
+	case transferjob.FieldClientID:
+		m.ResetClientID()
+		return nil
+	case transferjob.FieldRemoteShareID:
+		m.ResetRemoteShareID()
+		return nil
+	case transferjob.FieldRemoteCapabilityCipher:
+		m.ResetRemoteCapabilityCipher()
+		return nil
+	case transferjob.FieldStatus:
+		m.ResetStatus()
+		return nil
+	case transferjob.FieldTotalBytes:
+		m.ResetTotalBytes()
+		return nil
+	case transferjob.FieldReceivedBytes:
+		m.ResetReceivedBytes()
+		return nil
+	case transferjob.FieldStartedAt:
+		m.ResetStartedAt()
+		return nil
+	case transferjob.FieldFinishedAt:
+		m.ResetFinishedAt()
+		return nil
+	case transferjob.FieldExpiresAt:
+		m.ResetExpiresAt()
+		return nil
+	case transferjob.FieldErrorCode:
+		m.ResetErrorCode()
+		return nil
+	case transferjob.FieldCreatedAt:
+		m.ResetCreatedAt()
+		return nil
+	case transferjob.FieldUpdatedAt:
+		m.ResetUpdatedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown TransferJob field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *TransferJobMutation) AddedEdges() []string {
+	edges := make([]string, 0, 3)
+	if m.owner != nil {
+		edges = append(edges, transferjob.EdgeOwner)
+	}
+	if m.client != nil {
+		edges = append(edges, transferjob.EdgeClient)
+	}
+	if m.items != nil {
+		edges = append(edges, transferjob.EdgeItems)
+	}
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *TransferJobMutation) AddedIDs(name string) []ent.Value {
+	switch name {
+	case transferjob.EdgeOwner:
+		if id := m.owner; id != nil {
+			return []ent.Value{*id}
+		}
+	case transferjob.EdgeClient:
+		if id := m.client; id != nil {
+			return []ent.Value{*id}
+		}
+	case transferjob.EdgeItems:
+		ids := make([]ent.Value, 0, len(m.items))
+		for id := range m.items {
+			ids = append(ids, id)
+		}
+		return ids
+	}
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *TransferJobMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 3)
+	if m.removeditems != nil {
+		edges = append(edges, transferjob.EdgeItems)
+	}
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *TransferJobMutation) RemovedIDs(name string) []ent.Value {
+	switch name {
+	case transferjob.EdgeItems:
+		ids := make([]ent.Value, 0, len(m.removeditems))
+		for id := range m.removeditems {
+			ids = append(ids, id)
+		}
+		return ids
+	}
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *TransferJobMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 3)
+	if m.clearedowner {
+		edges = append(edges, transferjob.EdgeOwner)
+	}
+	if m.clearedclient {
+		edges = append(edges, transferjob.EdgeClient)
+	}
+	if m.cleareditems {
+		edges = append(edges, transferjob.EdgeItems)
+	}
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *TransferJobMutation) EdgeCleared(name string) bool {
+	switch name {
+	case transferjob.EdgeOwner:
+		return m.clearedowner
+	case transferjob.EdgeClient:
+		return m.clearedclient
+	case transferjob.EdgeItems:
+		return m.cleareditems
+	}
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *TransferJobMutation) ClearEdge(name string) error {
+	switch name {
+	case transferjob.EdgeOwner:
+		m.ClearOwner()
+		return nil
+	case transferjob.EdgeClient:
+		m.ClearClient()
+		return nil
+	}
+	return fmt.Errorf("unknown TransferJob unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *TransferJobMutation) ResetEdge(name string) error {
+	switch name {
+	case transferjob.EdgeOwner:
+		m.ResetOwner()
+		return nil
+	case transferjob.EdgeClient:
+		m.ResetClient()
+		return nil
+	case transferjob.EdgeItems:
+		m.ResetItems()
+		return nil
+	}
+	return fmt.Errorf("unknown TransferJob edge %s", name)
+}
+
+// TransferShareMutation represents an operation that mutates the TransferShare nodes in the graph.
+type TransferShareMutation struct {
+	config
+	op              Op
+	typ             string
+	id              *string
+	status          *transfershare.Status
+	capability_hash *[]byte
+	total_bytes     *int64
+	addtotal_bytes  *int64
+	file_count      *int
+	addfile_count   *int
+	ready_at        *time.Time
+	finished_at     *time.Time
+	expires_at      *time.Time
+	error_code      *transfershare.ErrorCode
+	created_at      *time.Time
+	updated_at      *time.Time
+	clearedFields   map[string]struct{}
+	owner           *string
+	clearedowner    bool
+	server          *string
+	clearedserver   bool
+	files           map[string]struct{}
+	removedfiles    map[string]struct{}
+	clearedfiles    bool
+	done            bool
+	oldValue        func(context.Context) (*TransferShare, error)
+	predicates      []predicate.TransferShare
+}
+
+var _ ent.Mutation = (*TransferShareMutation)(nil)
+
+// transfershareOption allows management of the mutation configuration using functional options.
+type transfershareOption func(*TransferShareMutation)
+
+// newTransferShareMutation creates new mutation for the TransferShare entity.
+func newTransferShareMutation(c config, op Op, opts ...transfershareOption) *TransferShareMutation {
+	m := &TransferShareMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeTransferShare,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withTransferShareID sets the ID field of the mutation.
+func withTransferShareID(id string) transfershareOption {
+	return func(m *TransferShareMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *TransferShare
+		)
+		m.oldValue = func(ctx context.Context) (*TransferShare, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().TransferShare.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withTransferShare sets the old TransferShare of the mutation.
+func withTransferShare(node *TransferShare) transfershareOption {
+	return func(m *TransferShareMutation) {
+		m.oldValue = func(context.Context) (*TransferShare, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m TransferShareMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m TransferShareMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// SetID sets the value of the id field. Note that this
+// operation is only accepted on creation of TransferShare entities.
+func (m *TransferShareMutation) SetID(id string) {
+	m.id = &id
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *TransferShareMutation) ID() (id string, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *TransferShareMutation) IDs(ctx context.Context) ([]string, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []string{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().TransferShare.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetUserID sets the "user_id" field.
+func (m *TransferShareMutation) SetUserID(s string) {
+	m.owner = &s
+}
+
+// UserID returns the value of the "user_id" field in the mutation.
+func (m *TransferShareMutation) UserID() (r string, exists bool) {
+	v := m.owner
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUserID returns the old "user_id" field's value of the TransferShare entity.
+// If the TransferShare object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TransferShareMutation) OldUserID(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUserID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUserID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUserID: %w", err)
+	}
+	return oldValue.UserID, nil
+}
+
+// ResetUserID resets all changes to the "user_id" field.
+func (m *TransferShareMutation) ResetUserID() {
+	m.owner = nil
+}
+
+// SetServerID sets the "server_id" field.
+func (m *TransferShareMutation) SetServerID(s string) {
+	m.server = &s
+}
+
+// ServerID returns the value of the "server_id" field in the mutation.
+func (m *TransferShareMutation) ServerID() (r string, exists bool) {
+	v := m.server
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldServerID returns the old "server_id" field's value of the TransferShare entity.
+// If the TransferShare object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TransferShareMutation) OldServerID(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldServerID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldServerID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldServerID: %w", err)
+	}
+	return oldValue.ServerID, nil
+}
+
+// ResetServerID resets all changes to the "server_id" field.
+func (m *TransferShareMutation) ResetServerID() {
+	m.server = nil
+}
+
+// SetStatus sets the "status" field.
+func (m *TransferShareMutation) SetStatus(t transfershare.Status) {
+	m.status = &t
+}
+
+// Status returns the value of the "status" field in the mutation.
+func (m *TransferShareMutation) Status() (r transfershare.Status, exists bool) {
+	v := m.status
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldStatus returns the old "status" field's value of the TransferShare entity.
+// If the TransferShare object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TransferShareMutation) OldStatus(ctx context.Context) (v transfershare.Status, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldStatus is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldStatus requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldStatus: %w", err)
+	}
+	return oldValue.Status, nil
+}
+
+// ResetStatus resets all changes to the "status" field.
+func (m *TransferShareMutation) ResetStatus() {
+	m.status = nil
+}
+
+// SetCapabilityHash sets the "capability_hash" field.
+func (m *TransferShareMutation) SetCapabilityHash(b []byte) {
+	m.capability_hash = &b
+}
+
+// CapabilityHash returns the value of the "capability_hash" field in the mutation.
+func (m *TransferShareMutation) CapabilityHash() (r []byte, exists bool) {
+	v := m.capability_hash
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCapabilityHash returns the old "capability_hash" field's value of the TransferShare entity.
+// If the TransferShare object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TransferShareMutation) OldCapabilityHash(ctx context.Context) (v []byte, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCapabilityHash is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCapabilityHash requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCapabilityHash: %w", err)
+	}
+	return oldValue.CapabilityHash, nil
+}
+
+// ResetCapabilityHash resets all changes to the "capability_hash" field.
+func (m *TransferShareMutation) ResetCapabilityHash() {
+	m.capability_hash = nil
+}
+
+// SetTotalBytes sets the "total_bytes" field.
+func (m *TransferShareMutation) SetTotalBytes(i int64) {
+	m.total_bytes = &i
+	m.addtotal_bytes = nil
+}
+
+// TotalBytes returns the value of the "total_bytes" field in the mutation.
+func (m *TransferShareMutation) TotalBytes() (r int64, exists bool) {
+	v := m.total_bytes
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldTotalBytes returns the old "total_bytes" field's value of the TransferShare entity.
+// If the TransferShare object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TransferShareMutation) OldTotalBytes(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldTotalBytes is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldTotalBytes requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldTotalBytes: %w", err)
+	}
+	return oldValue.TotalBytes, nil
+}
+
+// AddTotalBytes adds i to the "total_bytes" field.
+func (m *TransferShareMutation) AddTotalBytes(i int64) {
+	if m.addtotal_bytes != nil {
+		*m.addtotal_bytes += i
+	} else {
+		m.addtotal_bytes = &i
+	}
+}
+
+// AddedTotalBytes returns the value that was added to the "total_bytes" field in this mutation.
+func (m *TransferShareMutation) AddedTotalBytes() (r int64, exists bool) {
+	v := m.addtotal_bytes
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetTotalBytes resets all changes to the "total_bytes" field.
+func (m *TransferShareMutation) ResetTotalBytes() {
+	m.total_bytes = nil
+	m.addtotal_bytes = nil
+}
+
+// SetFileCount sets the "file_count" field.
+func (m *TransferShareMutation) SetFileCount(i int) {
+	m.file_count = &i
+	m.addfile_count = nil
+}
+
+// FileCount returns the value of the "file_count" field in the mutation.
+func (m *TransferShareMutation) FileCount() (r int, exists bool) {
+	v := m.file_count
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldFileCount returns the old "file_count" field's value of the TransferShare entity.
+// If the TransferShare object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TransferShareMutation) OldFileCount(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldFileCount is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldFileCount requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldFileCount: %w", err)
+	}
+	return oldValue.FileCount, nil
+}
+
+// AddFileCount adds i to the "file_count" field.
+func (m *TransferShareMutation) AddFileCount(i int) {
+	if m.addfile_count != nil {
+		*m.addfile_count += i
+	} else {
+		m.addfile_count = &i
+	}
+}
+
+// AddedFileCount returns the value that was added to the "file_count" field in this mutation.
+func (m *TransferShareMutation) AddedFileCount() (r int, exists bool) {
+	v := m.addfile_count
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetFileCount resets all changes to the "file_count" field.
+func (m *TransferShareMutation) ResetFileCount() {
+	m.file_count = nil
+	m.addfile_count = nil
+}
+
+// SetReadyAt sets the "ready_at" field.
+func (m *TransferShareMutation) SetReadyAt(t time.Time) {
+	m.ready_at = &t
+}
+
+// ReadyAt returns the value of the "ready_at" field in the mutation.
+func (m *TransferShareMutation) ReadyAt() (r time.Time, exists bool) {
+	v := m.ready_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldReadyAt returns the old "ready_at" field's value of the TransferShare entity.
+// If the TransferShare object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TransferShareMutation) OldReadyAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldReadyAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldReadyAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldReadyAt: %w", err)
+	}
+	return oldValue.ReadyAt, nil
+}
+
+// ClearReadyAt clears the value of the "ready_at" field.
+func (m *TransferShareMutation) ClearReadyAt() {
+	m.ready_at = nil
+	m.clearedFields[transfershare.FieldReadyAt] = struct{}{}
+}
+
+// ReadyAtCleared returns if the "ready_at" field was cleared in this mutation.
+func (m *TransferShareMutation) ReadyAtCleared() bool {
+	_, ok := m.clearedFields[transfershare.FieldReadyAt]
+	return ok
+}
+
+// ResetReadyAt resets all changes to the "ready_at" field.
+func (m *TransferShareMutation) ResetReadyAt() {
+	m.ready_at = nil
+	delete(m.clearedFields, transfershare.FieldReadyAt)
+}
+
+// SetFinishedAt sets the "finished_at" field.
+func (m *TransferShareMutation) SetFinishedAt(t time.Time) {
+	m.finished_at = &t
+}
+
+// FinishedAt returns the value of the "finished_at" field in the mutation.
+func (m *TransferShareMutation) FinishedAt() (r time.Time, exists bool) {
+	v := m.finished_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldFinishedAt returns the old "finished_at" field's value of the TransferShare entity.
+// If the TransferShare object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TransferShareMutation) OldFinishedAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldFinishedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldFinishedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldFinishedAt: %w", err)
+	}
+	return oldValue.FinishedAt, nil
+}
+
+// ClearFinishedAt clears the value of the "finished_at" field.
+func (m *TransferShareMutation) ClearFinishedAt() {
+	m.finished_at = nil
+	m.clearedFields[transfershare.FieldFinishedAt] = struct{}{}
+}
+
+// FinishedAtCleared returns if the "finished_at" field was cleared in this mutation.
+func (m *TransferShareMutation) FinishedAtCleared() bool {
+	_, ok := m.clearedFields[transfershare.FieldFinishedAt]
+	return ok
+}
+
+// ResetFinishedAt resets all changes to the "finished_at" field.
+func (m *TransferShareMutation) ResetFinishedAt() {
+	m.finished_at = nil
+	delete(m.clearedFields, transfershare.FieldFinishedAt)
+}
+
+// SetExpiresAt sets the "expires_at" field.
+func (m *TransferShareMutation) SetExpiresAt(t time.Time) {
+	m.expires_at = &t
+}
+
+// ExpiresAt returns the value of the "expires_at" field in the mutation.
+func (m *TransferShareMutation) ExpiresAt() (r time.Time, exists bool) {
+	v := m.expires_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldExpiresAt returns the old "expires_at" field's value of the TransferShare entity.
+// If the TransferShare object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TransferShareMutation) OldExpiresAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldExpiresAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldExpiresAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldExpiresAt: %w", err)
+	}
+	return oldValue.ExpiresAt, nil
+}
+
+// ResetExpiresAt resets all changes to the "expires_at" field.
+func (m *TransferShareMutation) ResetExpiresAt() {
+	m.expires_at = nil
+}
+
+// SetErrorCode sets the "error_code" field.
+func (m *TransferShareMutation) SetErrorCode(tc transfershare.ErrorCode) {
+	m.error_code = &tc
+}
+
+// ErrorCode returns the value of the "error_code" field in the mutation.
+func (m *TransferShareMutation) ErrorCode() (r transfershare.ErrorCode, exists bool) {
+	v := m.error_code
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldErrorCode returns the old "error_code" field's value of the TransferShare entity.
+// If the TransferShare object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TransferShareMutation) OldErrorCode(ctx context.Context) (v transfershare.ErrorCode, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldErrorCode is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldErrorCode requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldErrorCode: %w", err)
+	}
+	return oldValue.ErrorCode, nil
+}
+
+// ClearErrorCode clears the value of the "error_code" field.
+func (m *TransferShareMutation) ClearErrorCode() {
+	m.error_code = nil
+	m.clearedFields[transfershare.FieldErrorCode] = struct{}{}
+}
+
+// ErrorCodeCleared returns if the "error_code" field was cleared in this mutation.
+func (m *TransferShareMutation) ErrorCodeCleared() bool {
+	_, ok := m.clearedFields[transfershare.FieldErrorCode]
+	return ok
+}
+
+// ResetErrorCode resets all changes to the "error_code" field.
+func (m *TransferShareMutation) ResetErrorCode() {
+	m.error_code = nil
+	delete(m.clearedFields, transfershare.FieldErrorCode)
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (m *TransferShareMutation) SetCreatedAt(t time.Time) {
+	m.created_at = &t
+}
+
+// CreatedAt returns the value of the "created_at" field in the mutation.
+func (m *TransferShareMutation) CreatedAt() (r time.Time, exists bool) {
+	v := m.created_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedAt returns the old "created_at" field's value of the TransferShare entity.
+// If the TransferShare object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TransferShareMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
+	}
+	return oldValue.CreatedAt, nil
+}
+
+// ResetCreatedAt resets all changes to the "created_at" field.
+func (m *TransferShareMutation) ResetCreatedAt() {
+	m.created_at = nil
+}
+
+// SetUpdatedAt sets the "updated_at" field.
+func (m *TransferShareMutation) SetUpdatedAt(t time.Time) {
+	m.updated_at = &t
+}
+
+// UpdatedAt returns the value of the "updated_at" field in the mutation.
+func (m *TransferShareMutation) UpdatedAt() (r time.Time, exists bool) {
+	v := m.updated_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUpdatedAt returns the old "updated_at" field's value of the TransferShare entity.
+// If the TransferShare object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TransferShareMutation) OldUpdatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUpdatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUpdatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUpdatedAt: %w", err)
+	}
+	return oldValue.UpdatedAt, nil
+}
+
+// ResetUpdatedAt resets all changes to the "updated_at" field.
+func (m *TransferShareMutation) ResetUpdatedAt() {
+	m.updated_at = nil
+}
+
+// SetOwnerID sets the "owner" edge to the User entity by id.
+func (m *TransferShareMutation) SetOwnerID(id string) {
+	m.owner = &id
+}
+
+// ClearOwner clears the "owner" edge to the User entity.
+func (m *TransferShareMutation) ClearOwner() {
+	m.clearedowner = true
+	m.clearedFields[transfershare.FieldUserID] = struct{}{}
+}
+
+// OwnerCleared reports if the "owner" edge to the User entity was cleared.
+func (m *TransferShareMutation) OwnerCleared() bool {
+	return m.clearedowner
+}
+
+// OwnerID returns the "owner" edge ID in the mutation.
+func (m *TransferShareMutation) OwnerID() (id string, exists bool) {
+	if m.owner != nil {
+		return *m.owner, true
+	}
+	return
+}
+
+// OwnerIDs returns the "owner" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// OwnerID instead. It exists only for internal usage by the builders.
+func (m *TransferShareMutation) OwnerIDs() (ids []string) {
+	if id := m.owner; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetOwner resets all changes to the "owner" edge.
+func (m *TransferShareMutation) ResetOwner() {
+	m.owner = nil
+	m.clearedowner = false
+}
+
+// ClearServer clears the "server" edge to the TailServer entity.
+func (m *TransferShareMutation) ClearServer() {
+	m.clearedserver = true
+	m.clearedFields[transfershare.FieldServerID] = struct{}{}
+}
+
+// ServerCleared reports if the "server" edge to the TailServer entity was cleared.
+func (m *TransferShareMutation) ServerCleared() bool {
+	return m.clearedserver
+}
+
+// ServerIDs returns the "server" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// ServerID instead. It exists only for internal usage by the builders.
+func (m *TransferShareMutation) ServerIDs() (ids []string) {
+	if id := m.server; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetServer resets all changes to the "server" edge.
+func (m *TransferShareMutation) ResetServer() {
+	m.server = nil
+	m.clearedserver = false
+}
+
+// AddFileIDs adds the "files" edge to the ShareFile entity by ids.
+func (m *TransferShareMutation) AddFileIDs(ids ...string) {
+	if m.files == nil {
+		m.files = make(map[string]struct{})
+	}
+	for i := range ids {
+		m.files[ids[i]] = struct{}{}
+	}
+}
+
+// ClearFiles clears the "files" edge to the ShareFile entity.
+func (m *TransferShareMutation) ClearFiles() {
+	m.clearedfiles = true
+}
+
+// FilesCleared reports if the "files" edge to the ShareFile entity was cleared.
+func (m *TransferShareMutation) FilesCleared() bool {
+	return m.clearedfiles
+}
+
+// RemoveFileIDs removes the "files" edge to the ShareFile entity by IDs.
+func (m *TransferShareMutation) RemoveFileIDs(ids ...string) {
+	if m.removedfiles == nil {
+		m.removedfiles = make(map[string]struct{})
+	}
+	for i := range ids {
+		delete(m.files, ids[i])
+		m.removedfiles[ids[i]] = struct{}{}
+	}
+}
+
+// RemovedFiles returns the removed IDs of the "files" edge to the ShareFile entity.
+func (m *TransferShareMutation) RemovedFilesIDs() (ids []string) {
+	for id := range m.removedfiles {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// FilesIDs returns the "files" edge IDs in the mutation.
+func (m *TransferShareMutation) FilesIDs() (ids []string) {
+	for id := range m.files {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ResetFiles resets all changes to the "files" edge.
+func (m *TransferShareMutation) ResetFiles() {
+	m.files = nil
+	m.clearedfiles = false
+	m.removedfiles = nil
+}
+
+// Where appends a list predicates to the TransferShareMutation builder.
+func (m *TransferShareMutation) Where(ps ...predicate.TransferShare) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the TransferShareMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *TransferShareMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.TransferShare, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *TransferShareMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *TransferShareMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (TransferShare).
+func (m *TransferShareMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *TransferShareMutation) Fields() []string {
+	fields := make([]string, 0, 12)
+	if m.owner != nil {
+		fields = append(fields, transfershare.FieldUserID)
+	}
+	if m.server != nil {
+		fields = append(fields, transfershare.FieldServerID)
+	}
+	if m.status != nil {
+		fields = append(fields, transfershare.FieldStatus)
+	}
+	if m.capability_hash != nil {
+		fields = append(fields, transfershare.FieldCapabilityHash)
+	}
+	if m.total_bytes != nil {
+		fields = append(fields, transfershare.FieldTotalBytes)
+	}
+	if m.file_count != nil {
+		fields = append(fields, transfershare.FieldFileCount)
+	}
+	if m.ready_at != nil {
+		fields = append(fields, transfershare.FieldReadyAt)
+	}
+	if m.finished_at != nil {
+		fields = append(fields, transfershare.FieldFinishedAt)
+	}
+	if m.expires_at != nil {
+		fields = append(fields, transfershare.FieldExpiresAt)
+	}
+	if m.error_code != nil {
+		fields = append(fields, transfershare.FieldErrorCode)
+	}
+	if m.created_at != nil {
+		fields = append(fields, transfershare.FieldCreatedAt)
+	}
+	if m.updated_at != nil {
+		fields = append(fields, transfershare.FieldUpdatedAt)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *TransferShareMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case transfershare.FieldUserID:
+		return m.UserID()
+	case transfershare.FieldServerID:
+		return m.ServerID()
+	case transfershare.FieldStatus:
+		return m.Status()
+	case transfershare.FieldCapabilityHash:
+		return m.CapabilityHash()
+	case transfershare.FieldTotalBytes:
+		return m.TotalBytes()
+	case transfershare.FieldFileCount:
+		return m.FileCount()
+	case transfershare.FieldReadyAt:
+		return m.ReadyAt()
+	case transfershare.FieldFinishedAt:
+		return m.FinishedAt()
+	case transfershare.FieldExpiresAt:
+		return m.ExpiresAt()
+	case transfershare.FieldErrorCode:
+		return m.ErrorCode()
+	case transfershare.FieldCreatedAt:
+		return m.CreatedAt()
+	case transfershare.FieldUpdatedAt:
+		return m.UpdatedAt()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *TransferShareMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case transfershare.FieldUserID:
+		return m.OldUserID(ctx)
+	case transfershare.FieldServerID:
+		return m.OldServerID(ctx)
+	case transfershare.FieldStatus:
+		return m.OldStatus(ctx)
+	case transfershare.FieldCapabilityHash:
+		return m.OldCapabilityHash(ctx)
+	case transfershare.FieldTotalBytes:
+		return m.OldTotalBytes(ctx)
+	case transfershare.FieldFileCount:
+		return m.OldFileCount(ctx)
+	case transfershare.FieldReadyAt:
+		return m.OldReadyAt(ctx)
+	case transfershare.FieldFinishedAt:
+		return m.OldFinishedAt(ctx)
+	case transfershare.FieldExpiresAt:
+		return m.OldExpiresAt(ctx)
+	case transfershare.FieldErrorCode:
+		return m.OldErrorCode(ctx)
+	case transfershare.FieldCreatedAt:
+		return m.OldCreatedAt(ctx)
+	case transfershare.FieldUpdatedAt:
+		return m.OldUpdatedAt(ctx)
+	}
+	return nil, fmt.Errorf("unknown TransferShare field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *TransferShareMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case transfershare.FieldUserID:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUserID(v)
+		return nil
+	case transfershare.FieldServerID:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetServerID(v)
+		return nil
+	case transfershare.FieldStatus:
+		v, ok := value.(transfershare.Status)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetStatus(v)
+		return nil
+	case transfershare.FieldCapabilityHash:
+		v, ok := value.([]byte)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCapabilityHash(v)
+		return nil
+	case transfershare.FieldTotalBytes:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetTotalBytes(v)
+		return nil
+	case transfershare.FieldFileCount:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetFileCount(v)
+		return nil
+	case transfershare.FieldReadyAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetReadyAt(v)
+		return nil
+	case transfershare.FieldFinishedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetFinishedAt(v)
+		return nil
+	case transfershare.FieldExpiresAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetExpiresAt(v)
+		return nil
+	case transfershare.FieldErrorCode:
+		v, ok := value.(transfershare.ErrorCode)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetErrorCode(v)
+		return nil
+	case transfershare.FieldCreatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedAt(v)
+		return nil
+	case transfershare.FieldUpdatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUpdatedAt(v)
+		return nil
+	}
+	return fmt.Errorf("unknown TransferShare field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *TransferShareMutation) AddedFields() []string {
+	var fields []string
+	if m.addtotal_bytes != nil {
+		fields = append(fields, transfershare.FieldTotalBytes)
+	}
+	if m.addfile_count != nil {
+		fields = append(fields, transfershare.FieldFileCount)
+	}
+	return fields
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *TransferShareMutation) AddedField(name string) (ent.Value, bool) {
+	switch name {
+	case transfershare.FieldTotalBytes:
+		return m.AddedTotalBytes()
+	case transfershare.FieldFileCount:
+		return m.AddedFileCount()
+	}
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *TransferShareMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	case transfershare.FieldTotalBytes:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddTotalBytes(v)
+		return nil
+	case transfershare.FieldFileCount:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddFileCount(v)
+		return nil
+	}
+	return fmt.Errorf("unknown TransferShare numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *TransferShareMutation) ClearedFields() []string {
+	var fields []string
+	if m.FieldCleared(transfershare.FieldReadyAt) {
+		fields = append(fields, transfershare.FieldReadyAt)
+	}
+	if m.FieldCleared(transfershare.FieldFinishedAt) {
+		fields = append(fields, transfershare.FieldFinishedAt)
+	}
+	if m.FieldCleared(transfershare.FieldErrorCode) {
+		fields = append(fields, transfershare.FieldErrorCode)
+	}
+	return fields
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *TransferShareMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *TransferShareMutation) ClearField(name string) error {
+	switch name {
+	case transfershare.FieldReadyAt:
+		m.ClearReadyAt()
+		return nil
+	case transfershare.FieldFinishedAt:
+		m.ClearFinishedAt()
+		return nil
+	case transfershare.FieldErrorCode:
+		m.ClearErrorCode()
+		return nil
+	}
+	return fmt.Errorf("unknown TransferShare nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *TransferShareMutation) ResetField(name string) error {
+	switch name {
+	case transfershare.FieldUserID:
+		m.ResetUserID()
+		return nil
+	case transfershare.FieldServerID:
+		m.ResetServerID()
+		return nil
+	case transfershare.FieldStatus:
+		m.ResetStatus()
+		return nil
+	case transfershare.FieldCapabilityHash:
+		m.ResetCapabilityHash()
+		return nil
+	case transfershare.FieldTotalBytes:
+		m.ResetTotalBytes()
+		return nil
+	case transfershare.FieldFileCount:
+		m.ResetFileCount()
+		return nil
+	case transfershare.FieldReadyAt:
+		m.ResetReadyAt()
+		return nil
+	case transfershare.FieldFinishedAt:
+		m.ResetFinishedAt()
+		return nil
+	case transfershare.FieldExpiresAt:
+		m.ResetExpiresAt()
+		return nil
+	case transfershare.FieldErrorCode:
+		m.ResetErrorCode()
+		return nil
+	case transfershare.FieldCreatedAt:
+		m.ResetCreatedAt()
+		return nil
+	case transfershare.FieldUpdatedAt:
+		m.ResetUpdatedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown TransferShare field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *TransferShareMutation) AddedEdges() []string {
+	edges := make([]string, 0, 3)
+	if m.owner != nil {
+		edges = append(edges, transfershare.EdgeOwner)
+	}
+	if m.server != nil {
+		edges = append(edges, transfershare.EdgeServer)
+	}
+	if m.files != nil {
+		edges = append(edges, transfershare.EdgeFiles)
+	}
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *TransferShareMutation) AddedIDs(name string) []ent.Value {
+	switch name {
+	case transfershare.EdgeOwner:
+		if id := m.owner; id != nil {
+			return []ent.Value{*id}
+		}
+	case transfershare.EdgeServer:
+		if id := m.server; id != nil {
+			return []ent.Value{*id}
+		}
+	case transfershare.EdgeFiles:
+		ids := make([]ent.Value, 0, len(m.files))
+		for id := range m.files {
+			ids = append(ids, id)
+		}
+		return ids
+	}
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *TransferShareMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 3)
+	if m.removedfiles != nil {
+		edges = append(edges, transfershare.EdgeFiles)
+	}
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *TransferShareMutation) RemovedIDs(name string) []ent.Value {
+	switch name {
+	case transfershare.EdgeFiles:
+		ids := make([]ent.Value, 0, len(m.removedfiles))
+		for id := range m.removedfiles {
+			ids = append(ids, id)
+		}
+		return ids
+	}
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *TransferShareMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 3)
+	if m.clearedowner {
+		edges = append(edges, transfershare.EdgeOwner)
+	}
+	if m.clearedserver {
+		edges = append(edges, transfershare.EdgeServer)
+	}
+	if m.clearedfiles {
+		edges = append(edges, transfershare.EdgeFiles)
+	}
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *TransferShareMutation) EdgeCleared(name string) bool {
+	switch name {
+	case transfershare.EdgeOwner:
+		return m.clearedowner
+	case transfershare.EdgeServer:
+		return m.clearedserver
+	case transfershare.EdgeFiles:
+		return m.clearedfiles
+	}
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *TransferShareMutation) ClearEdge(name string) error {
+	switch name {
+	case transfershare.EdgeOwner:
+		m.ClearOwner()
+		return nil
+	case transfershare.EdgeServer:
+		m.ClearServer()
+		return nil
+	}
+	return fmt.Errorf("unknown TransferShare unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *TransferShareMutation) ResetEdge(name string) error {
+	switch name {
+	case transfershare.EdgeOwner:
+		m.ResetOwner()
+		return nil
+	case transfershare.EdgeServer:
+		m.ResetServer()
+		return nil
+	case transfershare.EdgeFiles:
+		m.ResetFiles()
+		return nil
+	}
+	return fmt.Errorf("unknown TransferShare edge %s", name)
 }
 
 // UserMutation represents an operation that mutates the User nodes in the graph.
@@ -9431,6 +14738,18 @@ type UserMutation struct {
 	routes                 map[string]struct{}
 	removedroutes          map[string]struct{}
 	clearedroutes          bool
+	transfer_shares        map[string]struct{}
+	removedtransfer_shares map[string]struct{}
+	clearedtransfer_shares bool
+	share_files            map[string]struct{}
+	removedshare_files     map[string]struct{}
+	clearedshare_files     bool
+	transfer_jobs          map[string]struct{}
+	removedtransfer_jobs   map[string]struct{}
+	clearedtransfer_jobs   bool
+	transfer_items         map[string]struct{}
+	removedtransfer_items  map[string]struct{}
+	clearedtransfer_items  bool
 	audit_events           map[string]struct{}
 	removedaudit_events    map[string]struct{}
 	clearedaudit_events    bool
@@ -10158,6 +15477,222 @@ func (m *UserMutation) ResetRoutes() {
 	m.removedroutes = nil
 }
 
+// AddTransferShareIDs adds the "transfer_shares" edge to the TransferShare entity by ids.
+func (m *UserMutation) AddTransferShareIDs(ids ...string) {
+	if m.transfer_shares == nil {
+		m.transfer_shares = make(map[string]struct{})
+	}
+	for i := range ids {
+		m.transfer_shares[ids[i]] = struct{}{}
+	}
+}
+
+// ClearTransferShares clears the "transfer_shares" edge to the TransferShare entity.
+func (m *UserMutation) ClearTransferShares() {
+	m.clearedtransfer_shares = true
+}
+
+// TransferSharesCleared reports if the "transfer_shares" edge to the TransferShare entity was cleared.
+func (m *UserMutation) TransferSharesCleared() bool {
+	return m.clearedtransfer_shares
+}
+
+// RemoveTransferShareIDs removes the "transfer_shares" edge to the TransferShare entity by IDs.
+func (m *UserMutation) RemoveTransferShareIDs(ids ...string) {
+	if m.removedtransfer_shares == nil {
+		m.removedtransfer_shares = make(map[string]struct{})
+	}
+	for i := range ids {
+		delete(m.transfer_shares, ids[i])
+		m.removedtransfer_shares[ids[i]] = struct{}{}
+	}
+}
+
+// RemovedTransferShares returns the removed IDs of the "transfer_shares" edge to the TransferShare entity.
+func (m *UserMutation) RemovedTransferSharesIDs() (ids []string) {
+	for id := range m.removedtransfer_shares {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// TransferSharesIDs returns the "transfer_shares" edge IDs in the mutation.
+func (m *UserMutation) TransferSharesIDs() (ids []string) {
+	for id := range m.transfer_shares {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ResetTransferShares resets all changes to the "transfer_shares" edge.
+func (m *UserMutation) ResetTransferShares() {
+	m.transfer_shares = nil
+	m.clearedtransfer_shares = false
+	m.removedtransfer_shares = nil
+}
+
+// AddShareFileIDs adds the "share_files" edge to the ShareFile entity by ids.
+func (m *UserMutation) AddShareFileIDs(ids ...string) {
+	if m.share_files == nil {
+		m.share_files = make(map[string]struct{})
+	}
+	for i := range ids {
+		m.share_files[ids[i]] = struct{}{}
+	}
+}
+
+// ClearShareFiles clears the "share_files" edge to the ShareFile entity.
+func (m *UserMutation) ClearShareFiles() {
+	m.clearedshare_files = true
+}
+
+// ShareFilesCleared reports if the "share_files" edge to the ShareFile entity was cleared.
+func (m *UserMutation) ShareFilesCleared() bool {
+	return m.clearedshare_files
+}
+
+// RemoveShareFileIDs removes the "share_files" edge to the ShareFile entity by IDs.
+func (m *UserMutation) RemoveShareFileIDs(ids ...string) {
+	if m.removedshare_files == nil {
+		m.removedshare_files = make(map[string]struct{})
+	}
+	for i := range ids {
+		delete(m.share_files, ids[i])
+		m.removedshare_files[ids[i]] = struct{}{}
+	}
+}
+
+// RemovedShareFiles returns the removed IDs of the "share_files" edge to the ShareFile entity.
+func (m *UserMutation) RemovedShareFilesIDs() (ids []string) {
+	for id := range m.removedshare_files {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ShareFilesIDs returns the "share_files" edge IDs in the mutation.
+func (m *UserMutation) ShareFilesIDs() (ids []string) {
+	for id := range m.share_files {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ResetShareFiles resets all changes to the "share_files" edge.
+func (m *UserMutation) ResetShareFiles() {
+	m.share_files = nil
+	m.clearedshare_files = false
+	m.removedshare_files = nil
+}
+
+// AddTransferJobIDs adds the "transfer_jobs" edge to the TransferJob entity by ids.
+func (m *UserMutation) AddTransferJobIDs(ids ...string) {
+	if m.transfer_jobs == nil {
+		m.transfer_jobs = make(map[string]struct{})
+	}
+	for i := range ids {
+		m.transfer_jobs[ids[i]] = struct{}{}
+	}
+}
+
+// ClearTransferJobs clears the "transfer_jobs" edge to the TransferJob entity.
+func (m *UserMutation) ClearTransferJobs() {
+	m.clearedtransfer_jobs = true
+}
+
+// TransferJobsCleared reports if the "transfer_jobs" edge to the TransferJob entity was cleared.
+func (m *UserMutation) TransferJobsCleared() bool {
+	return m.clearedtransfer_jobs
+}
+
+// RemoveTransferJobIDs removes the "transfer_jobs" edge to the TransferJob entity by IDs.
+func (m *UserMutation) RemoveTransferJobIDs(ids ...string) {
+	if m.removedtransfer_jobs == nil {
+		m.removedtransfer_jobs = make(map[string]struct{})
+	}
+	for i := range ids {
+		delete(m.transfer_jobs, ids[i])
+		m.removedtransfer_jobs[ids[i]] = struct{}{}
+	}
+}
+
+// RemovedTransferJobs returns the removed IDs of the "transfer_jobs" edge to the TransferJob entity.
+func (m *UserMutation) RemovedTransferJobsIDs() (ids []string) {
+	for id := range m.removedtransfer_jobs {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// TransferJobsIDs returns the "transfer_jobs" edge IDs in the mutation.
+func (m *UserMutation) TransferJobsIDs() (ids []string) {
+	for id := range m.transfer_jobs {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ResetTransferJobs resets all changes to the "transfer_jobs" edge.
+func (m *UserMutation) ResetTransferJobs() {
+	m.transfer_jobs = nil
+	m.clearedtransfer_jobs = false
+	m.removedtransfer_jobs = nil
+}
+
+// AddTransferItemIDs adds the "transfer_items" edge to the TransferItem entity by ids.
+func (m *UserMutation) AddTransferItemIDs(ids ...string) {
+	if m.transfer_items == nil {
+		m.transfer_items = make(map[string]struct{})
+	}
+	for i := range ids {
+		m.transfer_items[ids[i]] = struct{}{}
+	}
+}
+
+// ClearTransferItems clears the "transfer_items" edge to the TransferItem entity.
+func (m *UserMutation) ClearTransferItems() {
+	m.clearedtransfer_items = true
+}
+
+// TransferItemsCleared reports if the "transfer_items" edge to the TransferItem entity was cleared.
+func (m *UserMutation) TransferItemsCleared() bool {
+	return m.clearedtransfer_items
+}
+
+// RemoveTransferItemIDs removes the "transfer_items" edge to the TransferItem entity by IDs.
+func (m *UserMutation) RemoveTransferItemIDs(ids ...string) {
+	if m.removedtransfer_items == nil {
+		m.removedtransfer_items = make(map[string]struct{})
+	}
+	for i := range ids {
+		delete(m.transfer_items, ids[i])
+		m.removedtransfer_items[ids[i]] = struct{}{}
+	}
+}
+
+// RemovedTransferItems returns the removed IDs of the "transfer_items" edge to the TransferItem entity.
+func (m *UserMutation) RemovedTransferItemsIDs() (ids []string) {
+	for id := range m.removedtransfer_items {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// TransferItemsIDs returns the "transfer_items" edge IDs in the mutation.
+func (m *UserMutation) TransferItemsIDs() (ids []string) {
+	for id := range m.transfer_items {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ResetTransferItems resets all changes to the "transfer_items" edge.
+func (m *UserMutation) ResetTransferItems() {
+	m.transfer_items = nil
+	m.clearedtransfer_items = false
+	m.removedtransfer_items = nil
+}
+
 // AddAuditEventIDs adds the "audit_events" edge to the AuditEvent entity by ids.
 func (m *UserMutation) AddAuditEventIDs(ids ...string) {
 	if m.audit_events == nil {
@@ -10468,7 +16003,7 @@ func (m *UserMutation) ResetField(name string) error {
 
 // AddedEdges returns all edge names that were set/added in this mutation.
 func (m *UserMutation) AddedEdges() []string {
-	edges := make([]string, 0, 7)
+	edges := make([]string, 0, 11)
 	if m.sessions != nil {
 		edges = append(edges, user.EdgeSessions)
 	}
@@ -10486,6 +16021,18 @@ func (m *UserMutation) AddedEdges() []string {
 	}
 	if m.routes != nil {
 		edges = append(edges, user.EdgeRoutes)
+	}
+	if m.transfer_shares != nil {
+		edges = append(edges, user.EdgeTransferShares)
+	}
+	if m.share_files != nil {
+		edges = append(edges, user.EdgeShareFiles)
+	}
+	if m.transfer_jobs != nil {
+		edges = append(edges, user.EdgeTransferJobs)
+	}
+	if m.transfer_items != nil {
+		edges = append(edges, user.EdgeTransferItems)
 	}
 	if m.audit_events != nil {
 		edges = append(edges, user.EdgeAuditEvents)
@@ -10533,6 +16080,30 @@ func (m *UserMutation) AddedIDs(name string) []ent.Value {
 			ids = append(ids, id)
 		}
 		return ids
+	case user.EdgeTransferShares:
+		ids := make([]ent.Value, 0, len(m.transfer_shares))
+		for id := range m.transfer_shares {
+			ids = append(ids, id)
+		}
+		return ids
+	case user.EdgeShareFiles:
+		ids := make([]ent.Value, 0, len(m.share_files))
+		for id := range m.share_files {
+			ids = append(ids, id)
+		}
+		return ids
+	case user.EdgeTransferJobs:
+		ids := make([]ent.Value, 0, len(m.transfer_jobs))
+		for id := range m.transfer_jobs {
+			ids = append(ids, id)
+		}
+		return ids
+	case user.EdgeTransferItems:
+		ids := make([]ent.Value, 0, len(m.transfer_items))
+		for id := range m.transfer_items {
+			ids = append(ids, id)
+		}
+		return ids
 	case user.EdgeAuditEvents:
 		ids := make([]ent.Value, 0, len(m.audit_events))
 		for id := range m.audit_events {
@@ -10545,7 +16116,7 @@ func (m *UserMutation) AddedIDs(name string) []ent.Value {
 
 // RemovedEdges returns all edge names that were removed in this mutation.
 func (m *UserMutation) RemovedEdges() []string {
-	edges := make([]string, 0, 7)
+	edges := make([]string, 0, 11)
 	if m.removedsessions != nil {
 		edges = append(edges, user.EdgeSessions)
 	}
@@ -10563,6 +16134,18 @@ func (m *UserMutation) RemovedEdges() []string {
 	}
 	if m.removedroutes != nil {
 		edges = append(edges, user.EdgeRoutes)
+	}
+	if m.removedtransfer_shares != nil {
+		edges = append(edges, user.EdgeTransferShares)
+	}
+	if m.removedshare_files != nil {
+		edges = append(edges, user.EdgeShareFiles)
+	}
+	if m.removedtransfer_jobs != nil {
+		edges = append(edges, user.EdgeTransferJobs)
+	}
+	if m.removedtransfer_items != nil {
+		edges = append(edges, user.EdgeTransferItems)
 	}
 	if m.removedaudit_events != nil {
 		edges = append(edges, user.EdgeAuditEvents)
@@ -10610,6 +16193,30 @@ func (m *UserMutation) RemovedIDs(name string) []ent.Value {
 			ids = append(ids, id)
 		}
 		return ids
+	case user.EdgeTransferShares:
+		ids := make([]ent.Value, 0, len(m.removedtransfer_shares))
+		for id := range m.removedtransfer_shares {
+			ids = append(ids, id)
+		}
+		return ids
+	case user.EdgeShareFiles:
+		ids := make([]ent.Value, 0, len(m.removedshare_files))
+		for id := range m.removedshare_files {
+			ids = append(ids, id)
+		}
+		return ids
+	case user.EdgeTransferJobs:
+		ids := make([]ent.Value, 0, len(m.removedtransfer_jobs))
+		for id := range m.removedtransfer_jobs {
+			ids = append(ids, id)
+		}
+		return ids
+	case user.EdgeTransferItems:
+		ids := make([]ent.Value, 0, len(m.removedtransfer_items))
+		for id := range m.removedtransfer_items {
+			ids = append(ids, id)
+		}
+		return ids
 	case user.EdgeAuditEvents:
 		ids := make([]ent.Value, 0, len(m.removedaudit_events))
 		for id := range m.removedaudit_events {
@@ -10622,7 +16229,7 @@ func (m *UserMutation) RemovedIDs(name string) []ent.Value {
 
 // ClearedEdges returns all edge names that were cleared in this mutation.
 func (m *UserMutation) ClearedEdges() []string {
-	edges := make([]string, 0, 7)
+	edges := make([]string, 0, 11)
 	if m.clearedsessions {
 		edges = append(edges, user.EdgeSessions)
 	}
@@ -10640,6 +16247,18 @@ func (m *UserMutation) ClearedEdges() []string {
 	}
 	if m.clearedroutes {
 		edges = append(edges, user.EdgeRoutes)
+	}
+	if m.clearedtransfer_shares {
+		edges = append(edges, user.EdgeTransferShares)
+	}
+	if m.clearedshare_files {
+		edges = append(edges, user.EdgeShareFiles)
+	}
+	if m.clearedtransfer_jobs {
+		edges = append(edges, user.EdgeTransferJobs)
+	}
+	if m.clearedtransfer_items {
+		edges = append(edges, user.EdgeTransferItems)
 	}
 	if m.clearedaudit_events {
 		edges = append(edges, user.EdgeAuditEvents)
@@ -10663,6 +16282,14 @@ func (m *UserMutation) EdgeCleared(name string) bool {
 		return m.cleareddiagnostic_runs
 	case user.EdgeRoutes:
 		return m.clearedroutes
+	case user.EdgeTransferShares:
+		return m.clearedtransfer_shares
+	case user.EdgeShareFiles:
+		return m.clearedshare_files
+	case user.EdgeTransferJobs:
+		return m.clearedtransfer_jobs
+	case user.EdgeTransferItems:
+		return m.clearedtransfer_items
 	case user.EdgeAuditEvents:
 		return m.clearedaudit_events
 	}
@@ -10698,6 +16325,18 @@ func (m *UserMutation) ResetEdge(name string) error {
 		return nil
 	case user.EdgeRoutes:
 		m.ResetRoutes()
+		return nil
+	case user.EdgeTransferShares:
+		m.ResetTransferShares()
+		return nil
+	case user.EdgeShareFiles:
+		m.ResetShareFiles()
+		return nil
+	case user.EdgeTransferJobs:
+		m.ResetTransferJobs()
+		return nil
+	case user.EdgeTransferItems:
+		m.ResetTransferItems()
 		return nil
 	case user.EdgeAuditEvents:
 		m.ResetAuditEvents()

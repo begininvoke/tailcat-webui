@@ -23,8 +23,12 @@ import (
 	"github.com/ca-x/tailcat-webui/ent/portmapping"
 	"github.com/ca-x/tailcat-webui/ent/publishedroute"
 	"github.com/ca-x/tailcat-webui/ent/session"
+	"github.com/ca-x/tailcat-webui/ent/sharefile"
 	"github.com/ca-x/tailcat-webui/ent/tailclient"
 	"github.com/ca-x/tailcat-webui/ent/tailserver"
+	"github.com/ca-x/tailcat-webui/ent/transferitem"
+	"github.com/ca-x/tailcat-webui/ent/transferjob"
+	"github.com/ca-x/tailcat-webui/ent/transfershare"
 	"github.com/ca-x/tailcat-webui/ent/user"
 )
 
@@ -49,10 +53,18 @@ type Client struct {
 	PublishedRoute *PublishedRouteClient
 	// Session is the client for interacting with the Session builders.
 	Session *SessionClient
+	// ShareFile is the client for interacting with the ShareFile builders.
+	ShareFile *ShareFileClient
 	// TailClient is the client for interacting with the TailClient builders.
 	TailClient *TailClientClient
 	// TailServer is the client for interacting with the TailServer builders.
 	TailServer *TailServerClient
+	// TransferItem is the client for interacting with the TransferItem builders.
+	TransferItem *TransferItemClient
+	// TransferJob is the client for interacting with the TransferJob builders.
+	TransferJob *TransferJobClient
+	// TransferShare is the client for interacting with the TransferShare builders.
+	TransferShare *TransferShareClient
 	// User is the client for interacting with the User builders.
 	User *UserClient
 }
@@ -74,8 +86,12 @@ func (c *Client) init() {
 	c.PortMapping = NewPortMappingClient(c.config)
 	c.PublishedRoute = NewPublishedRouteClient(c.config)
 	c.Session = NewSessionClient(c.config)
+	c.ShareFile = NewShareFileClient(c.config)
 	c.TailClient = NewTailClientClient(c.config)
 	c.TailServer = NewTailServerClient(c.config)
+	c.TransferItem = NewTransferItemClient(c.config)
+	c.TransferJob = NewTransferJobClient(c.config)
+	c.TransferShare = NewTransferShareClient(c.config)
 	c.User = NewUserClient(c.config)
 }
 
@@ -177,8 +193,12 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 		PortMapping:    NewPortMappingClient(cfg),
 		PublishedRoute: NewPublishedRouteClient(cfg),
 		Session:        NewSessionClient(cfg),
+		ShareFile:      NewShareFileClient(cfg),
 		TailClient:     NewTailClientClient(cfg),
 		TailServer:     NewTailServerClient(cfg),
+		TransferItem:   NewTransferItemClient(cfg),
+		TransferJob:    NewTransferJobClient(cfg),
+		TransferShare:  NewTransferShareClient(cfg),
 		User:           NewUserClient(cfg),
 	}, nil
 }
@@ -207,8 +227,12 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 		PortMapping:    NewPortMappingClient(cfg),
 		PublishedRoute: NewPublishedRouteClient(cfg),
 		Session:        NewSessionClient(cfg),
+		ShareFile:      NewShareFileClient(cfg),
 		TailClient:     NewTailClientClient(cfg),
 		TailServer:     NewTailServerClient(cfg),
+		TransferItem:   NewTransferItemClient(cfg),
+		TransferJob:    NewTransferJobClient(cfg),
+		TransferShare:  NewTransferShareClient(cfg),
 		User:           NewUserClient(cfg),
 	}, nil
 }
@@ -240,7 +264,8 @@ func (c *Client) Close() error {
 func (c *Client) Use(hooks ...Hook) {
 	for _, n := range []interface{ Use(...Hook) }{
 		c.AllowedClient, c.AuditEvent, c.DiagnosticRun, c.ExitRule, c.LoginFlow,
-		c.PortMapping, c.PublishedRoute, c.Session, c.TailClient, c.TailServer, c.User,
+		c.PortMapping, c.PublishedRoute, c.Session, c.ShareFile, c.TailClient,
+		c.TailServer, c.TransferItem, c.TransferJob, c.TransferShare, c.User,
 	} {
 		n.Use(hooks...)
 	}
@@ -251,7 +276,8 @@ func (c *Client) Use(hooks ...Hook) {
 func (c *Client) Intercept(interceptors ...Interceptor) {
 	for _, n := range []interface{ Intercept(...Interceptor) }{
 		c.AllowedClient, c.AuditEvent, c.DiagnosticRun, c.ExitRule, c.LoginFlow,
-		c.PortMapping, c.PublishedRoute, c.Session, c.TailClient, c.TailServer, c.User,
+		c.PortMapping, c.PublishedRoute, c.Session, c.ShareFile, c.TailClient,
+		c.TailServer, c.TransferItem, c.TransferJob, c.TransferShare, c.User,
 	} {
 		n.Intercept(interceptors...)
 	}
@@ -276,10 +302,18 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.PublishedRoute.mutate(ctx, m)
 	case *SessionMutation:
 		return c.Session.mutate(ctx, m)
+	case *ShareFileMutation:
+		return c.ShareFile.mutate(ctx, m)
 	case *TailClientMutation:
 		return c.TailClient.mutate(ctx, m)
 	case *TailServerMutation:
 		return c.TailServer.mutate(ctx, m)
+	case *TransferItemMutation:
+		return c.TransferItem.mutate(ctx, m)
+	case *TransferJobMutation:
+		return c.TransferJob.mutate(ctx, m)
+	case *TransferShareMutation:
+		return c.TransferShare.mutate(ctx, m)
 	case *UserMutation:
 		return c.User.mutate(ctx, m)
 	default:
@@ -1511,6 +1545,171 @@ func (c *SessionClient) mutate(ctx context.Context, m *SessionMutation) (Value, 
 	}
 }
 
+// ShareFileClient is a client for the ShareFile schema.
+type ShareFileClient struct {
+	config
+}
+
+// NewShareFileClient returns a client for the ShareFile from the given config.
+func NewShareFileClient(c config) *ShareFileClient {
+	return &ShareFileClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `sharefile.Hooks(f(g(h())))`.
+func (c *ShareFileClient) Use(hooks ...Hook) {
+	c.hooks.ShareFile = append(c.hooks.ShareFile, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `sharefile.Intercept(f(g(h())))`.
+func (c *ShareFileClient) Intercept(interceptors ...Interceptor) {
+	c.inters.ShareFile = append(c.inters.ShareFile, interceptors...)
+}
+
+// Create returns a builder for creating a ShareFile entity.
+func (c *ShareFileClient) Create() *ShareFileCreate {
+	mutation := newShareFileMutation(c.config, OpCreate)
+	return &ShareFileCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of ShareFile entities.
+func (c *ShareFileClient) CreateBulk(builders ...*ShareFileCreate) *ShareFileCreateBulk {
+	return &ShareFileCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *ShareFileClient) MapCreateBulk(slice any, setFunc func(*ShareFileCreate, int)) *ShareFileCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &ShareFileCreateBulk{err: fmt.Errorf("calling to ShareFileClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*ShareFileCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &ShareFileCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for ShareFile.
+func (c *ShareFileClient) Update() *ShareFileUpdate {
+	mutation := newShareFileMutation(c.config, OpUpdate)
+	return &ShareFileUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *ShareFileClient) UpdateOne(_m *ShareFile) *ShareFileUpdateOne {
+	mutation := newShareFileMutation(c.config, OpUpdateOne, withShareFile(_m))
+	return &ShareFileUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *ShareFileClient) UpdateOneID(id string) *ShareFileUpdateOne {
+	mutation := newShareFileMutation(c.config, OpUpdateOne, withShareFileID(id))
+	return &ShareFileUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for ShareFile.
+func (c *ShareFileClient) Delete() *ShareFileDelete {
+	mutation := newShareFileMutation(c.config, OpDelete)
+	return &ShareFileDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *ShareFileClient) DeleteOne(_m *ShareFile) *ShareFileDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *ShareFileClient) DeleteOneID(id string) *ShareFileDeleteOne {
+	builder := c.Delete().Where(sharefile.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &ShareFileDeleteOne{builder}
+}
+
+// Query returns a query builder for ShareFile.
+func (c *ShareFileClient) Query() *ShareFileQuery {
+	return &ShareFileQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeShareFile},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a ShareFile entity by its id.
+func (c *ShareFileClient) Get(ctx context.Context, id string) (*ShareFile, error) {
+	return c.Query().Where(sharefile.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *ShareFileClient) GetX(ctx context.Context, id string) *ShareFile {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// QueryOwner queries the owner edge of a ShareFile.
+func (c *ShareFileClient) QueryOwner(_m *ShareFile) *UserQuery {
+	query := (&UserClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(sharefile.Table, sharefile.FieldID, id),
+			sqlgraph.To(user.Table, user.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, sharefile.OwnerTable, sharefile.OwnerColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryShare queries the share edge of a ShareFile.
+func (c *ShareFileClient) QueryShare(_m *ShareFile) *TransferShareQuery {
+	query := (&TransferShareClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(sharefile.Table, sharefile.FieldID, id),
+			sqlgraph.To(transfershare.Table, transfershare.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, sharefile.ShareTable, sharefile.ShareColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// Hooks returns the client hooks.
+func (c *ShareFileClient) Hooks() []Hook {
+	return c.hooks.ShareFile
+}
+
+// Interceptors returns the client interceptors.
+func (c *ShareFileClient) Interceptors() []Interceptor {
+	return c.inters.ShareFile
+}
+
+func (c *ShareFileClient) mutate(ctx context.Context, m *ShareFileMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&ShareFileCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&ShareFileUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&ShareFileUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&ShareFileDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown ShareFile mutation op: %q", m.Op())
+	}
+}
+
 // TailClientClient is a client for the TailClient schema.
 type TailClientClient struct {
 	config
@@ -1660,6 +1859,22 @@ func (c *TailClientClient) QueryRoutes(_m *TailClient) *PublishedRouteQuery {
 			sqlgraph.From(tailclient.Table, tailclient.FieldID, id),
 			sqlgraph.To(publishedroute.Table, publishedroute.FieldID),
 			sqlgraph.Edge(sqlgraph.O2M, false, tailclient.RoutesTable, tailclient.RoutesColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryTransferJobs queries the transfer_jobs edge of a TailClient.
+func (c *TailClientClient) QueryTransferJobs(_m *TailClient) *TransferJobQuery {
+	query := (&TransferJobClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(tailclient.Table, tailclient.FieldID, id),
+			sqlgraph.To(transferjob.Table, transferjob.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, tailclient.TransferJobsTable, tailclient.TransferJobsColumn),
 		)
 		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
 		return fromV, nil
@@ -1864,6 +2079,22 @@ func (c *TailServerClient) QueryExitRules(_m *TailServer) *ExitRuleQuery {
 	return query
 }
 
+// QueryTransferShares queries the transfer_shares edge of a TailServer.
+func (c *TailServerClient) QueryTransferShares(_m *TailServer) *TransferShareQuery {
+	query := (&TransferShareClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(tailserver.Table, tailserver.FieldID, id),
+			sqlgraph.To(transfershare.Table, transfershare.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, tailserver.TransferSharesTable, tailserver.TransferSharesColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
 // Hooks returns the client hooks.
 func (c *TailServerClient) Hooks() []Hook {
 	return c.hooks.TailServer
@@ -1886,6 +2117,533 @@ func (c *TailServerClient) mutate(ctx context.Context, m *TailServerMutation) (V
 		return (&TailServerDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
 	default:
 		return nil, fmt.Errorf("ent: unknown TailServer mutation op: %q", m.Op())
+	}
+}
+
+// TransferItemClient is a client for the TransferItem schema.
+type TransferItemClient struct {
+	config
+}
+
+// NewTransferItemClient returns a client for the TransferItem from the given config.
+func NewTransferItemClient(c config) *TransferItemClient {
+	return &TransferItemClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `transferitem.Hooks(f(g(h())))`.
+func (c *TransferItemClient) Use(hooks ...Hook) {
+	c.hooks.TransferItem = append(c.hooks.TransferItem, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `transferitem.Intercept(f(g(h())))`.
+func (c *TransferItemClient) Intercept(interceptors ...Interceptor) {
+	c.inters.TransferItem = append(c.inters.TransferItem, interceptors...)
+}
+
+// Create returns a builder for creating a TransferItem entity.
+func (c *TransferItemClient) Create() *TransferItemCreate {
+	mutation := newTransferItemMutation(c.config, OpCreate)
+	return &TransferItemCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of TransferItem entities.
+func (c *TransferItemClient) CreateBulk(builders ...*TransferItemCreate) *TransferItemCreateBulk {
+	return &TransferItemCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *TransferItemClient) MapCreateBulk(slice any, setFunc func(*TransferItemCreate, int)) *TransferItemCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &TransferItemCreateBulk{err: fmt.Errorf("calling to TransferItemClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*TransferItemCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &TransferItemCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for TransferItem.
+func (c *TransferItemClient) Update() *TransferItemUpdate {
+	mutation := newTransferItemMutation(c.config, OpUpdate)
+	return &TransferItemUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *TransferItemClient) UpdateOne(_m *TransferItem) *TransferItemUpdateOne {
+	mutation := newTransferItemMutation(c.config, OpUpdateOne, withTransferItem(_m))
+	return &TransferItemUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *TransferItemClient) UpdateOneID(id string) *TransferItemUpdateOne {
+	mutation := newTransferItemMutation(c.config, OpUpdateOne, withTransferItemID(id))
+	return &TransferItemUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for TransferItem.
+func (c *TransferItemClient) Delete() *TransferItemDelete {
+	mutation := newTransferItemMutation(c.config, OpDelete)
+	return &TransferItemDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *TransferItemClient) DeleteOne(_m *TransferItem) *TransferItemDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *TransferItemClient) DeleteOneID(id string) *TransferItemDeleteOne {
+	builder := c.Delete().Where(transferitem.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &TransferItemDeleteOne{builder}
+}
+
+// Query returns a query builder for TransferItem.
+func (c *TransferItemClient) Query() *TransferItemQuery {
+	return &TransferItemQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeTransferItem},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a TransferItem entity by its id.
+func (c *TransferItemClient) Get(ctx context.Context, id string) (*TransferItem, error) {
+	return c.Query().Where(transferitem.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *TransferItemClient) GetX(ctx context.Context, id string) *TransferItem {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// QueryOwner queries the owner edge of a TransferItem.
+func (c *TransferItemClient) QueryOwner(_m *TransferItem) *UserQuery {
+	query := (&UserClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(transferitem.Table, transferitem.FieldID, id),
+			sqlgraph.To(user.Table, user.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, transferitem.OwnerTable, transferitem.OwnerColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryJob queries the job edge of a TransferItem.
+func (c *TransferItemClient) QueryJob(_m *TransferItem) *TransferJobQuery {
+	query := (&TransferJobClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(transferitem.Table, transferitem.FieldID, id),
+			sqlgraph.To(transferjob.Table, transferjob.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, transferitem.JobTable, transferitem.JobColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// Hooks returns the client hooks.
+func (c *TransferItemClient) Hooks() []Hook {
+	return c.hooks.TransferItem
+}
+
+// Interceptors returns the client interceptors.
+func (c *TransferItemClient) Interceptors() []Interceptor {
+	return c.inters.TransferItem
+}
+
+func (c *TransferItemClient) mutate(ctx context.Context, m *TransferItemMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&TransferItemCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&TransferItemUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&TransferItemUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&TransferItemDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown TransferItem mutation op: %q", m.Op())
+	}
+}
+
+// TransferJobClient is a client for the TransferJob schema.
+type TransferJobClient struct {
+	config
+}
+
+// NewTransferJobClient returns a client for the TransferJob from the given config.
+func NewTransferJobClient(c config) *TransferJobClient {
+	return &TransferJobClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `transferjob.Hooks(f(g(h())))`.
+func (c *TransferJobClient) Use(hooks ...Hook) {
+	c.hooks.TransferJob = append(c.hooks.TransferJob, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `transferjob.Intercept(f(g(h())))`.
+func (c *TransferJobClient) Intercept(interceptors ...Interceptor) {
+	c.inters.TransferJob = append(c.inters.TransferJob, interceptors...)
+}
+
+// Create returns a builder for creating a TransferJob entity.
+func (c *TransferJobClient) Create() *TransferJobCreate {
+	mutation := newTransferJobMutation(c.config, OpCreate)
+	return &TransferJobCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of TransferJob entities.
+func (c *TransferJobClient) CreateBulk(builders ...*TransferJobCreate) *TransferJobCreateBulk {
+	return &TransferJobCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *TransferJobClient) MapCreateBulk(slice any, setFunc func(*TransferJobCreate, int)) *TransferJobCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &TransferJobCreateBulk{err: fmt.Errorf("calling to TransferJobClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*TransferJobCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &TransferJobCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for TransferJob.
+func (c *TransferJobClient) Update() *TransferJobUpdate {
+	mutation := newTransferJobMutation(c.config, OpUpdate)
+	return &TransferJobUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *TransferJobClient) UpdateOne(_m *TransferJob) *TransferJobUpdateOne {
+	mutation := newTransferJobMutation(c.config, OpUpdateOne, withTransferJob(_m))
+	return &TransferJobUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *TransferJobClient) UpdateOneID(id string) *TransferJobUpdateOne {
+	mutation := newTransferJobMutation(c.config, OpUpdateOne, withTransferJobID(id))
+	return &TransferJobUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for TransferJob.
+func (c *TransferJobClient) Delete() *TransferJobDelete {
+	mutation := newTransferJobMutation(c.config, OpDelete)
+	return &TransferJobDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *TransferJobClient) DeleteOne(_m *TransferJob) *TransferJobDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *TransferJobClient) DeleteOneID(id string) *TransferJobDeleteOne {
+	builder := c.Delete().Where(transferjob.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &TransferJobDeleteOne{builder}
+}
+
+// Query returns a query builder for TransferJob.
+func (c *TransferJobClient) Query() *TransferJobQuery {
+	return &TransferJobQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeTransferJob},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a TransferJob entity by its id.
+func (c *TransferJobClient) Get(ctx context.Context, id string) (*TransferJob, error) {
+	return c.Query().Where(transferjob.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *TransferJobClient) GetX(ctx context.Context, id string) *TransferJob {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// QueryOwner queries the owner edge of a TransferJob.
+func (c *TransferJobClient) QueryOwner(_m *TransferJob) *UserQuery {
+	query := (&UserClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(transferjob.Table, transferjob.FieldID, id),
+			sqlgraph.To(user.Table, user.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, transferjob.OwnerTable, transferjob.OwnerColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryClient queries the client edge of a TransferJob.
+func (c *TransferJobClient) QueryClient(_m *TransferJob) *TailClientQuery {
+	query := (&TailClientClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(transferjob.Table, transferjob.FieldID, id),
+			sqlgraph.To(tailclient.Table, tailclient.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, transferjob.ClientTable, transferjob.ClientColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryItems queries the items edge of a TransferJob.
+func (c *TransferJobClient) QueryItems(_m *TransferJob) *TransferItemQuery {
+	query := (&TransferItemClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(transferjob.Table, transferjob.FieldID, id),
+			sqlgraph.To(transferitem.Table, transferitem.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, transferjob.ItemsTable, transferjob.ItemsColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// Hooks returns the client hooks.
+func (c *TransferJobClient) Hooks() []Hook {
+	return c.hooks.TransferJob
+}
+
+// Interceptors returns the client interceptors.
+func (c *TransferJobClient) Interceptors() []Interceptor {
+	return c.inters.TransferJob
+}
+
+func (c *TransferJobClient) mutate(ctx context.Context, m *TransferJobMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&TransferJobCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&TransferJobUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&TransferJobUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&TransferJobDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown TransferJob mutation op: %q", m.Op())
+	}
+}
+
+// TransferShareClient is a client for the TransferShare schema.
+type TransferShareClient struct {
+	config
+}
+
+// NewTransferShareClient returns a client for the TransferShare from the given config.
+func NewTransferShareClient(c config) *TransferShareClient {
+	return &TransferShareClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `transfershare.Hooks(f(g(h())))`.
+func (c *TransferShareClient) Use(hooks ...Hook) {
+	c.hooks.TransferShare = append(c.hooks.TransferShare, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `transfershare.Intercept(f(g(h())))`.
+func (c *TransferShareClient) Intercept(interceptors ...Interceptor) {
+	c.inters.TransferShare = append(c.inters.TransferShare, interceptors...)
+}
+
+// Create returns a builder for creating a TransferShare entity.
+func (c *TransferShareClient) Create() *TransferShareCreate {
+	mutation := newTransferShareMutation(c.config, OpCreate)
+	return &TransferShareCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of TransferShare entities.
+func (c *TransferShareClient) CreateBulk(builders ...*TransferShareCreate) *TransferShareCreateBulk {
+	return &TransferShareCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *TransferShareClient) MapCreateBulk(slice any, setFunc func(*TransferShareCreate, int)) *TransferShareCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &TransferShareCreateBulk{err: fmt.Errorf("calling to TransferShareClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*TransferShareCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &TransferShareCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for TransferShare.
+func (c *TransferShareClient) Update() *TransferShareUpdate {
+	mutation := newTransferShareMutation(c.config, OpUpdate)
+	return &TransferShareUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *TransferShareClient) UpdateOne(_m *TransferShare) *TransferShareUpdateOne {
+	mutation := newTransferShareMutation(c.config, OpUpdateOne, withTransferShare(_m))
+	return &TransferShareUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *TransferShareClient) UpdateOneID(id string) *TransferShareUpdateOne {
+	mutation := newTransferShareMutation(c.config, OpUpdateOne, withTransferShareID(id))
+	return &TransferShareUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for TransferShare.
+func (c *TransferShareClient) Delete() *TransferShareDelete {
+	mutation := newTransferShareMutation(c.config, OpDelete)
+	return &TransferShareDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *TransferShareClient) DeleteOne(_m *TransferShare) *TransferShareDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *TransferShareClient) DeleteOneID(id string) *TransferShareDeleteOne {
+	builder := c.Delete().Where(transfershare.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &TransferShareDeleteOne{builder}
+}
+
+// Query returns a query builder for TransferShare.
+func (c *TransferShareClient) Query() *TransferShareQuery {
+	return &TransferShareQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeTransferShare},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a TransferShare entity by its id.
+func (c *TransferShareClient) Get(ctx context.Context, id string) (*TransferShare, error) {
+	return c.Query().Where(transfershare.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *TransferShareClient) GetX(ctx context.Context, id string) *TransferShare {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// QueryOwner queries the owner edge of a TransferShare.
+func (c *TransferShareClient) QueryOwner(_m *TransferShare) *UserQuery {
+	query := (&UserClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(transfershare.Table, transfershare.FieldID, id),
+			sqlgraph.To(user.Table, user.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, transfershare.OwnerTable, transfershare.OwnerColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryServer queries the server edge of a TransferShare.
+func (c *TransferShareClient) QueryServer(_m *TransferShare) *TailServerQuery {
+	query := (&TailServerClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(transfershare.Table, transfershare.FieldID, id),
+			sqlgraph.To(tailserver.Table, tailserver.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, transfershare.ServerTable, transfershare.ServerColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryFiles queries the files edge of a TransferShare.
+func (c *TransferShareClient) QueryFiles(_m *TransferShare) *ShareFileQuery {
+	query := (&ShareFileClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(transfershare.Table, transfershare.FieldID, id),
+			sqlgraph.To(sharefile.Table, sharefile.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, transfershare.FilesTable, transfershare.FilesColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// Hooks returns the client hooks.
+func (c *TransferShareClient) Hooks() []Hook {
+	return c.hooks.TransferShare
+}
+
+// Interceptors returns the client interceptors.
+func (c *TransferShareClient) Interceptors() []Interceptor {
+	return c.inters.TransferShare
+}
+
+func (c *TransferShareClient) mutate(ctx context.Context, m *TransferShareMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&TransferShareCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&TransferShareUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&TransferShareUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&TransferShareDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown TransferShare mutation op: %q", m.Op())
 	}
 }
 
@@ -2093,6 +2851,70 @@ func (c *UserClient) QueryRoutes(_m *User) *PublishedRouteQuery {
 	return query
 }
 
+// QueryTransferShares queries the transfer_shares edge of a User.
+func (c *UserClient) QueryTransferShares(_m *User) *TransferShareQuery {
+	query := (&TransferShareClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(user.Table, user.FieldID, id),
+			sqlgraph.To(transfershare.Table, transfershare.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, user.TransferSharesTable, user.TransferSharesColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryShareFiles queries the share_files edge of a User.
+func (c *UserClient) QueryShareFiles(_m *User) *ShareFileQuery {
+	query := (&ShareFileClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(user.Table, user.FieldID, id),
+			sqlgraph.To(sharefile.Table, sharefile.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, user.ShareFilesTable, user.ShareFilesColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryTransferJobs queries the transfer_jobs edge of a User.
+func (c *UserClient) QueryTransferJobs(_m *User) *TransferJobQuery {
+	query := (&TransferJobClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(user.Table, user.FieldID, id),
+			sqlgraph.To(transferjob.Table, transferjob.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, user.TransferJobsTable, user.TransferJobsColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryTransferItems queries the transfer_items edge of a User.
+func (c *UserClient) QueryTransferItems(_m *User) *TransferItemQuery {
+	query := (&TransferItemClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(user.Table, user.FieldID, id),
+			sqlgraph.To(transferitem.Table, transferitem.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, user.TransferItemsTable, user.TransferItemsColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
 // QueryAuditEvents queries the audit_events edge of a User.
 func (c *UserClient) QueryAuditEvents(_m *User) *AuditEventQuery {
 	query := (&AuditEventClient{config: c.config}).Query()
@@ -2138,10 +2960,12 @@ func (c *UserClient) mutate(ctx context.Context, m *UserMutation) (Value, error)
 type (
 	hooks struct {
 		AllowedClient, AuditEvent, DiagnosticRun, ExitRule, LoginFlow, PortMapping,
-		PublishedRoute, Session, TailClient, TailServer, User []ent.Hook
+		PublishedRoute, Session, ShareFile, TailClient, TailServer, TransferItem,
+		TransferJob, TransferShare, User []ent.Hook
 	}
 	inters struct {
 		AllowedClient, AuditEvent, DiagnosticRun, ExitRule, LoginFlow, PortMapping,
-		PublishedRoute, Session, TailClient, TailServer, User []ent.Interceptor
+		PublishedRoute, Session, ShareFile, TailClient, TailServer, TransferItem,
+		TransferJob, TransferShare, User []ent.Interceptor
 	}
 )

@@ -657,6 +657,29 @@ func HasExitRulesWith(preds ...predicate.ExitRule) predicate.TailServer {
 	})
 }
 
+// HasTransferShares applies the HasEdge predicate on the "transfer_shares" edge.
+func HasTransferShares() predicate.TailServer {
+	return predicate.TailServer(func(s *sql.Selector) {
+		step := sqlgraph.NewStep(
+			sqlgraph.From(Table, FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, TransferSharesTable, TransferSharesColumn),
+		)
+		sqlgraph.HasNeighbors(s, step)
+	})
+}
+
+// HasTransferSharesWith applies the HasEdge predicate on the "transfer_shares" edge with a given conditions (other predicates).
+func HasTransferSharesWith(preds ...predicate.TransferShare) predicate.TailServer {
+	return predicate.TailServer(func(s *sql.Selector) {
+		step := newTransferSharesStep()
+		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
+			for _, p := range preds {
+				p(s)
+			}
+		})
+	})
+}
+
 // And groups predicates with the AND operator between them.
 func And(predicates ...predicate.TailServer) predicate.TailServer {
 	return predicate.TailServer(sql.AndPredicates(predicates...))

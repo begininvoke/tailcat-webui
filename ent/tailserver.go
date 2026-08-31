@@ -56,9 +56,11 @@ type TailServerEdges struct {
 	AllowedClients []*AllowedClient `json:"allowed_clients,omitempty"`
 	// ExitRules holds the value of the exit_rules edge.
 	ExitRules []*ExitRule `json:"exit_rules,omitempty"`
+	// TransferShares holds the value of the transfer_shares edge.
+	TransferShares []*TransferShare `json:"transfer_shares,omitempty"`
 	// loadedTypes holds the information for reporting if a
 	// type was loaded (or requested) in eager-loading or not.
-	loadedTypes [4]bool
+	loadedTypes [5]bool
 }
 
 // OwnerOrErr returns the Owner value or an error if the edge
@@ -97,6 +99,15 @@ func (e TailServerEdges) ExitRulesOrErr() ([]*ExitRule, error) {
 		return e.ExitRules, nil
 	}
 	return nil, &NotLoadedError{edge: "exit_rules"}
+}
+
+// TransferSharesOrErr returns the TransferShares value or an error if the edge
+// was not loaded in eager-loading.
+func (e TailServerEdges) TransferSharesOrErr() ([]*TransferShare, error) {
+	if e.loadedTypes[4] {
+		return e.TransferShares, nil
+	}
+	return nil, &NotLoadedError{edge: "transfer_shares"}
 }
 
 // scanValues returns the types for scanning values from sql.Rows.
@@ -230,6 +241,11 @@ func (_m *TailServer) QueryAllowedClients() *AllowedClientQuery {
 // QueryExitRules queries the "exit_rules" edge of the TailServer entity.
 func (_m *TailServer) QueryExitRules() *ExitRuleQuery {
 	return NewTailServerClient(_m.config).QueryExitRules(_m)
+}
+
+// QueryTransferShares queries the "transfer_shares" edge of the TailServer entity.
+func (_m *TailServer) QueryTransferShares() *TransferShareQuery {
+	return NewTailServerClient(_m.config).QueryTransferShares(_m)
 }
 
 // Update returns a builder for updating this TailServer.

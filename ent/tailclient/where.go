@@ -804,6 +804,29 @@ func HasRoutesWith(preds ...predicate.PublishedRoute) predicate.TailClient {
 	})
 }
 
+// HasTransferJobs applies the HasEdge predicate on the "transfer_jobs" edge.
+func HasTransferJobs() predicate.TailClient {
+	return predicate.TailClient(func(s *sql.Selector) {
+		step := sqlgraph.NewStep(
+			sqlgraph.From(Table, FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, TransferJobsTable, TransferJobsColumn),
+		)
+		sqlgraph.HasNeighbors(s, step)
+	})
+}
+
+// HasTransferJobsWith applies the HasEdge predicate on the "transfer_jobs" edge with a given conditions (other predicates).
+func HasTransferJobsWith(preds ...predicate.TransferJob) predicate.TailClient {
+	return predicate.TailClient(func(s *sql.Selector) {
+		step := newTransferJobsStep()
+		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
+			for _, p := range preds {
+				p(s)
+			}
+		})
+	})
+}
+
 // And groups predicates with the AND operator between them.
 func And(predicates ...predicate.TailClient) predicate.TailClient {
 	return predicate.TailClient(sql.AndPredicates(predicates...))

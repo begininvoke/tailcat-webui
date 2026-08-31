@@ -14,6 +14,7 @@ import (
 	"github.com/ca-x/tailcat-webui/ent/exitrule"
 	"github.com/ca-x/tailcat-webui/ent/portmapping"
 	"github.com/ca-x/tailcat-webui/ent/tailserver"
+	"github.com/ca-x/tailcat-webui/ent/transfershare"
 	"github.com/ca-x/tailcat-webui/ent/user"
 )
 
@@ -222,6 +223,21 @@ func (_c *TailServerCreate) AddExitRules(v ...*ExitRule) *TailServerCreate {
 		ids[i] = v[i].ID
 	}
 	return _c.AddExitRuleIDs(ids...)
+}
+
+// AddTransferShareIDs adds the "transfer_shares" edge to the TransferShare entity by IDs.
+func (_c *TailServerCreate) AddTransferShareIDs(ids ...string) *TailServerCreate {
+	_c.mutation.AddTransferShareIDs(ids...)
+	return _c
+}
+
+// AddTransferShares adds the "transfer_shares" edges to the TransferShare entity.
+func (_c *TailServerCreate) AddTransferShares(v ...*TransferShare) *TailServerCreate {
+	ids := make([]string, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _c.AddTransferShareIDs(ids...)
 }
 
 // Mutation returns the TailServerMutation object of the builder.
@@ -468,6 +484,22 @@ func (_c *TailServerCreate) createSpec() (*TailServer, *sqlgraph.CreateSpec) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(exitrule.FieldID, field.TypeString),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges = append(_spec.Edges, edge)
+	}
+	if nodes := _c.mutation.TransferSharesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   tailserver.TransferSharesTable,
+			Columns: []string{tailserver.TransferSharesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(transfershare.FieldID, field.TypeString),
 			},
 		}
 		for _, k := range nodes {

@@ -28,10 +28,18 @@ type Tx struct {
 	PublishedRoute *PublishedRouteClient
 	// Session is the client for interacting with the Session builders.
 	Session *SessionClient
+	// ShareFile is the client for interacting with the ShareFile builders.
+	ShareFile *ShareFileClient
 	// TailClient is the client for interacting with the TailClient builders.
 	TailClient *TailClientClient
 	// TailServer is the client for interacting with the TailServer builders.
 	TailServer *TailServerClient
+	// TransferItem is the client for interacting with the TransferItem builders.
+	TransferItem *TransferItemClient
+	// TransferJob is the client for interacting with the TransferJob builders.
+	TransferJob *TransferJobClient
+	// TransferShare is the client for interacting with the TransferShare builders.
+	TransferShare *TransferShareClient
 	// User is the client for interacting with the User builders.
 	User *UserClient
 
@@ -173,8 +181,12 @@ func (tx *Tx) init() {
 	tx.PortMapping = NewPortMappingClient(tx.config)
 	tx.PublishedRoute = NewPublishedRouteClient(tx.config)
 	tx.Session = NewSessionClient(tx.config)
+	tx.ShareFile = NewShareFileClient(tx.config)
 	tx.TailClient = NewTailClientClient(tx.config)
 	tx.TailServer = NewTailServerClient(tx.config)
+	tx.TransferItem = NewTransferItemClient(tx.config)
+	tx.TransferJob = NewTransferJobClient(tx.config)
+	tx.TransferShare = NewTransferShareClient(tx.config)
 	tx.User = NewUserClient(tx.config)
 }
 

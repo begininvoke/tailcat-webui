@@ -15,8 +15,12 @@ import (
 	"github.com/ca-x/tailcat-webui/ent/exitrule"
 	"github.com/ca-x/tailcat-webui/ent/publishedroute"
 	"github.com/ca-x/tailcat-webui/ent/session"
+	"github.com/ca-x/tailcat-webui/ent/sharefile"
 	"github.com/ca-x/tailcat-webui/ent/tailclient"
 	"github.com/ca-x/tailcat-webui/ent/tailserver"
+	"github.com/ca-x/tailcat-webui/ent/transferitem"
+	"github.com/ca-x/tailcat-webui/ent/transferjob"
+	"github.com/ca-x/tailcat-webui/ent/transfershare"
 	"github.com/ca-x/tailcat-webui/ent/user"
 )
 
@@ -211,6 +215,66 @@ func (_c *UserCreate) AddRoutes(v ...*PublishedRoute) *UserCreate {
 		ids[i] = v[i].ID
 	}
 	return _c.AddRouteIDs(ids...)
+}
+
+// AddTransferShareIDs adds the "transfer_shares" edge to the TransferShare entity by IDs.
+func (_c *UserCreate) AddTransferShareIDs(ids ...string) *UserCreate {
+	_c.mutation.AddTransferShareIDs(ids...)
+	return _c
+}
+
+// AddTransferShares adds the "transfer_shares" edges to the TransferShare entity.
+func (_c *UserCreate) AddTransferShares(v ...*TransferShare) *UserCreate {
+	ids := make([]string, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _c.AddTransferShareIDs(ids...)
+}
+
+// AddShareFileIDs adds the "share_files" edge to the ShareFile entity by IDs.
+func (_c *UserCreate) AddShareFileIDs(ids ...string) *UserCreate {
+	_c.mutation.AddShareFileIDs(ids...)
+	return _c
+}
+
+// AddShareFiles adds the "share_files" edges to the ShareFile entity.
+func (_c *UserCreate) AddShareFiles(v ...*ShareFile) *UserCreate {
+	ids := make([]string, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _c.AddShareFileIDs(ids...)
+}
+
+// AddTransferJobIDs adds the "transfer_jobs" edge to the TransferJob entity by IDs.
+func (_c *UserCreate) AddTransferJobIDs(ids ...string) *UserCreate {
+	_c.mutation.AddTransferJobIDs(ids...)
+	return _c
+}
+
+// AddTransferJobs adds the "transfer_jobs" edges to the TransferJob entity.
+func (_c *UserCreate) AddTransferJobs(v ...*TransferJob) *UserCreate {
+	ids := make([]string, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _c.AddTransferJobIDs(ids...)
+}
+
+// AddTransferItemIDs adds the "transfer_items" edge to the TransferItem entity by IDs.
+func (_c *UserCreate) AddTransferItemIDs(ids ...string) *UserCreate {
+	_c.mutation.AddTransferItemIDs(ids...)
+	return _c
+}
+
+// AddTransferItems adds the "transfer_items" edges to the TransferItem entity.
+func (_c *UserCreate) AddTransferItems(v ...*TransferItem) *UserCreate {
+	ids := make([]string, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _c.AddTransferItemIDs(ids...)
 }
 
 // AddAuditEventIDs adds the "audit_events" edge to the AuditEvent entity by IDs.
@@ -453,6 +517,70 @@ func (_c *UserCreate) createSpec() (*User, *sqlgraph.CreateSpec) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(publishedroute.FieldID, field.TypeString),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges = append(_spec.Edges, edge)
+	}
+	if nodes := _c.mutation.TransferSharesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.TransferSharesTable,
+			Columns: []string{user.TransferSharesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(transfershare.FieldID, field.TypeString),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges = append(_spec.Edges, edge)
+	}
+	if nodes := _c.mutation.ShareFilesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.ShareFilesTable,
+			Columns: []string{user.ShareFilesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(sharefile.FieldID, field.TypeString),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges = append(_spec.Edges, edge)
+	}
+	if nodes := _c.mutation.TransferJobsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.TransferJobsTable,
+			Columns: []string{user.TransferJobsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(transferjob.FieldID, field.TypeString),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges = append(_spec.Edges, edge)
+	}
+	if nodes := _c.mutation.TransferItemsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.TransferItemsTable,
+			Columns: []string{user.TransferItemsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(transferitem.FieldID, field.TypeString),
 			},
 		}
 		for _, k := range nodes {

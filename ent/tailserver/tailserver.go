@@ -45,6 +45,8 @@ const (
 	EdgeAllowedClients = "allowed_clients"
 	// EdgeExitRules holds the string denoting the exit_rules edge name in mutations.
 	EdgeExitRules = "exit_rules"
+	// EdgeTransferShares holds the string denoting the transfer_shares edge name in mutations.
+	EdgeTransferShares = "transfer_shares"
 	// Table holds the table name of the tailserver in the database.
 	Table = "tail_servers"
 	// OwnerTable is the table that holds the owner relation/edge.
@@ -75,6 +77,13 @@ const (
 	ExitRulesInverseTable = "exit_rules"
 	// ExitRulesColumn is the table column denoting the exit_rules relation/edge.
 	ExitRulesColumn = "server_id"
+	// TransferSharesTable is the table that holds the transfer_shares relation/edge.
+	TransferSharesTable = "transfer_shares"
+	// TransferSharesInverseTable is the table name for the TransferShare entity.
+	// It exists in this package in order to avoid circular dependency with the "transfershare" package.
+	TransferSharesInverseTable = "transfer_shares"
+	// TransferSharesColumn is the table column denoting the transfer_shares relation/edge.
+	TransferSharesColumn = "server_id"
 )
 
 // Columns holds all SQL columns for tailserver fields.
@@ -256,6 +265,20 @@ func ByExitRules(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
 		sqlgraph.OrderByNeighborTerms(s, newExitRulesStep(), append([]sql.OrderTerm{term}, terms...)...)
 	}
 }
+
+// ByTransferSharesCount orders the results by transfer_shares count.
+func ByTransferSharesCount(opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborsCount(s, newTransferSharesStep(), opts...)
+	}
+}
+
+// ByTransferShares orders the results by transfer_shares terms.
+func ByTransferShares(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newTransferSharesStep(), append([]sql.OrderTerm{term}, terms...)...)
+	}
+}
 func newOwnerStep() *sqlgraph.Step {
 	return sqlgraph.NewStep(
 		sqlgraph.From(Table, FieldID),
@@ -282,5 +305,12 @@ func newExitRulesStep() *sqlgraph.Step {
 		sqlgraph.From(Table, FieldID),
 		sqlgraph.To(ExitRulesInverseTable, FieldID),
 		sqlgraph.Edge(sqlgraph.O2M, false, ExitRulesTable, ExitRulesColumn),
+	)
+}
+func newTransferSharesStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(TransferSharesInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.O2M, false, TransferSharesTable, TransferSharesColumn),
 	)
 }

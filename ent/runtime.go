@@ -14,8 +14,12 @@ import (
 	"github.com/ca-x/tailcat-webui/ent/publishedroute"
 	"github.com/ca-x/tailcat-webui/ent/schema"
 	"github.com/ca-x/tailcat-webui/ent/session"
+	"github.com/ca-x/tailcat-webui/ent/sharefile"
 	"github.com/ca-x/tailcat-webui/ent/tailclient"
 	"github.com/ca-x/tailcat-webui/ent/tailserver"
+	"github.com/ca-x/tailcat-webui/ent/transferitem"
+	"github.com/ca-x/tailcat-webui/ent/transferjob"
+	"github.com/ca-x/tailcat-webui/ent/transfershare"
 	"github.com/ca-x/tailcat-webui/ent/user"
 )
 
@@ -193,6 +197,56 @@ func init() {
 	sessionDescID := sessionFields[0].Descriptor()
 	// session.DefaultID holds the default value on creation for the id field.
 	session.DefaultID = sessionDescID.Default.(func() string)
+	sharefileFields := schema.ShareFile{}.Fields()
+	_ = sharefileFields
+	// sharefileDescStorageName is the schema descriptor for storage_name field.
+	sharefileDescStorageName := sharefileFields[3].Descriptor()
+	// sharefile.StorageNameValidator is a validator for the "storage_name" field. It is called by the builders before save.
+	sharefile.StorageNameValidator = sharefileDescStorageName.Validators[0].(func(string) error)
+	// sharefileDescVirtualPath is the schema descriptor for virtual_path field.
+	sharefileDescVirtualPath := sharefileFields[4].Descriptor()
+	// sharefile.VirtualPathValidator is a validator for the "virtual_path" field. It is called by the builders before save.
+	sharefile.VirtualPathValidator = sharefileDescVirtualPath.Validators[0].(func(string) error)
+	// sharefileDescSizeBytes is the schema descriptor for size_bytes field.
+	sharefileDescSizeBytes := sharefileFields[5].Descriptor()
+	// sharefile.SizeBytesValidator is a validator for the "size_bytes" field. It is called by the builders before save.
+	sharefile.SizeBytesValidator = sharefileDescSizeBytes.Validators[0].(func(int64) error)
+	// sharefileDescBlake3 is the schema descriptor for blake3 field.
+	sharefileDescBlake3 := sharefileFields[7].Descriptor()
+	// sharefile.Blake3Validator is a validator for the "blake3" field. It is called by the builders before save.
+	sharefile.Blake3Validator = func() func(string) error {
+		validators := sharefileDescBlake3.Validators
+		fns := [...]func(string) error{
+			validators[0].(func(string) error),
+			validators[1].(func(string) error),
+		}
+		return func(blake3 string) error {
+			for _, fn := range fns {
+				if err := fn(blake3); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}()
+	// sharefileDescBlockSize is the schema descriptor for block_size field.
+	sharefileDescBlockSize := sharefileFields[8].Descriptor()
+	// sharefile.DefaultBlockSize holds the default value on creation for the block_size field.
+	sharefile.DefaultBlockSize = sharefileDescBlockSize.Default.(int64)
+	// sharefile.BlockSizeValidator is a validator for the "block_size" field. It is called by the builders before save.
+	sharefile.BlockSizeValidator = sharefileDescBlockSize.Validators[0].(func(int64) error)
+	// sharefileDescBlockHashes is the schema descriptor for block_hashes field.
+	sharefileDescBlockHashes := sharefileFields[9].Descriptor()
+	// sharefile.BlockHashesValidator is a validator for the "block_hashes" field. It is called by the builders before save.
+	sharefile.BlockHashesValidator = sharefileDescBlockHashes.Validators[0].(func([]string) error)
+	// sharefileDescCreatedAt is the schema descriptor for created_at field.
+	sharefileDescCreatedAt := sharefileFields[10].Descriptor()
+	// sharefile.DefaultCreatedAt holds the default value on creation for the created_at field.
+	sharefile.DefaultCreatedAt = sharefileDescCreatedAt.Default.(func() time.Time)
+	// sharefileDescID is the schema descriptor for id field.
+	sharefileDescID := sharefileFields[0].Descriptor()
+	// sharefile.DefaultID holds the default value on creation for the id field.
+	sharefile.DefaultID = sharefileDescID.Default.(func() string)
 	tailclientFields := schema.TailClient{}.Fields()
 	_ = tailclientFields
 	// tailclientDescName is the schema descriptor for name field.
@@ -257,6 +311,144 @@ func init() {
 	tailserverDescID := tailserverFields[0].Descriptor()
 	// tailserver.DefaultID holds the default value on creation for the id field.
 	tailserver.DefaultID = tailserverDescID.Default.(func() string)
+	transferitemFields := schema.TransferItem{}.Fields()
+	_ = transferitemFields
+	// transferitemDescRemoteFileID is the schema descriptor for remote_file_id field.
+	transferitemDescRemoteFileID := transferitemFields[3].Descriptor()
+	// transferitem.RemoteFileIDValidator is a validator for the "remote_file_id" field. It is called by the builders before save.
+	transferitem.RemoteFileIDValidator = transferitemDescRemoteFileID.Validators[0].(func(string) error)
+	// transferitemDescStorageName is the schema descriptor for storage_name field.
+	transferitemDescStorageName := transferitemFields[4].Descriptor()
+	// transferitem.StorageNameValidator is a validator for the "storage_name" field. It is called by the builders before save.
+	transferitem.StorageNameValidator = transferitemDescStorageName.Validators[0].(func(string) error)
+	// transferitemDescVirtualPath is the schema descriptor for virtual_path field.
+	transferitemDescVirtualPath := transferitemFields[5].Descriptor()
+	// transferitem.VirtualPathValidator is a validator for the "virtual_path" field. It is called by the builders before save.
+	transferitem.VirtualPathValidator = transferitemDescVirtualPath.Validators[0].(func(string) error)
+	// transferitemDescSizeBytes is the schema descriptor for size_bytes field.
+	transferitemDescSizeBytes := transferitemFields[6].Descriptor()
+	// transferitem.SizeBytesValidator is a validator for the "size_bytes" field. It is called by the builders before save.
+	transferitem.SizeBytesValidator = transferitemDescSizeBytes.Validators[0].(func(int64) error)
+	// transferitemDescBlake3 is the schema descriptor for blake3 field.
+	transferitemDescBlake3 := transferitemFields[8].Descriptor()
+	// transferitem.Blake3Validator is a validator for the "blake3" field. It is called by the builders before save.
+	transferitem.Blake3Validator = func() func(string) error {
+		validators := transferitemDescBlake3.Validators
+		fns := [...]func(string) error{
+			validators[0].(func(string) error),
+			validators[1].(func(string) error),
+		}
+		return func(blake3 string) error {
+			for _, fn := range fns {
+				if err := fn(blake3); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}()
+	// transferitemDescBlockSize is the schema descriptor for block_size field.
+	transferitemDescBlockSize := transferitemFields[9].Descriptor()
+	// transferitem.DefaultBlockSize holds the default value on creation for the block_size field.
+	transferitem.DefaultBlockSize = transferitemDescBlockSize.Default.(int64)
+	// transferitem.BlockSizeValidator is a validator for the "block_size" field. It is called by the builders before save.
+	transferitem.BlockSizeValidator = transferitemDescBlockSize.Validators[0].(func(int64) error)
+	// transferitemDescBlockHashes is the schema descriptor for block_hashes field.
+	transferitemDescBlockHashes := transferitemFields[10].Descriptor()
+	// transferitem.BlockHashesValidator is a validator for the "block_hashes" field. It is called by the builders before save.
+	transferitem.BlockHashesValidator = transferitemDescBlockHashes.Validators[0].(func([]string) error)
+	// transferitemDescCompletedBlocks is the schema descriptor for completed_blocks field.
+	transferitemDescCompletedBlocks := transferitemFields[11].Descriptor()
+	// transferitem.DefaultCompletedBlocks holds the default value on creation for the completed_blocks field.
+	transferitem.DefaultCompletedBlocks = transferitemDescCompletedBlocks.Default.([]int)
+	// transferitemDescReceivedBytes is the schema descriptor for received_bytes field.
+	transferitemDescReceivedBytes := transferitemFields[12].Descriptor()
+	// transferitem.DefaultReceivedBytes holds the default value on creation for the received_bytes field.
+	transferitem.DefaultReceivedBytes = transferitemDescReceivedBytes.Default.(int64)
+	// transferitem.ReceivedBytesValidator is a validator for the "received_bytes" field. It is called by the builders before save.
+	transferitem.ReceivedBytesValidator = transferitemDescReceivedBytes.Validators[0].(func(int64) error)
+	// transferitemDescCreatedAt is the schema descriptor for created_at field.
+	transferitemDescCreatedAt := transferitemFields[17].Descriptor()
+	// transferitem.DefaultCreatedAt holds the default value on creation for the created_at field.
+	transferitem.DefaultCreatedAt = transferitemDescCreatedAt.Default.(func() time.Time)
+	// transferitemDescUpdatedAt is the schema descriptor for updated_at field.
+	transferitemDescUpdatedAt := transferitemFields[18].Descriptor()
+	// transferitem.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	transferitem.DefaultUpdatedAt = transferitemDescUpdatedAt.Default.(func() time.Time)
+	// transferitem.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	transferitem.UpdateDefaultUpdatedAt = transferitemDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// transferitemDescID is the schema descriptor for id field.
+	transferitemDescID := transferitemFields[0].Descriptor()
+	// transferitem.DefaultID holds the default value on creation for the id field.
+	transferitem.DefaultID = transferitemDescID.Default.(func() string)
+	transferjobFields := schema.TransferJob{}.Fields()
+	_ = transferjobFields
+	// transferjobDescRemoteShareID is the schema descriptor for remote_share_id field.
+	transferjobDescRemoteShareID := transferjobFields[3].Descriptor()
+	// transferjob.RemoteShareIDValidator is a validator for the "remote_share_id" field. It is called by the builders before save.
+	transferjob.RemoteShareIDValidator = transferjobDescRemoteShareID.Validators[0].(func(string) error)
+	// transferjobDescRemoteCapabilityCipher is the schema descriptor for remote_capability_cipher field.
+	transferjobDescRemoteCapabilityCipher := transferjobFields[4].Descriptor()
+	// transferjob.RemoteCapabilityCipherValidator is a validator for the "remote_capability_cipher" field. It is called by the builders before save.
+	transferjob.RemoteCapabilityCipherValidator = transferjobDescRemoteCapabilityCipher.Validators[0].(func([]byte) error)
+	// transferjobDescTotalBytes is the schema descriptor for total_bytes field.
+	transferjobDescTotalBytes := transferjobFields[6].Descriptor()
+	// transferjob.DefaultTotalBytes holds the default value on creation for the total_bytes field.
+	transferjob.DefaultTotalBytes = transferjobDescTotalBytes.Default.(int64)
+	// transferjob.TotalBytesValidator is a validator for the "total_bytes" field. It is called by the builders before save.
+	transferjob.TotalBytesValidator = transferjobDescTotalBytes.Validators[0].(func(int64) error)
+	// transferjobDescReceivedBytes is the schema descriptor for received_bytes field.
+	transferjobDescReceivedBytes := transferjobFields[7].Descriptor()
+	// transferjob.DefaultReceivedBytes holds the default value on creation for the received_bytes field.
+	transferjob.DefaultReceivedBytes = transferjobDescReceivedBytes.Default.(int64)
+	// transferjob.ReceivedBytesValidator is a validator for the "received_bytes" field. It is called by the builders before save.
+	transferjob.ReceivedBytesValidator = transferjobDescReceivedBytes.Validators[0].(func(int64) error)
+	// transferjobDescCreatedAt is the schema descriptor for created_at field.
+	transferjobDescCreatedAt := transferjobFields[12].Descriptor()
+	// transferjob.DefaultCreatedAt holds the default value on creation for the created_at field.
+	transferjob.DefaultCreatedAt = transferjobDescCreatedAt.Default.(func() time.Time)
+	// transferjobDescUpdatedAt is the schema descriptor for updated_at field.
+	transferjobDescUpdatedAt := transferjobFields[13].Descriptor()
+	// transferjob.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	transferjob.DefaultUpdatedAt = transferjobDescUpdatedAt.Default.(func() time.Time)
+	// transferjob.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	transferjob.UpdateDefaultUpdatedAt = transferjobDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// transferjobDescID is the schema descriptor for id field.
+	transferjobDescID := transferjobFields[0].Descriptor()
+	// transferjob.DefaultID holds the default value on creation for the id field.
+	transferjob.DefaultID = transferjobDescID.Default.(func() string)
+	transfershareFields := schema.TransferShare{}.Fields()
+	_ = transfershareFields
+	// transfershareDescCapabilityHash is the schema descriptor for capability_hash field.
+	transfershareDescCapabilityHash := transfershareFields[4].Descriptor()
+	// transfershare.CapabilityHashValidator is a validator for the "capability_hash" field. It is called by the builders before save.
+	transfershare.CapabilityHashValidator = transfershareDescCapabilityHash.Validators[0].(func([]byte) error)
+	// transfershareDescTotalBytes is the schema descriptor for total_bytes field.
+	transfershareDescTotalBytes := transfershareFields[5].Descriptor()
+	// transfershare.DefaultTotalBytes holds the default value on creation for the total_bytes field.
+	transfershare.DefaultTotalBytes = transfershareDescTotalBytes.Default.(int64)
+	// transfershare.TotalBytesValidator is a validator for the "total_bytes" field. It is called by the builders before save.
+	transfershare.TotalBytesValidator = transfershareDescTotalBytes.Validators[0].(func(int64) error)
+	// transfershareDescFileCount is the schema descriptor for file_count field.
+	transfershareDescFileCount := transfershareFields[6].Descriptor()
+	// transfershare.DefaultFileCount holds the default value on creation for the file_count field.
+	transfershare.DefaultFileCount = transfershareDescFileCount.Default.(int)
+	// transfershare.FileCountValidator is a validator for the "file_count" field. It is called by the builders before save.
+	transfershare.FileCountValidator = transfershareDescFileCount.Validators[0].(func(int) error)
+	// transfershareDescCreatedAt is the schema descriptor for created_at field.
+	transfershareDescCreatedAt := transfershareFields[11].Descriptor()
+	// transfershare.DefaultCreatedAt holds the default value on creation for the created_at field.
+	transfershare.DefaultCreatedAt = transfershareDescCreatedAt.Default.(func() time.Time)
+	// transfershareDescUpdatedAt is the schema descriptor for updated_at field.
+	transfershareDescUpdatedAt := transfershareFields[12].Descriptor()
+	// transfershare.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	transfershare.DefaultUpdatedAt = transfershareDescUpdatedAt.Default.(func() time.Time)
+	// transfershare.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	transfershare.UpdateDefaultUpdatedAt = transfershareDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// transfershareDescID is the schema descriptor for id field.
+	transfershareDescID := transfershareFields[0].Descriptor()
+	// transfershare.DefaultID holds the default value on creation for the id field.
+	transfershare.DefaultID = transfershareDescID.Default.(func() string)
 	userFields := schema.User{}.Fields()
 	_ = userFields
 	// userDescIssuer is the schema descriptor for issuer field.

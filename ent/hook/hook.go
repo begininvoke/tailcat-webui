@@ -105,6 +105,18 @@ func (f SessionFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, err
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.SessionMutation", m)
 }
 
+// The ShareFileFunc type is an adapter to allow the use of ordinary
+// function as ShareFile mutator.
+type ShareFileFunc func(context.Context, *ent.ShareFileMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f ShareFileFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.ShareFileMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.ShareFileMutation", m)
+}
+
 // The TailClientFunc type is an adapter to allow the use of ordinary
 // function as TailClient mutator.
 type TailClientFunc func(context.Context, *ent.TailClientMutation) (ent.Value, error)
@@ -127,6 +139,42 @@ func (f TailServerFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, 
 		return f(ctx, mv)
 	}
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.TailServerMutation", m)
+}
+
+// The TransferItemFunc type is an adapter to allow the use of ordinary
+// function as TransferItem mutator.
+type TransferItemFunc func(context.Context, *ent.TransferItemMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f TransferItemFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.TransferItemMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.TransferItemMutation", m)
+}
+
+// The TransferJobFunc type is an adapter to allow the use of ordinary
+// function as TransferJob mutator.
+type TransferJobFunc func(context.Context, *ent.TransferJobMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f TransferJobFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.TransferJobMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.TransferJobMutation", m)
+}
+
+// The TransferShareFunc type is an adapter to allow the use of ordinary
+// function as TransferShare mutator.
+type TransferShareFunc func(context.Context, *ent.TransferShareMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f TransferShareFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.TransferShareMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.TransferShareMutation", m)
 }
 
 // The UserFunc type is an adapter to allow the use of ordinary

@@ -35,6 +35,10 @@ func (User) Edges() []ent.Edge {
 		edge.To("clients", TailClient.Type).Annotations(entsql.OnDelete(entsql.Cascade)),
 		edge.To("diagnostic_runs", DiagnosticRun.Type).Annotations(entsql.OnDelete(entsql.Cascade)),
 		edge.To("routes", PublishedRoute.Type).Annotations(entsql.OnDelete(entsql.Cascade)),
+		edge.To("transfer_shares", TransferShare.Type).Annotations(entsql.OnDelete(entsql.Cascade)),
+		edge.To("share_files", ShareFile.Type).Annotations(entsql.OnDelete(entsql.Cascade)),
+		edge.To("transfer_jobs", TransferJob.Type).Annotations(entsql.OnDelete(entsql.Cascade)),
+		edge.To("transfer_items", TransferItem.Type).Annotations(entsql.OnDelete(entsql.Cascade)),
 		edge.To("audit_events", AuditEvent.Type).Annotations(entsql.OnDelete(entsql.SetNull)),
 	}
 }

@@ -17,8 +17,12 @@ import (
 	"github.com/ca-x/tailcat-webui/ent/predicate"
 	"github.com/ca-x/tailcat-webui/ent/publishedroute"
 	"github.com/ca-x/tailcat-webui/ent/session"
+	"github.com/ca-x/tailcat-webui/ent/sharefile"
 	"github.com/ca-x/tailcat-webui/ent/tailclient"
 	"github.com/ca-x/tailcat-webui/ent/tailserver"
+	"github.com/ca-x/tailcat-webui/ent/transferitem"
+	"github.com/ca-x/tailcat-webui/ent/transferjob"
+	"github.com/ca-x/tailcat-webui/ent/transfershare"
 	"github.com/ca-x/tailcat-webui/ent/user"
 )
 
@@ -191,6 +195,66 @@ func (_u *UserUpdate) AddRoutes(v ...*PublishedRoute) *UserUpdate {
 	return _u.AddRouteIDs(ids...)
 }
 
+// AddTransferShareIDs adds the "transfer_shares" edge to the TransferShare entity by IDs.
+func (_u *UserUpdate) AddTransferShareIDs(ids ...string) *UserUpdate {
+	_u.mutation.AddTransferShareIDs(ids...)
+	return _u
+}
+
+// AddTransferShares adds the "transfer_shares" edges to the TransferShare entity.
+func (_u *UserUpdate) AddTransferShares(v ...*TransferShare) *UserUpdate {
+	ids := make([]string, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddTransferShareIDs(ids...)
+}
+
+// AddShareFileIDs adds the "share_files" edge to the ShareFile entity by IDs.
+func (_u *UserUpdate) AddShareFileIDs(ids ...string) *UserUpdate {
+	_u.mutation.AddShareFileIDs(ids...)
+	return _u
+}
+
+// AddShareFiles adds the "share_files" edges to the ShareFile entity.
+func (_u *UserUpdate) AddShareFiles(v ...*ShareFile) *UserUpdate {
+	ids := make([]string, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddShareFileIDs(ids...)
+}
+
+// AddTransferJobIDs adds the "transfer_jobs" edge to the TransferJob entity by IDs.
+func (_u *UserUpdate) AddTransferJobIDs(ids ...string) *UserUpdate {
+	_u.mutation.AddTransferJobIDs(ids...)
+	return _u
+}
+
+// AddTransferJobs adds the "transfer_jobs" edges to the TransferJob entity.
+func (_u *UserUpdate) AddTransferJobs(v ...*TransferJob) *UserUpdate {
+	ids := make([]string, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddTransferJobIDs(ids...)
+}
+
+// AddTransferItemIDs adds the "transfer_items" edge to the TransferItem entity by IDs.
+func (_u *UserUpdate) AddTransferItemIDs(ids ...string) *UserUpdate {
+	_u.mutation.AddTransferItemIDs(ids...)
+	return _u
+}
+
+// AddTransferItems adds the "transfer_items" edges to the TransferItem entity.
+func (_u *UserUpdate) AddTransferItems(v ...*TransferItem) *UserUpdate {
+	ids := make([]string, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddTransferItemIDs(ids...)
+}
+
 // AddAuditEventIDs adds the "audit_events" edge to the AuditEvent entity by IDs.
 func (_u *UserUpdate) AddAuditEventIDs(ids ...string) *UserUpdate {
 	_u.mutation.AddAuditEventIDs(ids...)
@@ -335,6 +399,90 @@ func (_u *UserUpdate) RemoveRoutes(v ...*PublishedRoute) *UserUpdate {
 		ids[i] = v[i].ID
 	}
 	return _u.RemoveRouteIDs(ids...)
+}
+
+// ClearTransferShares clears all "transfer_shares" edges to the TransferShare entity.
+func (_u *UserUpdate) ClearTransferShares() *UserUpdate {
+	_u.mutation.ClearTransferShares()
+	return _u
+}
+
+// RemoveTransferShareIDs removes the "transfer_shares" edge to TransferShare entities by IDs.
+func (_u *UserUpdate) RemoveTransferShareIDs(ids ...string) *UserUpdate {
+	_u.mutation.RemoveTransferShareIDs(ids...)
+	return _u
+}
+
+// RemoveTransferShares removes "transfer_shares" edges to TransferShare entities.
+func (_u *UserUpdate) RemoveTransferShares(v ...*TransferShare) *UserUpdate {
+	ids := make([]string, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveTransferShareIDs(ids...)
+}
+
+// ClearShareFiles clears all "share_files" edges to the ShareFile entity.
+func (_u *UserUpdate) ClearShareFiles() *UserUpdate {
+	_u.mutation.ClearShareFiles()
+	return _u
+}
+
+// RemoveShareFileIDs removes the "share_files" edge to ShareFile entities by IDs.
+func (_u *UserUpdate) RemoveShareFileIDs(ids ...string) *UserUpdate {
+	_u.mutation.RemoveShareFileIDs(ids...)
+	return _u
+}
+
+// RemoveShareFiles removes "share_files" edges to ShareFile entities.
+func (_u *UserUpdate) RemoveShareFiles(v ...*ShareFile) *UserUpdate {
+	ids := make([]string, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveShareFileIDs(ids...)
+}
+
+// ClearTransferJobs clears all "transfer_jobs" edges to the TransferJob entity.
+func (_u *UserUpdate) ClearTransferJobs() *UserUpdate {
+	_u.mutation.ClearTransferJobs()
+	return _u
+}
+
+// RemoveTransferJobIDs removes the "transfer_jobs" edge to TransferJob entities by IDs.
+func (_u *UserUpdate) RemoveTransferJobIDs(ids ...string) *UserUpdate {
+	_u.mutation.RemoveTransferJobIDs(ids...)
+	return _u
+}
+
+// RemoveTransferJobs removes "transfer_jobs" edges to TransferJob entities.
+func (_u *UserUpdate) RemoveTransferJobs(v ...*TransferJob) *UserUpdate {
+	ids := make([]string, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveTransferJobIDs(ids...)
+}
+
+// ClearTransferItems clears all "transfer_items" edges to the TransferItem entity.
+func (_u *UserUpdate) ClearTransferItems() *UserUpdate {
+	_u.mutation.ClearTransferItems()
+	return _u
+}
+
+// RemoveTransferItemIDs removes the "transfer_items" edge to TransferItem entities by IDs.
+func (_u *UserUpdate) RemoveTransferItemIDs(ids ...string) *UserUpdate {
+	_u.mutation.RemoveTransferItemIDs(ids...)
+	return _u
+}
+
+// RemoveTransferItems removes "transfer_items" edges to TransferItem entities.
+func (_u *UserUpdate) RemoveTransferItems(v ...*TransferItem) *UserUpdate {
+	ids := make([]string, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveTransferItemIDs(ids...)
 }
 
 // ClearAuditEvents clears all "audit_events" edges to the AuditEvent entity.
@@ -694,6 +842,186 @@ func (_u *UserUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 		}
 		_spec.Edges.Add = append(_spec.Edges.Add, edge)
 	}
+	if _u.mutation.TransferSharesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.TransferSharesTable,
+			Columns: []string{user.TransferSharesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(transfershare.FieldID, field.TypeString),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedTransferSharesIDs(); len(nodes) > 0 && !_u.mutation.TransferSharesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.TransferSharesTable,
+			Columns: []string{user.TransferSharesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(transfershare.FieldID, field.TypeString),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.TransferSharesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.TransferSharesTable,
+			Columns: []string{user.TransferSharesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(transfershare.FieldID, field.TypeString),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.ShareFilesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.ShareFilesTable,
+			Columns: []string{user.ShareFilesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(sharefile.FieldID, field.TypeString),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedShareFilesIDs(); len(nodes) > 0 && !_u.mutation.ShareFilesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.ShareFilesTable,
+			Columns: []string{user.ShareFilesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(sharefile.FieldID, field.TypeString),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.ShareFilesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.ShareFilesTable,
+			Columns: []string{user.ShareFilesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(sharefile.FieldID, field.TypeString),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.TransferJobsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.TransferJobsTable,
+			Columns: []string{user.TransferJobsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(transferjob.FieldID, field.TypeString),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedTransferJobsIDs(); len(nodes) > 0 && !_u.mutation.TransferJobsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.TransferJobsTable,
+			Columns: []string{user.TransferJobsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(transferjob.FieldID, field.TypeString),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.TransferJobsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.TransferJobsTable,
+			Columns: []string{user.TransferJobsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(transferjob.FieldID, field.TypeString),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.TransferItemsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.TransferItemsTable,
+			Columns: []string{user.TransferItemsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(transferitem.FieldID, field.TypeString),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedTransferItemsIDs(); len(nodes) > 0 && !_u.mutation.TransferItemsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.TransferItemsTable,
+			Columns: []string{user.TransferItemsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(transferitem.FieldID, field.TypeString),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.TransferItemsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.TransferItemsTable,
+			Columns: []string{user.TransferItemsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(transferitem.FieldID, field.TypeString),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
 	if _u.mutation.AuditEventsCleared() {
 		edge := &sqlgraph.EdgeSpec{
 			Rel:     sqlgraph.O2M,
@@ -915,6 +1243,66 @@ func (_u *UserUpdateOne) AddRoutes(v ...*PublishedRoute) *UserUpdateOne {
 	return _u.AddRouteIDs(ids...)
 }
 
+// AddTransferShareIDs adds the "transfer_shares" edge to the TransferShare entity by IDs.
+func (_u *UserUpdateOne) AddTransferShareIDs(ids ...string) *UserUpdateOne {
+	_u.mutation.AddTransferShareIDs(ids...)
+	return _u
+}
+
+// AddTransferShares adds the "transfer_shares" edges to the TransferShare entity.
+func (_u *UserUpdateOne) AddTransferShares(v ...*TransferShare) *UserUpdateOne {
+	ids := make([]string, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddTransferShareIDs(ids...)
+}
+
+// AddShareFileIDs adds the "share_files" edge to the ShareFile entity by IDs.
+func (_u *UserUpdateOne) AddShareFileIDs(ids ...string) *UserUpdateOne {
+	_u.mutation.AddShareFileIDs(ids...)
+	return _u
+}
+
+// AddShareFiles adds the "share_files" edges to the ShareFile entity.
+func (_u *UserUpdateOne) AddShareFiles(v ...*ShareFile) *UserUpdateOne {
+	ids := make([]string, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddShareFileIDs(ids...)
+}
+
+// AddTransferJobIDs adds the "transfer_jobs" edge to the TransferJob entity by IDs.
+func (_u *UserUpdateOne) AddTransferJobIDs(ids ...string) *UserUpdateOne {
+	_u.mutation.AddTransferJobIDs(ids...)
+	return _u
+}
+
+// AddTransferJobs adds the "transfer_jobs" edges to the TransferJob entity.
+func (_u *UserUpdateOne) AddTransferJobs(v ...*TransferJob) *UserUpdateOne {
+	ids := make([]string, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddTransferJobIDs(ids...)
+}
+
+// AddTransferItemIDs adds the "transfer_items" edge to the TransferItem entity by IDs.
+func (_u *UserUpdateOne) AddTransferItemIDs(ids ...string) *UserUpdateOne {
+	_u.mutation.AddTransferItemIDs(ids...)
+	return _u
+}
+
+// AddTransferItems adds the "transfer_items" edges to the TransferItem entity.
+func (_u *UserUpdateOne) AddTransferItems(v ...*TransferItem) *UserUpdateOne {
+	ids := make([]string, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddTransferItemIDs(ids...)
+}
+
 // AddAuditEventIDs adds the "audit_events" edge to the AuditEvent entity by IDs.
 func (_u *UserUpdateOne) AddAuditEventIDs(ids ...string) *UserUpdateOne {
 	_u.mutation.AddAuditEventIDs(ids...)
@@ -1059,6 +1447,90 @@ func (_u *UserUpdateOne) RemoveRoutes(v ...*PublishedRoute) *UserUpdateOne {
 		ids[i] = v[i].ID
 	}
 	return _u.RemoveRouteIDs(ids...)
+}
+
+// ClearTransferShares clears all "transfer_shares" edges to the TransferShare entity.
+func (_u *UserUpdateOne) ClearTransferShares() *UserUpdateOne {
+	_u.mutation.ClearTransferShares()
+	return _u
+}
+
+// RemoveTransferShareIDs removes the "transfer_shares" edge to TransferShare entities by IDs.
+func (_u *UserUpdateOne) RemoveTransferShareIDs(ids ...string) *UserUpdateOne {
+	_u.mutation.RemoveTransferShareIDs(ids...)
+	return _u
+}
+
+// RemoveTransferShares removes "transfer_shares" edges to TransferShare entities.
+func (_u *UserUpdateOne) RemoveTransferShares(v ...*TransferShare) *UserUpdateOne {
+	ids := make([]string, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveTransferShareIDs(ids...)
+}
+
+// ClearShareFiles clears all "share_files" edges to the ShareFile entity.
+func (_u *UserUpdateOne) ClearShareFiles() *UserUpdateOne {
+	_u.mutation.ClearShareFiles()
+	return _u
+}
+
+// RemoveShareFileIDs removes the "share_files" edge to ShareFile entities by IDs.
+func (_u *UserUpdateOne) RemoveShareFileIDs(ids ...string) *UserUpdateOne {
+	_u.mutation.RemoveShareFileIDs(ids...)
+	return _u
+}
+
+// RemoveShareFiles removes "share_files" edges to ShareFile entities.
+func (_u *UserUpdateOne) RemoveShareFiles(v ...*ShareFile) *UserUpdateOne {
+	ids := make([]string, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveShareFileIDs(ids...)
+}
+
+// ClearTransferJobs clears all "transfer_jobs" edges to the TransferJob entity.
+func (_u *UserUpdateOne) ClearTransferJobs() *UserUpdateOne {
+	_u.mutation.ClearTransferJobs()
+	return _u
+}
+
+// RemoveTransferJobIDs removes the "transfer_jobs" edge to TransferJob entities by IDs.
+func (_u *UserUpdateOne) RemoveTransferJobIDs(ids ...string) *UserUpdateOne {
+	_u.mutation.RemoveTransferJobIDs(ids...)
+	return _u
+}
+
+// RemoveTransferJobs removes "transfer_jobs" edges to TransferJob entities.
+func (_u *UserUpdateOne) RemoveTransferJobs(v ...*TransferJob) *UserUpdateOne {
+	ids := make([]string, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveTransferJobIDs(ids...)
+}
+
+// ClearTransferItems clears all "transfer_items" edges to the TransferItem entity.
+func (_u *UserUpdateOne) ClearTransferItems() *UserUpdateOne {
+	_u.mutation.ClearTransferItems()
+	return _u
+}
+
+// RemoveTransferItemIDs removes the "transfer_items" edge to TransferItem entities by IDs.
+func (_u *UserUpdateOne) RemoveTransferItemIDs(ids ...string) *UserUpdateOne {
+	_u.mutation.RemoveTransferItemIDs(ids...)
+	return _u
+}
+
+// RemoveTransferItems removes "transfer_items" edges to TransferItem entities.
+func (_u *UserUpdateOne) RemoveTransferItems(v ...*TransferItem) *UserUpdateOne {
+	ids := make([]string, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveTransferItemIDs(ids...)
 }
 
 // ClearAuditEvents clears all "audit_events" edges to the AuditEvent entity.
@@ -1441,6 +1913,186 @@ func (_u *UserUpdateOne) sqlSave(ctx context.Context) (_node *User, err error) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(publishedroute.FieldID, field.TypeString),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.TransferSharesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.TransferSharesTable,
+			Columns: []string{user.TransferSharesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(transfershare.FieldID, field.TypeString),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedTransferSharesIDs(); len(nodes) > 0 && !_u.mutation.TransferSharesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.TransferSharesTable,
+			Columns: []string{user.TransferSharesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(transfershare.FieldID, field.TypeString),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.TransferSharesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.TransferSharesTable,
+			Columns: []string{user.TransferSharesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(transfershare.FieldID, field.TypeString),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.ShareFilesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.ShareFilesTable,
+			Columns: []string{user.ShareFilesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(sharefile.FieldID, field.TypeString),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedShareFilesIDs(); len(nodes) > 0 && !_u.mutation.ShareFilesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.ShareFilesTable,
+			Columns: []string{user.ShareFilesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(sharefile.FieldID, field.TypeString),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.ShareFilesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.ShareFilesTable,
+			Columns: []string{user.ShareFilesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(sharefile.FieldID, field.TypeString),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.TransferJobsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.TransferJobsTable,
+			Columns: []string{user.TransferJobsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(transferjob.FieldID, field.TypeString),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedTransferJobsIDs(); len(nodes) > 0 && !_u.mutation.TransferJobsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.TransferJobsTable,
+			Columns: []string{user.TransferJobsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(transferjob.FieldID, field.TypeString),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.TransferJobsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.TransferJobsTable,
+			Columns: []string{user.TransferJobsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(transferjob.FieldID, field.TypeString),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.TransferItemsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.TransferItemsTable,
+			Columns: []string{user.TransferItemsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(transferitem.FieldID, field.TypeString),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedTransferItemsIDs(); len(nodes) > 0 && !_u.mutation.TransferItemsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.TransferItemsTable,
+			Columns: []string{user.TransferItemsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(transferitem.FieldID, field.TypeString),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.TransferItemsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.TransferItemsTable,
+			Columns: []string{user.TransferItemsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(transferitem.FieldID, field.TypeString),
 			},
 		}
 		for _, k := range nodes {

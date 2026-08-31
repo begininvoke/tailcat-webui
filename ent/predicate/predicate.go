@@ -30,11 +30,23 @@ type PublishedRoute func(*sql.Selector)
 // Session is the predicate function for session builders.
 type Session func(*sql.Selector)
 
+// ShareFile is the predicate function for sharefile builders.
+type ShareFile func(*sql.Selector)
+
 // TailClient is the predicate function for tailclient builders.
 type TailClient func(*sql.Selector)
 
 // TailServer is the predicate function for tailserver builders.
 type TailServer func(*sql.Selector)
+
+// TransferItem is the predicate function for transferitem builders.
+type TransferItem func(*sql.Selector)
+
+// TransferJob is the predicate function for transferjob builders.
+type TransferJob func(*sql.Selector)
+
+// TransferShare is the predicate function for transfershare builders.
+type TransferShare func(*sql.Selector)
 
 // User is the predicate function for user builders.
 type User func(*sql.Selector)

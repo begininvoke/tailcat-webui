@@ -42,6 +42,8 @@ const (
 	EdgeDiagnosticRuns = "diagnostic_runs"
 	// EdgeRoutes holds the string denoting the routes edge name in mutations.
 	EdgeRoutes = "routes"
+	// EdgeTransferJobs holds the string denoting the transfer_jobs edge name in mutations.
+	EdgeTransferJobs = "transfer_jobs"
 	// Table holds the table name of the tailclient in the database.
 	Table = "tail_clients"
 	// OwnerTable is the table that holds the owner relation/edge.
@@ -65,6 +67,13 @@ const (
 	RoutesInverseTable = "published_routes"
 	// RoutesColumn is the table column denoting the routes relation/edge.
 	RoutesColumn = "client_id"
+	// TransferJobsTable is the table that holds the transfer_jobs relation/edge.
+	TransferJobsTable = "transfer_jobs"
+	// TransferJobsInverseTable is the table name for the TransferJob entity.
+	// It exists in this package in order to avoid circular dependency with the "transferjob" package.
+	TransferJobsInverseTable = "transfer_jobs"
+	// TransferJobsColumn is the table column denoting the transfer_jobs relation/edge.
+	TransferJobsColumn = "client_id"
 )
 
 // Columns holds all SQL columns for tailclient fields.
@@ -197,6 +206,20 @@ func ByRoutes(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
 		sqlgraph.OrderByNeighborTerms(s, newRoutesStep(), append([]sql.OrderTerm{term}, terms...)...)
 	}
 }
+
+// ByTransferJobsCount orders the results by transfer_jobs count.
+func ByTransferJobsCount(opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborsCount(s, newTransferJobsStep(), opts...)
+	}
+}
+
+// ByTransferJobs orders the results by transfer_jobs terms.
+func ByTransferJobs(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newTransferJobsStep(), append([]sql.OrderTerm{term}, terms...)...)
+	}
+}
 func newOwnerStep() *sqlgraph.Step {
 	return sqlgraph.NewStep(
 		sqlgraph.From(Table, FieldID),
@@ -216,5 +239,12 @@ func newRoutesStep() *sqlgraph.Step {
 		sqlgraph.From(Table, FieldID),
 		sqlgraph.To(RoutesInverseTable, FieldID),
 		sqlgraph.Edge(sqlgraph.O2M, false, RoutesTable, RoutesColumn),
+	)
+}
+func newTransferJobsStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(TransferJobsInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.O2M, false, TransferJobsTable, TransferJobsColumn),
 	)
 }

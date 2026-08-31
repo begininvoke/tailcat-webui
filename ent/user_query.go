@@ -18,8 +18,12 @@ import (
 	"github.com/ca-x/tailcat-webui/ent/predicate"
 	"github.com/ca-x/tailcat-webui/ent/publishedroute"
 	"github.com/ca-x/tailcat-webui/ent/session"
+	"github.com/ca-x/tailcat-webui/ent/sharefile"
 	"github.com/ca-x/tailcat-webui/ent/tailclient"
 	"github.com/ca-x/tailcat-webui/ent/tailserver"
+	"github.com/ca-x/tailcat-webui/ent/transferitem"
+	"github.com/ca-x/tailcat-webui/ent/transferjob"
+	"github.com/ca-x/tailcat-webui/ent/transfershare"
 	"github.com/ca-x/tailcat-webui/ent/user"
 )
 
@@ -36,6 +40,10 @@ type UserQuery struct {
 	withClients        *TailClientQuery
 	withDiagnosticRuns *DiagnosticRunQuery
 	withRoutes         *PublishedRouteQuery
+	withTransferShares *TransferShareQuery
+	withShareFiles     *ShareFileQuery
+	withTransferJobs   *TransferJobQuery
+	withTransferItems  *TransferItemQuery
 	withAuditEvents    *AuditEventQuery
 	// intermediate query (i.e. traversal path).
 	sql  *sql.Selector
@@ -198,6 +206,94 @@ func (_q *UserQuery) QueryRoutes() *PublishedRouteQuery {
 			sqlgraph.From(user.Table, user.FieldID, selector),
 			sqlgraph.To(publishedroute.Table, publishedroute.FieldID),
 			sqlgraph.Edge(sqlgraph.O2M, false, user.RoutesTable, user.RoutesColumn),
+		)
+		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
+		return fromU, nil
+	}
+	return query
+}
+
+// QueryTransferShares chains the current query on the "transfer_shares" edge.
+func (_q *UserQuery) QueryTransferShares() *TransferShareQuery {
+	query := (&TransferShareClient{config: _q.config}).Query()
+	query.path = func(ctx context.Context) (fromU *sql.Selector, err error) {
+		if err := _q.prepareQuery(ctx); err != nil {
+			return nil, err
+		}
+		selector := _q.sqlQuery(ctx)
+		if err := selector.Err(); err != nil {
+			return nil, err
+		}
+		step := sqlgraph.NewStep(
+			sqlgraph.From(user.Table, user.FieldID, selector),
+			sqlgraph.To(transfershare.Table, transfershare.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, user.TransferSharesTable, user.TransferSharesColumn),
+		)
+		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
+		return fromU, nil
+	}
+	return query
+}
+
+// QueryShareFiles chains the current query on the "share_files" edge.
+func (_q *UserQuery) QueryShareFiles() *ShareFileQuery {
+	query := (&ShareFileClient{config: _q.config}).Query()
+	query.path = func(ctx context.Context) (fromU *sql.Selector, err error) {
+		if err := _q.prepareQuery(ctx); err != nil {
+			return nil, err
+		}
+		selector := _q.sqlQuery(ctx)
+		if err := selector.Err(); err != nil {
+			return nil, err
+		}
+		step := sqlgraph.NewStep(
+			sqlgraph.From(user.Table, user.FieldID, selector),
+			sqlgraph.To(sharefile.Table, sharefile.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, user.ShareFilesTable, user.ShareFilesColumn),
+		)
+		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
+		return fromU, nil
+	}
+	return query
+}
+
+// QueryTransferJobs chains the current query on the "transfer_jobs" edge.
+func (_q *UserQuery) QueryTransferJobs() *TransferJobQuery {
+	query := (&TransferJobClient{config: _q.config}).Query()
+	query.path = func(ctx context.Context) (fromU *sql.Selector, err error) {
+		if err := _q.prepareQuery(ctx); err != nil {
+			return nil, err
+		}
+		selector := _q.sqlQuery(ctx)
+		if err := selector.Err(); err != nil {
+			return nil, err
+		}
+		step := sqlgraph.NewStep(
+			sqlgraph.From(user.Table, user.FieldID, selector),
+			sqlgraph.To(transferjob.Table, transferjob.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, user.TransferJobsTable, user.TransferJobsColumn),
+		)
+		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
+		return fromU, nil
+	}
+	return query
+}
+
+// QueryTransferItems chains the current query on the "transfer_items" edge.
+func (_q *UserQuery) QueryTransferItems() *TransferItemQuery {
+	query := (&TransferItemClient{config: _q.config}).Query()
+	query.path = func(ctx context.Context) (fromU *sql.Selector, err error) {
+		if err := _q.prepareQuery(ctx); err != nil {
+			return nil, err
+		}
+		selector := _q.sqlQuery(ctx)
+		if err := selector.Err(); err != nil {
+			return nil, err
+		}
+		step := sqlgraph.NewStep(
+			sqlgraph.From(user.Table, user.FieldID, selector),
+			sqlgraph.To(transferitem.Table, transferitem.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, user.TransferItemsTable, user.TransferItemsColumn),
 		)
 		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
 		return fromU, nil
@@ -425,6 +521,10 @@ func (_q *UserQuery) Clone() *UserQuery {
 		withClients:        _q.withClients.Clone(),
 		withDiagnosticRuns: _q.withDiagnosticRuns.Clone(),
 		withRoutes:         _q.withRoutes.Clone(),
+		withTransferShares: _q.withTransferShares.Clone(),
+		withShareFiles:     _q.withShareFiles.Clone(),
+		withTransferJobs:   _q.withTransferJobs.Clone(),
+		withTransferItems:  _q.withTransferItems.Clone(),
 		withAuditEvents:    _q.withAuditEvents.Clone(),
 		// clone intermediate query.
 		sql:  _q.sql.Clone(),
@@ -495,6 +595,50 @@ func (_q *UserQuery) WithRoutes(opts ...func(*PublishedRouteQuery)) *UserQuery {
 		opt(query)
 	}
 	_q.withRoutes = query
+	return _q
+}
+
+// WithTransferShares tells the query-builder to eager-load the nodes that are connected to
+// the "transfer_shares" edge. The optional arguments are used to configure the query builder of the edge.
+func (_q *UserQuery) WithTransferShares(opts ...func(*TransferShareQuery)) *UserQuery {
+	query := (&TransferShareClient{config: _q.config}).Query()
+	for _, opt := range opts {
+		opt(query)
+	}
+	_q.withTransferShares = query
+	return _q
+}
+
+// WithShareFiles tells the query-builder to eager-load the nodes that are connected to
+// the "share_files" edge. The optional arguments are used to configure the query builder of the edge.
+func (_q *UserQuery) WithShareFiles(opts ...func(*ShareFileQuery)) *UserQuery {
+	query := (&ShareFileClient{config: _q.config}).Query()
+	for _, opt := range opts {
+		opt(query)
+	}
+	_q.withShareFiles = query
+	return _q
+}
+
+// WithTransferJobs tells the query-builder to eager-load the nodes that are connected to
+// the "transfer_jobs" edge. The optional arguments are used to configure the query builder of the edge.
+func (_q *UserQuery) WithTransferJobs(opts ...func(*TransferJobQuery)) *UserQuery {
+	query := (&TransferJobClient{config: _q.config}).Query()
+	for _, opt := range opts {
+		opt(query)
+	}
+	_q.withTransferJobs = query
+	return _q
+}
+
+// WithTransferItems tells the query-builder to eager-load the nodes that are connected to
+// the "transfer_items" edge. The optional arguments are used to configure the query builder of the edge.
+func (_q *UserQuery) WithTransferItems(opts ...func(*TransferItemQuery)) *UserQuery {
+	query := (&TransferItemClient{config: _q.config}).Query()
+	for _, opt := range opts {
+		opt(query)
+	}
+	_q.withTransferItems = query
 	return _q
 }
 
@@ -587,13 +731,17 @@ func (_q *UserQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*User, e
 	var (
 		nodes       = []*User{}
 		_spec       = _q.querySpec()
-		loadedTypes = [7]bool{
+		loadedTypes = [11]bool{
 			_q.withSessions != nil,
 			_q.withServers != nil,
 			_q.withExitRules != nil,
 			_q.withClients != nil,
 			_q.withDiagnosticRuns != nil,
 			_q.withRoutes != nil,
+			_q.withTransferShares != nil,
+			_q.withShareFiles != nil,
+			_q.withTransferJobs != nil,
+			_q.withTransferItems != nil,
 			_q.withAuditEvents != nil,
 		}
 	)
@@ -654,6 +802,34 @@ func (_q *UserQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*User, e
 		if err := _q.loadRoutes(ctx, query, nodes,
 			func(n *User) { n.Edges.Routes = []*PublishedRoute{} },
 			func(n *User, e *PublishedRoute) { n.Edges.Routes = append(n.Edges.Routes, e) }); err != nil {
+			return nil, err
+		}
+	}
+	if query := _q.withTransferShares; query != nil {
+		if err := _q.loadTransferShares(ctx, query, nodes,
+			func(n *User) { n.Edges.TransferShares = []*TransferShare{} },
+			func(n *User, e *TransferShare) { n.Edges.TransferShares = append(n.Edges.TransferShares, e) }); err != nil {
+			return nil, err
+		}
+	}
+	if query := _q.withShareFiles; query != nil {
+		if err := _q.loadShareFiles(ctx, query, nodes,
+			func(n *User) { n.Edges.ShareFiles = []*ShareFile{} },
+			func(n *User, e *ShareFile) { n.Edges.ShareFiles = append(n.Edges.ShareFiles, e) }); err != nil {
+			return nil, err
+		}
+	}
+	if query := _q.withTransferJobs; query != nil {
+		if err := _q.loadTransferJobs(ctx, query, nodes,
+			func(n *User) { n.Edges.TransferJobs = []*TransferJob{} },
+			func(n *User, e *TransferJob) { n.Edges.TransferJobs = append(n.Edges.TransferJobs, e) }); err != nil {
+			return nil, err
+		}
+	}
+	if query := _q.withTransferItems; query != nil {
+		if err := _q.loadTransferItems(ctx, query, nodes,
+			func(n *User) { n.Edges.TransferItems = []*TransferItem{} },
+			func(n *User, e *TransferItem) { n.Edges.TransferItems = append(n.Edges.TransferItems, e) }); err != nil {
 			return nil, err
 		}
 	}
@@ -832,6 +1008,126 @@ func (_q *UserQuery) loadRoutes(ctx context.Context, query *PublishedRouteQuery,
 	}
 	query.Where(predicate.PublishedRoute(func(s *sql.Selector) {
 		s.Where(sql.InValues(s.C(user.RoutesColumn), fks...))
+	}))
+	neighbors, err := query.All(ctx)
+	if err != nil {
+		return err
+	}
+	for _, n := range neighbors {
+		fk := n.UserID
+		node, ok := nodeids[fk]
+		if !ok {
+			return fmt.Errorf(`unexpected referenced foreign-key "user_id" returned %v for node %v`, fk, n.ID)
+		}
+		assign(node, n)
+	}
+	return nil
+}
+func (_q *UserQuery) loadTransferShares(ctx context.Context, query *TransferShareQuery, nodes []*User, init func(*User), assign func(*User, *TransferShare)) error {
+	fks := make([]driver.Value, 0, len(nodes))
+	nodeids := make(map[string]*User)
+	for i := range nodes {
+		fks = append(fks, nodes[i].ID)
+		nodeids[nodes[i].ID] = nodes[i]
+		if init != nil {
+			init(nodes[i])
+		}
+	}
+	if len(query.ctx.Fields) > 0 {
+		query.ctx.AppendFieldOnce(transfershare.FieldUserID)
+	}
+	query.Where(predicate.TransferShare(func(s *sql.Selector) {
+		s.Where(sql.InValues(s.C(user.TransferSharesColumn), fks...))
+	}))
+	neighbors, err := query.All(ctx)
+	if err != nil {
+		return err
+	}
+	for _, n := range neighbors {
+		fk := n.UserID
+		node, ok := nodeids[fk]
+		if !ok {
+			return fmt.Errorf(`unexpected referenced foreign-key "user_id" returned %v for node %v`, fk, n.ID)
+		}
+		assign(node, n)
+	}
+	return nil
+}
+func (_q *UserQuery) loadShareFiles(ctx context.Context, query *ShareFileQuery, nodes []*User, init func(*User), assign func(*User, *ShareFile)) error {
+	fks := make([]driver.Value, 0, len(nodes))
+	nodeids := make(map[string]*User)
+	for i := range nodes {
+		fks = append(fks, nodes[i].ID)
+		nodeids[nodes[i].ID] = nodes[i]
+		if init != nil {
+			init(nodes[i])
+		}
+	}
+	if len(query.ctx.Fields) > 0 {
+		query.ctx.AppendFieldOnce(sharefile.FieldUserID)
+	}
+	query.Where(predicate.ShareFile(func(s *sql.Selector) {
+		s.Where(sql.InValues(s.C(user.ShareFilesColumn), fks...))
+	}))
+	neighbors, err := query.All(ctx)
+	if err != nil {
+		return err
+	}
+	for _, n := range neighbors {
+		fk := n.UserID
+		node, ok := nodeids[fk]
+		if !ok {
+			return fmt.Errorf(`unexpected referenced foreign-key "user_id" returned %v for node %v`, fk, n.ID)
+		}
+		assign(node, n)
+	}
+	return nil
+}
+func (_q *UserQuery) loadTransferJobs(ctx context.Context, query *TransferJobQuery, nodes []*User, init func(*User), assign func(*User, *TransferJob)) error {
+	fks := make([]driver.Value, 0, len(nodes))
+	nodeids := make(map[string]*User)
+	for i := range nodes {
+		fks = append(fks, nodes[i].ID)
+		nodeids[nodes[i].ID] = nodes[i]
+		if init != nil {
+			init(nodes[i])
+		}
+	}
+	if len(query.ctx.Fields) > 0 {
+		query.ctx.AppendFieldOnce(transferjob.FieldUserID)
+	}
+	query.Where(predicate.TransferJob(func(s *sql.Selector) {
+		s.Where(sql.InValues(s.C(user.TransferJobsColumn), fks...))
+	}))
+	neighbors, err := query.All(ctx)
+	if err != nil {
+		return err
+	}
+	for _, n := range neighbors {
+		fk := n.UserID
+		node, ok := nodeids[fk]
+		if !ok {
+			return fmt.Errorf(`unexpected referenced foreign-key "user_id" returned %v for node %v`, fk, n.ID)
+		}
+		assign(node, n)
+	}
+	return nil
+}
+func (_q *UserQuery) loadTransferItems(ctx context.Context, query *TransferItemQuery, nodes []*User, init func(*User), assign func(*User, *TransferItem)) error {
+	fks := make([]driver.Value, 0, len(nodes))
+	nodeids := make(map[string]*User)
+	for i := range nodes {
+		fks = append(fks, nodes[i].ID)
+		nodeids[nodes[i].ID] = nodes[i]
+		if init != nil {
+			init(nodes[i])
+		}
+	}
+	if len(query.ctx.Fields) > 0 {
+		query.ctx.AppendFieldOnce(transferitem.FieldUserID)
+	}
+	query.Where(predicate.TransferItem(func(s *sql.Selector) {
+		s.Where(sql.InValues(s.C(user.TransferItemsColumn), fks...))
 	}))
 	neighbors, err := query.All(ctx)
 	if err != nil {

@@ -37,5 +37,6 @@ func (TailServer) Edges() []ent.Edge {
 		edge.To("mappings", PortMapping.Type).Annotations(entsql.OnDelete(entsql.Cascade)),
 		edge.To("allowed_clients", AllowedClient.Type).Annotations(entsql.OnDelete(entsql.Cascade)),
 		edge.To("exit_rules", ExitRule.Type).Annotations(entsql.OnDelete(entsql.Cascade)),
+		edge.To("transfer_shares", TransferShare.Type).Annotations(entsql.OnDelete(entsql.Cascade)),
 	}
 }

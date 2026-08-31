@@ -324,6 +324,57 @@ var (
 			},
 		},
 	}
+	// ShareFilesColumns holds the columns for the "share_files" table.
+	ShareFilesColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeString},
+		{Name: "storage_name", Type: field.TypeString},
+		{Name: "virtual_path", Type: field.TypeString},
+		{Name: "size_bytes", Type: field.TypeInt64},
+		{Name: "mtime", Type: field.TypeTime},
+		{Name: "blake3", Type: field.TypeString},
+		{Name: "block_size", Type: field.TypeInt64, Default: 8388608},
+		{Name: "block_hashes", Type: field.TypeJSON},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "share_id", Type: field.TypeString},
+		{Name: "user_id", Type: field.TypeString},
+	}
+	// ShareFilesTable holds the schema information for the "share_files" table.
+	ShareFilesTable = &schema.Table{
+		Name:       "share_files",
+		Columns:    ShareFilesColumns,
+		PrimaryKey: []*schema.Column{ShareFilesColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "share_files_transfer_shares_files",
+				Columns:    []*schema.Column{ShareFilesColumns[9]},
+				RefColumns: []*schema.Column{TransferSharesColumns[0]},
+				OnDelete:   schema.Cascade,
+			},
+			{
+				Symbol:     "share_files_users_share_files",
+				Columns:    []*schema.Column{ShareFilesColumns[10]},
+				RefColumns: []*schema.Column{UsersColumns[0]},
+				OnDelete:   schema.Cascade,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "sharefile_user_id_created_at",
+				Unique:  false,
+				Columns: []*schema.Column{ShareFilesColumns[10], ShareFilesColumns[8]},
+			},
+			{
+				Name:    "sharefile_share_id_created_at",
+				Unique:  false,
+				Columns: []*schema.Column{ShareFilesColumns[9], ShareFilesColumns[8]},
+			},
+			{
+				Name:    "sharefile_share_id_virtual_path",
+				Unique:  true,
+				Columns: []*schema.Column{ShareFilesColumns[9], ShareFilesColumns[2]},
+			},
+		},
+	}
 	// TailClientsColumns holds the columns for the "tail_clients" table.
 	TailClientsColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeString},
@@ -396,6 +447,172 @@ var (
 			},
 		},
 	}
+	// TransferItemsColumns holds the columns for the "transfer_items" table.
+	TransferItemsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeString},
+		{Name: "remote_file_id", Type: field.TypeString},
+		{Name: "storage_name", Type: field.TypeString},
+		{Name: "virtual_path", Type: field.TypeString},
+		{Name: "size_bytes", Type: field.TypeInt64},
+		{Name: "mtime", Type: field.TypeTime},
+		{Name: "blake3", Type: field.TypeString},
+		{Name: "block_size", Type: field.TypeInt64, Default: 8388608},
+		{Name: "block_hashes", Type: field.TypeJSON},
+		{Name: "completed_blocks", Type: field.TypeJSON},
+		{Name: "received_bytes", Type: field.TypeInt64, Default: 0},
+		{Name: "status", Type: field.TypeEnum, Enums: []string{"staging", "ready", "running", "completed", "failed", "canceled", "interrupted", "expired", "deleting"}, Default: "staging"},
+		{Name: "started_at", Type: field.TypeTime, Nullable: true},
+		{Name: "finished_at", Type: field.TypeTime, Nullable: true},
+		{Name: "error_code", Type: field.TypeEnum, Nullable: true, Enums: []string{"transfer_canceled", "transfer_expired", "transfer_remote_unavailable", "transfer_invalid_capability", "transfer_share_not_found", "transfer_protocol_invalid", "transfer_integrity_mismatch", "transfer_storage_failed", "transfer_limit_exceeded"}},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "updated_at", Type: field.TypeTime},
+		{Name: "job_id", Type: field.TypeString},
+		{Name: "user_id", Type: field.TypeString},
+	}
+	// TransferItemsTable holds the schema information for the "transfer_items" table.
+	TransferItemsTable = &schema.Table{
+		Name:       "transfer_items",
+		Columns:    TransferItemsColumns,
+		PrimaryKey: []*schema.Column{TransferItemsColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "transfer_items_transfer_jobs_items",
+				Columns:    []*schema.Column{TransferItemsColumns[17]},
+				RefColumns: []*schema.Column{TransferJobsColumns[0]},
+				OnDelete:   schema.Cascade,
+			},
+			{
+				Symbol:     "transfer_items_users_transfer_items",
+				Columns:    []*schema.Column{TransferItemsColumns[18]},
+				RefColumns: []*schema.Column{UsersColumns[0]},
+				OnDelete:   schema.Cascade,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "transferitem_user_id_created_at",
+				Unique:  false,
+				Columns: []*schema.Column{TransferItemsColumns[18], TransferItemsColumns[15]},
+			},
+			{
+				Name:    "transferitem_job_id_created_at",
+				Unique:  false,
+				Columns: []*schema.Column{TransferItemsColumns[17], TransferItemsColumns[15]},
+			},
+			{
+				Name:    "transferitem_job_id_remote_file_id",
+				Unique:  true,
+				Columns: []*schema.Column{TransferItemsColumns[17], TransferItemsColumns[1]},
+			},
+		},
+	}
+	// TransferJobsColumns holds the columns for the "transfer_jobs" table.
+	TransferJobsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeString},
+		{Name: "remote_share_id", Type: field.TypeString},
+		{Name: "remote_capability_cipher", Type: field.TypeBytes},
+		{Name: "status", Type: field.TypeEnum, Enums: []string{"staging", "ready", "running", "completed", "failed", "canceled", "interrupted", "expired", "deleting"}, Default: "staging"},
+		{Name: "total_bytes", Type: field.TypeInt64, Default: 0},
+		{Name: "received_bytes", Type: field.TypeInt64, Default: 0},
+		{Name: "started_at", Type: field.TypeTime, Nullable: true},
+		{Name: "finished_at", Type: field.TypeTime, Nullable: true},
+		{Name: "expires_at", Type: field.TypeTime},
+		{Name: "error_code", Type: field.TypeEnum, Nullable: true, Enums: []string{"transfer_canceled", "transfer_expired", "transfer_remote_unavailable", "transfer_invalid_capability", "transfer_share_not_found", "transfer_protocol_invalid", "transfer_integrity_mismatch", "transfer_storage_failed", "transfer_limit_exceeded"}},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "updated_at", Type: field.TypeTime},
+		{Name: "client_id", Type: field.TypeString},
+		{Name: "user_id", Type: field.TypeString},
+	}
+	// TransferJobsTable holds the schema information for the "transfer_jobs" table.
+	TransferJobsTable = &schema.Table{
+		Name:       "transfer_jobs",
+		Columns:    TransferJobsColumns,
+		PrimaryKey: []*schema.Column{TransferJobsColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "transfer_jobs_tail_clients_transfer_jobs",
+				Columns:    []*schema.Column{TransferJobsColumns[12]},
+				RefColumns: []*schema.Column{TailClientsColumns[0]},
+				OnDelete:   schema.Cascade,
+			},
+			{
+				Symbol:     "transfer_jobs_users_transfer_jobs",
+				Columns:    []*schema.Column{TransferJobsColumns[13]},
+				RefColumns: []*schema.Column{UsersColumns[0]},
+				OnDelete:   schema.Cascade,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "transferjob_user_id_created_at",
+				Unique:  false,
+				Columns: []*schema.Column{TransferJobsColumns[13], TransferJobsColumns[10]},
+			},
+			{
+				Name:    "transferjob_user_id_status_expires_at",
+				Unique:  false,
+				Columns: []*schema.Column{TransferJobsColumns[13], TransferJobsColumns[3], TransferJobsColumns[8]},
+			},
+			{
+				Name:    "transferjob_client_id_created_at",
+				Unique:  false,
+				Columns: []*schema.Column{TransferJobsColumns[12], TransferJobsColumns[10]},
+			},
+		},
+	}
+	// TransferSharesColumns holds the columns for the "transfer_shares" table.
+	TransferSharesColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeString},
+		{Name: "status", Type: field.TypeEnum, Enums: []string{"staging", "ready", "running", "completed", "failed", "canceled", "interrupted", "expired", "deleting"}, Default: "staging"},
+		{Name: "capability_hash", Type: field.TypeBytes},
+		{Name: "total_bytes", Type: field.TypeInt64, Default: 0},
+		{Name: "file_count", Type: field.TypeInt, Default: 0},
+		{Name: "ready_at", Type: field.TypeTime, Nullable: true},
+		{Name: "finished_at", Type: field.TypeTime, Nullable: true},
+		{Name: "expires_at", Type: field.TypeTime},
+		{Name: "error_code", Type: field.TypeEnum, Nullable: true, Enums: []string{"transfer_canceled", "transfer_expired", "transfer_remote_unavailable", "transfer_invalid_capability", "transfer_share_not_found", "transfer_protocol_invalid", "transfer_integrity_mismatch", "transfer_storage_failed", "transfer_limit_exceeded"}},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "updated_at", Type: field.TypeTime},
+		{Name: "server_id", Type: field.TypeString},
+		{Name: "user_id", Type: field.TypeString},
+	}
+	// TransferSharesTable holds the schema information for the "transfer_shares" table.
+	TransferSharesTable = &schema.Table{
+		Name:       "transfer_shares",
+		Columns:    TransferSharesColumns,
+		PrimaryKey: []*schema.Column{TransferSharesColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "transfer_shares_tail_servers_transfer_shares",
+				Columns:    []*schema.Column{TransferSharesColumns[11]},
+				RefColumns: []*schema.Column{TailServersColumns[0]},
+				OnDelete:   schema.Cascade,
+			},
+			{
+				Symbol:     "transfer_shares_users_transfer_shares",
+				Columns:    []*schema.Column{TransferSharesColumns[12]},
+				RefColumns: []*schema.Column{UsersColumns[0]},
+				OnDelete:   schema.Cascade,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "transfershare_user_id_created_at",
+				Unique:  false,
+				Columns: []*schema.Column{TransferSharesColumns[12], TransferSharesColumns[9]},
+			},
+			{
+				Name:    "transfershare_user_id_status_expires_at",
+				Unique:  false,
+				Columns: []*schema.Column{TransferSharesColumns[12], TransferSharesColumns[1], TransferSharesColumns[7]},
+			},
+			{
+				Name:    "transfershare_server_id_created_at",
+				Unique:  false,
+				Columns: []*schema.Column{TransferSharesColumns[11], TransferSharesColumns[9]},
+			},
+		},
+	}
 	// UsersColumns holds the columns for the "users" table.
 	UsersColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeString},
@@ -430,8 +647,12 @@ var (
 		PortMappingsTable,
 		PublishedRoutesTable,
 		SessionsTable,
+		ShareFilesTable,
 		TailClientsTable,
 		TailServersTable,
+		TransferItemsTable,
+		TransferJobsTable,
+		TransferSharesTable,
 		UsersTable,
 	}
 )
@@ -447,6 +668,14 @@ func init() {
 	PublishedRoutesTable.ForeignKeys[0].RefTable = TailClientsTable
 	PublishedRoutesTable.ForeignKeys[1].RefTable = UsersTable
 	SessionsTable.ForeignKeys[0].RefTable = UsersTable
+	ShareFilesTable.ForeignKeys[0].RefTable = TransferSharesTable
+	ShareFilesTable.ForeignKeys[1].RefTable = UsersTable
 	TailClientsTable.ForeignKeys[0].RefTable = UsersTable
 	TailServersTable.ForeignKeys[0].RefTable = UsersTable
+	TransferItemsTable.ForeignKeys[0].RefTable = TransferJobsTable
+	TransferItemsTable.ForeignKeys[1].RefTable = UsersTable
+	TransferJobsTable.ForeignKeys[0].RefTable = TailClientsTable
+	TransferJobsTable.ForeignKeys[1].RefTable = UsersTable
+	TransferSharesTable.ForeignKeys[0].RefTable = TailServersTable
+	TransferSharesTable.ForeignKeys[1].RefTable = UsersTable
 }

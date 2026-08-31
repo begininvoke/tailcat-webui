@@ -51,11 +51,19 @@ type UserEdges struct {
 	DiagnosticRuns []*DiagnosticRun `json:"diagnostic_runs,omitempty"`
 	// Routes holds the value of the routes edge.
 	Routes []*PublishedRoute `json:"routes,omitempty"`
+	// TransferShares holds the value of the transfer_shares edge.
+	TransferShares []*TransferShare `json:"transfer_shares,omitempty"`
+	// ShareFiles holds the value of the share_files edge.
+	ShareFiles []*ShareFile `json:"share_files,omitempty"`
+	// TransferJobs holds the value of the transfer_jobs edge.
+	TransferJobs []*TransferJob `json:"transfer_jobs,omitempty"`
+	// TransferItems holds the value of the transfer_items edge.
+	TransferItems []*TransferItem `json:"transfer_items,omitempty"`
 	// AuditEvents holds the value of the audit_events edge.
 	AuditEvents []*AuditEvent `json:"audit_events,omitempty"`
 	// loadedTypes holds the information for reporting if a
 	// type was loaded (or requested) in eager-loading or not.
-	loadedTypes [7]bool
+	loadedTypes [11]bool
 }
 
 // SessionsOrErr returns the Sessions value or an error if the edge
@@ -112,10 +120,46 @@ func (e UserEdges) RoutesOrErr() ([]*PublishedRoute, error) {
 	return nil, &NotLoadedError{edge: "routes"}
 }
 
+// TransferSharesOrErr returns the TransferShares value or an error if the edge
+// was not loaded in eager-loading.
+func (e UserEdges) TransferSharesOrErr() ([]*TransferShare, error) {
+	if e.loadedTypes[6] {
+		return e.TransferShares, nil
+	}
+	return nil, &NotLoadedError{edge: "transfer_shares"}
+}
+
+// ShareFilesOrErr returns the ShareFiles value or an error if the edge
+// was not loaded in eager-loading.
+func (e UserEdges) ShareFilesOrErr() ([]*ShareFile, error) {
+	if e.loadedTypes[7] {
+		return e.ShareFiles, nil
+	}
+	return nil, &NotLoadedError{edge: "share_files"}
+}
+
+// TransferJobsOrErr returns the TransferJobs value or an error if the edge
+// was not loaded in eager-loading.
+func (e UserEdges) TransferJobsOrErr() ([]*TransferJob, error) {
+	if e.loadedTypes[8] {
+		return e.TransferJobs, nil
+	}
+	return nil, &NotLoadedError{edge: "transfer_jobs"}
+}
+
+// TransferItemsOrErr returns the TransferItems value or an error if the edge
+// was not loaded in eager-loading.
+func (e UserEdges) TransferItemsOrErr() ([]*TransferItem, error) {
+	if e.loadedTypes[9] {
+		return e.TransferItems, nil
+	}
+	return nil, &NotLoadedError{edge: "transfer_items"}
+}
+
 // AuditEventsOrErr returns the AuditEvents value or an error if the edge
 // was not loaded in eager-loading.
 func (e UserEdges) AuditEventsOrErr() ([]*AuditEvent, error) {
-	if e.loadedTypes[6] {
+	if e.loadedTypes[10] {
 		return e.AuditEvents, nil
 	}
 	return nil, &NotLoadedError{edge: "audit_events"}
@@ -234,6 +278,26 @@ func (_m *User) QueryDiagnosticRuns() *DiagnosticRunQuery {
 // QueryRoutes queries the "routes" edge of the User entity.
 func (_m *User) QueryRoutes() *PublishedRouteQuery {
 	return NewUserClient(_m.config).QueryRoutes(_m)
+}
+
+// QueryTransferShares queries the "transfer_shares" edge of the User entity.
+func (_m *User) QueryTransferShares() *TransferShareQuery {
+	return NewUserClient(_m.config).QueryTransferShares(_m)
+}
+
+// QueryShareFiles queries the "share_files" edge of the User entity.
+func (_m *User) QueryShareFiles() *ShareFileQuery {
+	return NewUserClient(_m.config).QueryShareFiles(_m)
+}
+
+// QueryTransferJobs queries the "transfer_jobs" edge of the User entity.
+func (_m *User) QueryTransferJobs() *TransferJobQuery {
+	return NewUserClient(_m.config).QueryTransferJobs(_m)
+}
+
+// QueryTransferItems queries the "transfer_items" edge of the User entity.
+func (_m *User) QueryTransferItems() *TransferItemQuery {
+	return NewUserClient(_m.config).QueryTransferItems(_m)
 }
 
 // QueryAuditEvents queries the "audit_events" edge of the User entity.

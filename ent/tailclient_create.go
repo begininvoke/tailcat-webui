@@ -13,6 +13,7 @@ import (
 	"github.com/ca-x/tailcat-webui/ent/diagnosticrun"
 	"github.com/ca-x/tailcat-webui/ent/publishedroute"
 	"github.com/ca-x/tailcat-webui/ent/tailclient"
+	"github.com/ca-x/tailcat-webui/ent/transferjob"
 	"github.com/ca-x/tailcat-webui/ent/user"
 )
 
@@ -190,6 +191,21 @@ func (_c *TailClientCreate) AddRoutes(v ...*PublishedRoute) *TailClientCreate {
 		ids[i] = v[i].ID
 	}
 	return _c.AddRouteIDs(ids...)
+}
+
+// AddTransferJobIDs adds the "transfer_jobs" edge to the TransferJob entity by IDs.
+func (_c *TailClientCreate) AddTransferJobIDs(ids ...string) *TailClientCreate {
+	_c.mutation.AddTransferJobIDs(ids...)
+	return _c
+}
+
+// AddTransferJobs adds the "transfer_jobs" edges to the TransferJob entity.
+func (_c *TailClientCreate) AddTransferJobs(v ...*TransferJob) *TailClientCreate {
+	ids := make([]string, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _c.AddTransferJobIDs(ids...)
 }
 
 // Mutation returns the TailClientMutation object of the builder.
@@ -396,6 +412,22 @@ func (_c *TailClientCreate) createSpec() (*TailClient, *sqlgraph.CreateSpec) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(publishedroute.FieldID, field.TypeString),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges = append(_spec.Edges, edge)
+	}
+	if nodes := _c.mutation.TransferJobsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   tailclient.TransferJobsTable,
+			Columns: []string{tailclient.TransferJobsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(transferjob.FieldID, field.TypeString),
 			},
 		}
 		for _, k := range nodes {

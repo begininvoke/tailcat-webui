@@ -16,6 +16,7 @@ import (
 	"github.com/ca-x/tailcat-webui/ent/portmapping"
 	"github.com/ca-x/tailcat-webui/ent/predicate"
 	"github.com/ca-x/tailcat-webui/ent/tailserver"
+	"github.com/ca-x/tailcat-webui/ent/transfershare"
 )
 
 // TailServerUpdate is the builder for updating TailServer entities.
@@ -198,6 +199,21 @@ func (_u *TailServerUpdate) AddExitRules(v ...*ExitRule) *TailServerUpdate {
 	return _u.AddExitRuleIDs(ids...)
 }
 
+// AddTransferShareIDs adds the "transfer_shares" edge to the TransferShare entity by IDs.
+func (_u *TailServerUpdate) AddTransferShareIDs(ids ...string) *TailServerUpdate {
+	_u.mutation.AddTransferShareIDs(ids...)
+	return _u
+}
+
+// AddTransferShares adds the "transfer_shares" edges to the TransferShare entity.
+func (_u *TailServerUpdate) AddTransferShares(v ...*TransferShare) *TailServerUpdate {
+	ids := make([]string, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddTransferShareIDs(ids...)
+}
+
 // Mutation returns the TailServerMutation object of the builder.
 func (_u *TailServerUpdate) Mutation() *TailServerMutation {
 	return _u.mutation
@@ -264,6 +280,27 @@ func (_u *TailServerUpdate) RemoveExitRules(v ...*ExitRule) *TailServerUpdate {
 		ids[i] = v[i].ID
 	}
 	return _u.RemoveExitRuleIDs(ids...)
+}
+
+// ClearTransferShares clears all "transfer_shares" edges to the TransferShare entity.
+func (_u *TailServerUpdate) ClearTransferShares() *TailServerUpdate {
+	_u.mutation.ClearTransferShares()
+	return _u
+}
+
+// RemoveTransferShareIDs removes the "transfer_shares" edge to TransferShare entities by IDs.
+func (_u *TailServerUpdate) RemoveTransferShareIDs(ids ...string) *TailServerUpdate {
+	_u.mutation.RemoveTransferShareIDs(ids...)
+	return _u
+}
+
+// RemoveTransferShares removes "transfer_shares" edges to TransferShare entities.
+func (_u *TailServerUpdate) RemoveTransferShares(v ...*TransferShare) *TailServerUpdate {
+	ids := make([]string, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveTransferShareIDs(ids...)
 }
 
 // Save executes the query and returns the number of nodes affected by the update operation.
@@ -500,6 +537,51 @@ func (_u *TailServerUpdate) sqlSave(ctx context.Context) (_node int, err error) 
 		}
 		_spec.Edges.Add = append(_spec.Edges.Add, edge)
 	}
+	if _u.mutation.TransferSharesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   tailserver.TransferSharesTable,
+			Columns: []string{tailserver.TransferSharesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(transfershare.FieldID, field.TypeString),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedTransferSharesIDs(); len(nodes) > 0 && !_u.mutation.TransferSharesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   tailserver.TransferSharesTable,
+			Columns: []string{tailserver.TransferSharesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(transfershare.FieldID, field.TypeString),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.TransferSharesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   tailserver.TransferSharesTable,
+			Columns: []string{tailserver.TransferSharesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(transfershare.FieldID, field.TypeString),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
 	if _node, err = sqlgraph.UpdateNodes(ctx, _u.driver, _spec); err != nil {
 		if _, ok := err.(*sqlgraph.NotFoundError); ok {
 			err = &NotFoundError{tailserver.Label}
@@ -687,6 +769,21 @@ func (_u *TailServerUpdateOne) AddExitRules(v ...*ExitRule) *TailServerUpdateOne
 	return _u.AddExitRuleIDs(ids...)
 }
 
+// AddTransferShareIDs adds the "transfer_shares" edge to the TransferShare entity by IDs.
+func (_u *TailServerUpdateOne) AddTransferShareIDs(ids ...string) *TailServerUpdateOne {
+	_u.mutation.AddTransferShareIDs(ids...)
+	return _u
+}
+
+// AddTransferShares adds the "transfer_shares" edges to the TransferShare entity.
+func (_u *TailServerUpdateOne) AddTransferShares(v ...*TransferShare) *TailServerUpdateOne {
+	ids := make([]string, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddTransferShareIDs(ids...)
+}
+
 // Mutation returns the TailServerMutation object of the builder.
 func (_u *TailServerUpdateOne) Mutation() *TailServerMutation {
 	return _u.mutation
@@ -753,6 +850,27 @@ func (_u *TailServerUpdateOne) RemoveExitRules(v ...*ExitRule) *TailServerUpdate
 		ids[i] = v[i].ID
 	}
 	return _u.RemoveExitRuleIDs(ids...)
+}
+
+// ClearTransferShares clears all "transfer_shares" edges to the TransferShare entity.
+func (_u *TailServerUpdateOne) ClearTransferShares() *TailServerUpdateOne {
+	_u.mutation.ClearTransferShares()
+	return _u
+}
+
+// RemoveTransferShareIDs removes the "transfer_shares" edge to TransferShare entities by IDs.
+func (_u *TailServerUpdateOne) RemoveTransferShareIDs(ids ...string) *TailServerUpdateOne {
+	_u.mutation.RemoveTransferShareIDs(ids...)
+	return _u
+}
+
+// RemoveTransferShares removes "transfer_shares" edges to TransferShare entities.
+func (_u *TailServerUpdateOne) RemoveTransferShares(v ...*TransferShare) *TailServerUpdateOne {
+	ids := make([]string, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveTransferShareIDs(ids...)
 }
 
 // Where appends a list predicates to the TailServerUpdate builder.
@@ -1012,6 +1130,51 @@ func (_u *TailServerUpdateOne) sqlSave(ctx context.Context) (_node *TailServer, 
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(exitrule.FieldID, field.TypeString),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.TransferSharesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   tailserver.TransferSharesTable,
+			Columns: []string{tailserver.TransferSharesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(transfershare.FieldID, field.TypeString),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedTransferSharesIDs(); len(nodes) > 0 && !_u.mutation.TransferSharesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   tailserver.TransferSharesTable,
+			Columns: []string{tailserver.TransferSharesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(transfershare.FieldID, field.TypeString),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.TransferSharesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   tailserver.TransferSharesTable,
+			Columns: []string{tailserver.TransferSharesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(transfershare.FieldID, field.TypeString),
 			},
 		}
 		for _, k := range nodes {

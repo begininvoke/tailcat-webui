@@ -40,6 +40,14 @@ const (
 	EdgeDiagnosticRuns = "diagnostic_runs"
 	// EdgeRoutes holds the string denoting the routes edge name in mutations.
 	EdgeRoutes = "routes"
+	// EdgeTransferShares holds the string denoting the transfer_shares edge name in mutations.
+	EdgeTransferShares = "transfer_shares"
+	// EdgeShareFiles holds the string denoting the share_files edge name in mutations.
+	EdgeShareFiles = "share_files"
+	// EdgeTransferJobs holds the string denoting the transfer_jobs edge name in mutations.
+	EdgeTransferJobs = "transfer_jobs"
+	// EdgeTransferItems holds the string denoting the transfer_items edge name in mutations.
+	EdgeTransferItems = "transfer_items"
 	// EdgeAuditEvents holds the string denoting the audit_events edge name in mutations.
 	EdgeAuditEvents = "audit_events"
 	// Table holds the table name of the user in the database.
@@ -86,6 +94,34 @@ const (
 	RoutesInverseTable = "published_routes"
 	// RoutesColumn is the table column denoting the routes relation/edge.
 	RoutesColumn = "user_id"
+	// TransferSharesTable is the table that holds the transfer_shares relation/edge.
+	TransferSharesTable = "transfer_shares"
+	// TransferSharesInverseTable is the table name for the TransferShare entity.
+	// It exists in this package in order to avoid circular dependency with the "transfershare" package.
+	TransferSharesInverseTable = "transfer_shares"
+	// TransferSharesColumn is the table column denoting the transfer_shares relation/edge.
+	TransferSharesColumn = "user_id"
+	// ShareFilesTable is the table that holds the share_files relation/edge.
+	ShareFilesTable = "share_files"
+	// ShareFilesInverseTable is the table name for the ShareFile entity.
+	// It exists in this package in order to avoid circular dependency with the "sharefile" package.
+	ShareFilesInverseTable = "share_files"
+	// ShareFilesColumn is the table column denoting the share_files relation/edge.
+	ShareFilesColumn = "user_id"
+	// TransferJobsTable is the table that holds the transfer_jobs relation/edge.
+	TransferJobsTable = "transfer_jobs"
+	// TransferJobsInverseTable is the table name for the TransferJob entity.
+	// It exists in this package in order to avoid circular dependency with the "transferjob" package.
+	TransferJobsInverseTable = "transfer_jobs"
+	// TransferJobsColumn is the table column denoting the transfer_jobs relation/edge.
+	TransferJobsColumn = "user_id"
+	// TransferItemsTable is the table that holds the transfer_items relation/edge.
+	TransferItemsTable = "transfer_items"
+	// TransferItemsInverseTable is the table name for the TransferItem entity.
+	// It exists in this package in order to avoid circular dependency with the "transferitem" package.
+	TransferItemsInverseTable = "transfer_items"
+	// TransferItemsColumn is the table column denoting the transfer_items relation/edge.
+	TransferItemsColumn = "user_id"
 	// AuditEventsTable is the table that holds the audit_events relation/edge.
 	AuditEventsTable = "audit_events"
 	// AuditEventsInverseTable is the table name for the AuditEvent entity.
@@ -259,6 +295,62 @@ func ByRoutes(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
 	}
 }
 
+// ByTransferSharesCount orders the results by transfer_shares count.
+func ByTransferSharesCount(opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborsCount(s, newTransferSharesStep(), opts...)
+	}
+}
+
+// ByTransferShares orders the results by transfer_shares terms.
+func ByTransferShares(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newTransferSharesStep(), append([]sql.OrderTerm{term}, terms...)...)
+	}
+}
+
+// ByShareFilesCount orders the results by share_files count.
+func ByShareFilesCount(opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborsCount(s, newShareFilesStep(), opts...)
+	}
+}
+
+// ByShareFiles orders the results by share_files terms.
+func ByShareFiles(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newShareFilesStep(), append([]sql.OrderTerm{term}, terms...)...)
+	}
+}
+
+// ByTransferJobsCount orders the results by transfer_jobs count.
+func ByTransferJobsCount(opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborsCount(s, newTransferJobsStep(), opts...)
+	}
+}
+
+// ByTransferJobs orders the results by transfer_jobs terms.
+func ByTransferJobs(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newTransferJobsStep(), append([]sql.OrderTerm{term}, terms...)...)
+	}
+}
+
+// ByTransferItemsCount orders the results by transfer_items count.
+func ByTransferItemsCount(opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborsCount(s, newTransferItemsStep(), opts...)
+	}
+}
+
+// ByTransferItems orders the results by transfer_items terms.
+func ByTransferItems(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newTransferItemsStep(), append([]sql.OrderTerm{term}, terms...)...)
+	}
+}
+
 // ByAuditEventsCount orders the results by audit_events count.
 func ByAuditEventsCount(opts ...sql.OrderTermOption) OrderOption {
 	return func(s *sql.Selector) {
@@ -312,6 +404,34 @@ func newRoutesStep() *sqlgraph.Step {
 		sqlgraph.From(Table, FieldID),
 		sqlgraph.To(RoutesInverseTable, FieldID),
 		sqlgraph.Edge(sqlgraph.O2M, false, RoutesTable, RoutesColumn),
+	)
+}
+func newTransferSharesStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(TransferSharesInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.O2M, false, TransferSharesTable, TransferSharesColumn),
+	)
+}
+func newShareFilesStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(ShareFilesInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.O2M, false, ShareFilesTable, ShareFilesColumn),
+	)
+}
+func newTransferJobsStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(TransferJobsInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.O2M, false, TransferJobsTable, TransferJobsColumn),
+	)
+}
+func newTransferItemsStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(TransferItemsInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.O2M, false, TransferItemsTable, TransferItemsColumn),
 	)
 }
 func newAuditEventsStep() *sqlgraph.Step {
