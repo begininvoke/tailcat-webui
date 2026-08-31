@@ -1330,8 +1330,8 @@ func (m *Manager) publish(userID, kind, id string, phase RuntimePhase, message s
 	broker := m.eventsForUserLocked(userID)
 	m.eventSequences[userID]++
 	sequence := m.eventSequences[userID]
-	m.eventsMu.Unlock()
 	broker.Publish(events.Envelope{Version: 1, Type: "runtime", ResourceKind: kind, ResourceID: id, Phase: phase, Sequence: sequence, At: at})
+	m.eventsMu.Unlock()
 	event := Event{UserID: userID, ResourceKind: kind, ResourceID: id, State: phase, Message: message, At: at}
 	if m.recordEvent != nil {
 		auditCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
