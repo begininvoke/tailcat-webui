@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ca-x/tailcat-webui/internal/tailnet"
 )
 
 type OIDC struct {
@@ -35,8 +37,8 @@ type Config struct {
 	DemoMode         bool
 	UnsafeSSH        bool
 	DemoEmail        string
-	MappingTargets   []netip.Prefix
-	ExitTargets      []netip.Prefix
+	MappingTargets   []tailnet.TargetRule
+	ExitTargets      []tailnet.TargetRule
 	TrustedProxies   []netip.Prefix
 	AllowedDERPHosts []string
 	SessionIdle      time.Duration
@@ -64,11 +66,11 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	mappingTargets, err := parsePrefixes(env("TAILCAT_WEBUI_ALLOWED_MAPPING_TARGETS", env("TAILCAT_WEBUI_ALLOWED_TARGETS", "127.0.0.0/8,::1/128")))
+	mappingTargets, err := tailnet.ParseTargetRules(env("TAILCAT_WEBUI_ALLOWED_MAPPING_TARGETS", env("TAILCAT_WEBUI_ALLOWED_TARGETS", "127.0.0.0/8,::1/128")))
 	if err != nil {
 		return Config{}, err
 	}
-	exitTargets, err := parsePrefixes(strings.TrimSpace(os.Getenv("TAILCAT_WEBUI_ALLOWED_EXIT_TARGETS")))
+	exitTargets, err := tailnet.ParseTargetRules(strings.TrimSpace(os.Getenv("TAILCAT_WEBUI_ALLOWED_EXIT_TARGETS")))
 	if err != nil {
 		return Config{}, err
 	}
