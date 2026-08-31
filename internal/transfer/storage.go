@@ -99,6 +99,7 @@ type storageHooks struct {
 	syncDir                       func(*os.File) error
 	link                          func(*os.Root, string, string) error
 	remove                        func(*os.Root, string) error
+	closeVerifiedFinal            func(*os.File) error
 	beforePublish                 func()
 	afterIngest                   func(int64, string)
 	afterPairVerified             func()
@@ -245,6 +246,7 @@ func newStorage(rootPath string, constructorHooks constructorHooks) (*Storage, e
 	storage.hooks.syncDir = syncDirectory
 	storage.hooks.link = (*os.Root).Link
 	storage.hooks.remove = (*os.Root).Remove
+	storage.hooks.closeVerifiedFinal = (*os.File).Close
 	if initializeQuota {
 		finishSharedQuotaInitialization(sharedQuota, storage.rebuildQuota())
 	}
@@ -1304,7 +1306,7 @@ func privateRegularInfo(root *os.Root, name string) (os.FileInfo, error) {
 	return info, nil
 }
 
-func (s *Storage) prepareFinalEntry(root *os.Root, finalName string) (os.FileInfo, error) {
+func (s *Storage) prepareFinalEntry(root *os.Root, finalName string) (_ os.FileInfo, retErr error) {
 	info, err := privateRegularInfo(root, finalName)
 	if err != nil {
 		return nil, err
@@ -1320,10 +1322,13 @@ func (s *Storage) prepareFinalEntry(root *os.Root, finalName string) (os.FileInf
 		return nil, ErrMultipleLinks
 	}
 	pair, err := verifiedTempFinalPair(root, finalName)
-	if err != nil || pair.finalName != finalName {
+	if err != nil {
 		return nil, errors.Join(ErrMultipleLinks, err)
 	}
-	defer pair.final.Close()
+	defer s.joinVerifiedFinalClose(pair.final, &retErr)
+	if pair.finalName != finalName {
+		return nil, ErrMultipleLinks
+	}
 	if s.hooks.afterPairVerified != nil {
 		s.hooks.afterPairVerified()
 	}
@@ -1339,12 +1344,15 @@ func (s *Storage) prepareFinalEntry(root *os.Root, finalName string) (os.FileInf
 	return safeRegularInfo(root, finalName)
 }
 
-func (s *Storage) recoverTempAlias(root *os.Root, tempName string) (string, error) {
+func (s *Storage) recoverTempAlias(root *os.Root, tempName string) (_ string, retErr error) {
 	pair, err := verifiedTempFinalPair(root, tempName)
-	if err != nil || pair.tempName != tempName {
+	if err != nil {
 		return "", errors.Join(ErrMultipleLinks, err)
 	}
-	defer pair.final.Close()
+	defer s.joinVerifiedFinalClose(pair.final, &retErr)
+	if pair.tempName != tempName {
+		return "", ErrMultipleLinks
+	}
 	if s.hooks.afterPairVerified != nil {
 		s.hooks.afterPairVerified()
 	}
@@ -1362,6 +1370,12 @@ type verifiedPair struct {
 	finalName string
 	final     *os.File
 	finalInfo os.FileInfo
+}
+
+func (s *Storage) joinVerifiedFinalClose(final *os.File, retErr *error) {
+	if err := s.hooks.closeVerifiedFinal(final); err != nil {
+		*retErr = errors.Join(*retErr, fmt.Errorf("close verified final: %w", err))
+	}
 }
 
 func verifiedTempFinalPair(root *os.Root, memberName string) (verifiedPair, error) {

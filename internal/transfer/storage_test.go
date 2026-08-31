@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1443,6 +1444,80 @@ func TestRemoveRecoversVerifiedTempFinalPairThenRemovesBoth(t *testing.T) {
 	}
 }
 
+func TestRemoveTempAliasRoleMismatchDoesNotLeakVerifiedFinal(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("requires Linux /proc/self/fd")
+	}
+	storage, _, tempName, finalName := makeFailedTempFinalPair(t)
+	finalPath := filepath.Join(storageTestSharePath(storage), finalName)
+	baseline := countOpenDescriptorsForFile(t, finalPath)
+	previousGCPercent := debug.SetGCPercent(-1)
+	defer debug.SetGCPercent(previousGCPercent)
+
+	for range 32 {
+		if err := storage.Remove(t.Context(), testOwnerID, testShareID, tempName); !errors.Is(err, ErrMultipleLinks) {
+			t.Fatalf("Remove temp alias error = %v, want ErrMultipleLinks", err)
+		}
+	}
+	storage.hooks.remove = (*os.Root).Remove
+	removed, err := storage.CleanupTemps(t.Context(), testOwnerID, testShareID)
+	if err != nil {
+		t.Fatalf("CleanupTemps: %v", err)
+	}
+	if removed != 1 {
+		t.Fatalf("CleanupTemps removed %d entries, want temp alias only", removed)
+	}
+	if got := countOpenDescriptorsForFile(t, finalPath); got != baseline {
+		t.Fatalf("open descriptors for verified final = %d, want baseline %d", got, baseline)
+	}
+}
+
+func TestVerifiedPairCallersJoinCloseErrorOnRoleMismatch(t *testing.T) {
+	closeFailure := errors.New("close verified final failed")
+	for _, tc := range []struct {
+		name string
+		call func(*testing.T, *Storage, string, string) error
+	}{
+		{
+			name: "remove_temp_alias",
+			call: func(t *testing.T, storage *Storage, tempName, _ string) error {
+				t.Helper()
+				return storage.Remove(t.Context(), testOwnerID, testShareID, tempName)
+			},
+		},
+		{
+			name: "cleanup_recovery_with_final_alias",
+			call: func(t *testing.T, storage *Storage, _, finalName string) error {
+				t.Helper()
+				shareRoot, err := storage.openShare(testOwnerID, testShareID, false)
+				if err != nil {
+					t.Fatalf("openShare: %v", err)
+				}
+				_, recoverErr := storage.recoverTempAlias(shareRoot, finalName)
+				return errors.Join(recoverErr, shareRoot.Close())
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			storage, _, tempName, finalName := makeFailedTempFinalPair(t)
+			closeCalls := 0
+			storage.hooks.closeVerifiedFinal = func(file *os.File) error {
+				closeCalls++
+				return errors.Join(file.Close(), closeFailure)
+			}
+			for range 16 {
+				err := tc.call(t, storage, tempName, finalName)
+				if !errors.Is(err, ErrMultipleLinks) || !errors.Is(err, closeFailure) {
+					t.Fatalf("role-mismatch error = %v, want ErrMultipleLinks joined with close failure", err)
+				}
+			}
+			if closeCalls != 16 {
+				t.Fatalf("verified final close calls = %d, want 16", closeCalls)
+			}
+		})
+	}
+}
+
 func TestRecoveryRejectsAmbiguousThreeLinkPair(t *testing.T) {
 	storage := newTestStorage(t)
 	reservation, err := storage.Reserve(t.Context(), testOwnerID, testShareID, 0)
@@ -1816,6 +1891,32 @@ func requireUsage(t *testing.T, storage *Storage) QuotaUsage {
 
 func storageTestSharePath(storage *Storage) string {
 	return filepath.Join(storage.root.Name(), testOwnerID, testShareID)
+}
+
+func countOpenDescriptorsForFile(t *testing.T, path string) int {
+	t.Helper()
+	target, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat descriptor target: %v", err)
+	}
+	entries, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		t.Fatalf("ReadDir /proc/self/fd: %v", err)
+	}
+	count := 0
+	for _, entry := range entries {
+		info, err := os.Stat(filepath.Join("/proc/self/fd", entry.Name()))
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			t.Fatalf("Stat process descriptor %q: %v", entry.Name(), err)
+		}
+		if os.SameFile(target, info) {
+			count++
+		}
+	}
+	return count
 }
 
 func makeStorageDirectories(t *testing.T, rootPath string) string {
