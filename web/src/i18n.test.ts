@@ -48,4 +48,16 @@ describe('localization resources', () => {
   it('renders an error runtime state as localized Error', () => {
     expect(renderToStaticMarkup(createElement(RuntimeState, { state: 'error' }))).toContain('Error')
   })
+
+  it('ships every diagnostic action, status, path and machine-error meaning in English and Chinese', () => {
+    const keys = ['tab', 'start', 'cancel', 'empty', 'loadFailed', 'running', 'succeeded', 'failed', 'canceled', 'interrupted', 'direct', 'derp', 'peerRelay', 'diagnostic_canceled', 'diagnostic_timeout', 'diagnostic_invalid_magic', 'diagnostic_header_too_large', 'diagnostic_malformed_header', 'diagnostic_invalid_request', 'diagnostic_limit_exceeded', 'diagnostic_io', 'diagnostic_invalid_runner']
+    for (const key of keys) {
+      expect(i18n.getResource('en', 'translation', `diagnostics.${key}`)).toEqual(expect.any(String))
+      expect(i18n.getResource('zh-CN', 'translation', `diagnostics.${key}`)).toEqual(expect.any(String))
+    }
+    for (const code of ['REQUEST_FAILED', 'DIAGNOSTIC_NOT_FOUND', 'DIAGNOSTIC_INVALID_KIND', 'DIAGNOSTIC_INVALID_LIMITS', 'DIAGNOSTIC_CLIENT_ACTIVE', 'DIAGNOSTIC_OWNER_LIMIT', 'DIAGNOSTIC_NOT_RUNNING', 'DIAGNOSTICS_UNAVAILABLE']) {
+      expect(i18n.getResource('en', 'translation', `diagnostics.errors.${code}`)).toEqual(expect.any(String))
+      expect(i18n.getResource('zh-CN', 'translation', `diagnostics.errors.${code}`)).toEqual(expect.any(String))
+    }
+  })
 })

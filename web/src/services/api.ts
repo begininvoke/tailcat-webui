@@ -8,6 +8,25 @@ export interface RuntimeEvent {
   phase: RuntimePhase; sequence: number; at: string; payload?: unknown;
 }
 
+export const diagnosticKinds = ['ping', 'throughput'] as const
+export type DiagnosticKind = typeof diagnosticKinds[number]
+export const diagnosticStatuses = ['running', 'succeeded', 'failed', 'canceled', 'interrupted'] as const
+export type DiagnosticStatus = typeof diagnosticStatuses[number]
+export const diagnosticPaths = ['direct', 'derp', 'peer_relay'] as const
+export type DiagnosticPath = typeof diagnosticPaths[number]
+export const diagnosticErrorCodes = ['diagnostic_canceled', 'diagnostic_timeout', 'diagnostic_invalid_magic', 'diagnostic_header_too_large', 'diagnostic_malformed_header', 'diagnostic_invalid_request', 'diagnostic_limit_exceeded', 'diagnostic_io', 'diagnostic_invalid_runner'] as const
+export type DiagnosticErrorCode = typeof diagnosticErrorCodes[number]
+
+export interface DiagnosticRun {
+  id: string; client_id: string; kind: DiagnosticKind; status: DiagnosticStatus; path?: DiagnosticPath;
+  latency_ms?: number; upload_bytes: number; download_bytes: number; upload_bps: number; download_bps: number;
+  error_code?: DiagnosticErrorCode; started_at: string; finished_at?: string;
+}
+
+export type StartDiagnosticInput =
+  | { kind: 'ping'; duration_ms: number; bytes: 0 }
+  | { kind: 'throughput'; duration_ms: number; bytes: number }
+
 export interface Server {
   id: string; name: string; key_mode: 'ephemeral' | 'saved'; region: string; derp_map_url?: string;
   exit_node_enabled: boolean; allowlist_enabled: boolean; desired_running: boolean; runtime_state: RuntimePhase; connection_token?: string;
@@ -101,6 +120,9 @@ export const api = {
   createClient: (body: object) => request<Client>('/api/v1/clients', { method: 'POST', body: JSON.stringify(body) }),
   pingClient: (id: string) => request<Client>(`/api/v1/clients/${id}/ping`, { method: 'POST' }),
   deleteClient: (id: string) => request<void>(`/api/v1/clients/${id}`, { method: 'DELETE' }),
+  diagnostics: () => request<{ items: DiagnosticRun[] }>('/api/v1/diagnostics').then((r) => r.items),
+  startDiagnostic: (clientID: string, body: StartDiagnosticInput) => request<DiagnosticRun>(`/api/v1/clients/${clientID}/diagnostics`, { method: 'POST', body: JSON.stringify(body) }),
+  cancelDiagnostic: (id: string) => request<void>(`/api/v1/diagnostics/${id}/cancel`, { method: 'POST' }),
   parseToken: (token: string) => request<{ parsed: unknown }>('/api/v1/tokens/parse', { method: 'POST', body: JSON.stringify({ token }) }),
   resolveToken: (token: string) => request<{ token: string }>('/api/v1/tokens/resolve', { method: 'POST', body: JSON.stringify({ token }) }),
   routes: () => request<{ items: PublishedRoute[] }>('/api/v1/routes').then((r) => r.items),

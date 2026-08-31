@@ -49,4 +49,21 @@ describe('API client', () => {
     }))
     expect(fetchMock).toHaveBeenNthCalledWith(4, '/api/v1/exit-rules/rule-1', expect.objectContaining({ credentials: 'same-origin', method: 'DELETE' }))
   })
+
+  it('uses the diagnostics contract with exact request bodies', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ id: 'run-1', status: 'running' }), { status: 201, headers: { 'Content-Type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await api.startDiagnostic('client-1', { kind: 'ping', duration_ms: 500, bytes: 0 })
+    await api.startDiagnostic('client-1', { kind: 'throughput', duration_ms: 5000, bytes: 33554432 })
+    await api.cancelDiagnostic('run-1')
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/v1/clients/client-1/diagnostics', expect.objectContaining({
+      credentials: 'same-origin', method: 'POST', body: JSON.stringify({ kind: 'ping', duration_ms: 500, bytes: 0 }),
+    }))
+    expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/v1/clients/client-1/diagnostics', expect.objectContaining({
+      credentials: 'same-origin', method: 'POST', body: JSON.stringify({ kind: 'throughput', duration_ms: 5000, bytes: 33554432 }),
+    }))
+    expect(fetchMock).toHaveBeenNthCalledWith(3, '/api/v1/diagnostics/run-1/cancel', expect.objectContaining({ credentials: 'same-origin', method: 'POST' }))
+  })
 })

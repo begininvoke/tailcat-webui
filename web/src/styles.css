@@ -135,6 +135,22 @@ code, pre, .mono-value, .mono-input input, .mono-input textarea { font-family: u
 .exit-node-toggle { min-height: 44px; margin-bottom: 16px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-subtle); }
 .exit-rule-prefix { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: anywhere; }
 .exit-rule-table .ant-table-cell { vertical-align: middle; }
+.clients-tabs .ant-tabs-tab { min-height: 44px; padding-inline: 12px; }
+.diagnostics-table .ant-table-cell { vertical-align: top; }
+.diagnostics-table .operation-progress { min-width: 210px; }
+.diagnostics-list .ant-list-item { align-items: flex-start; }
+.diagnostic-card .ant-list-item-meta { min-width: 0; }
+.diagnostic-card .ant-list-item-meta-description { overflow-wrap: anywhere; }
+.diagnostic-client-id { max-width: min(100%, 34rem); }
+.operation-progress { min-width: 0; }
+.operation-progress-summary { margin-bottom: 8px; }
+.operation-progress .ant-progress { margin-bottom: 8px; }
+.operation-progress .ant-descriptions { margin-top: 8px; }
+.operation-progress-error { margin-top: 8px; }
+.operation-progress-limits { margin-top: 8px; }
+.tabular-figure { font-variant-numeric: tabular-nums; }
+.diagnostic-client-select { display: flex; flex-wrap: wrap; gap: 8px; }
+.diagnostic-client-select .ant-radio-wrapper { min-height: 44px; margin-inline-end: 0; }
 
 .mobile-nav { display: none; }
 
@@ -169,6 +185,12 @@ code, pre, .mono-value, .mono-input input, .mono-input textarea { font-family: u
   .server-settings-tabs .ant-list-item-action > li > .ant-btn,
   .exit-rule-table .ant-btn { min-width: 44px; min-height: 44px; }
   .exit-rule-card .ant-list-item-meta-description { margin-top: 6px; }
+  .clients-tabs .ant-tabs-nav { margin-bottom: 16px; }
+  .diagnostics-list .ant-list-item { display: block; }
+  .diagnostics-list .ant-list-item-action { margin-inline-start: 0; margin-top: 12px; }
+  .diagnostics-list .ant-list-item-action > li > .ant-btn { min-width: 44px; min-height: 44px; }
+  .diagnostic-card .operation-progress .ant-descriptions-item-label,
+  .diagnostic-card .operation-progress .ant-descriptions-item-content { padding-bottom: 4px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
