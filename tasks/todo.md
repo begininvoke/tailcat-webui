@@ -21,3 +21,21 @@
   - Verify: `make verify`, Docker build and workflow syntax review
   - Status: local gates, workflow syntax and the first remote CI/Docker build
     pass on `main`
+
+## Gonc-inspired operations extension
+
+- [ ] Runtime phases, typed event envelope and exhaustive UI labels
+- [ ] Injectable Tailcat server/client runtime adapter
+- [ ] Route-scoped reusable HTTP transport registry and invalidation
+- [ ] Port-aware operator target-rule parser and resolver
+- [ ] Owner-scoped exit-node rule persistence and runtime enforcement
+- [ ] Server policy management UI in English and Chinese
+- [ ] Diagnostic schema and bounded reserved-port protocol
+- [ ] Diagnostic lifecycle, API, retention and audit integration
+- [ ] Client diagnostics tab with progress, history and cancellation
+- [ ] Transfer share/job/file/item schemas and migrations
+- [ ] Rooted staging storage and BLAKE3 block manifests
+- [ ] Capability protocol, resume runner and reserved Tailcat service
+- [ ] Share/transfer management API, quotas, cleanup and OpenAPI
+- [ ] Transfer UI with multi-file upload, progress, retry and downloads
+- [ ] Browser QA, security review, release verification and documentation

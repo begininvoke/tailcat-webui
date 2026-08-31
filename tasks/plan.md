@@ -18,3 +18,15 @@ Risks: Tailcat has no API stability promise, so pin an exact revision and keep
 all direct imports behind `internal/tailnet`; public DERP is rate limited, so
 support custom maps; shared-host target access is security-sensitive, so apply
 policy before any OS dial.
+
+## Gonc-inspired operations extension
+
+1. Stabilize runtime phases, events and the Tailcat adapter boundary.
+2. Reuse route-scoped HTTP transports with explicit invalidation.
+3. Add port-aware operator policy and owner-scoped exit rules.
+4. Add bounded path diagnostics, traffic summaries and peer speed tests.
+5. Add browser-staged shares and resumable verified transfer jobs.
+6. Extend the existing Ant Design pages without increasing mobile nav count.
+
+The binding implementation plan is
+`docs/superpowers/plans/2026-08-31-gonc-inspired-operations.md`.
