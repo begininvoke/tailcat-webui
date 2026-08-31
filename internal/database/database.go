@@ -8,6 +8,7 @@ import (
 
 	"github.com/ca-x/tailcat-webui/ent"
 	"github.com/ca-x/tailcat-webui/ent/migrate"
+	_ "github.com/ca-x/tailcat-webui/ent/runtime"
 
 	entsql "entgo.io/ent/dialect/sql"
 	_ "github.com/lib-x/entsqlite"

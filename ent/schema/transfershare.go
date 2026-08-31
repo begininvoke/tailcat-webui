@@ -73,7 +73,7 @@ func (TransferShare) Fields() []ent.Field {
 		field.String("user_id").Immutable(),
 		field.String("server_id").Immutable(),
 		field.Enum("status").Values(transferStatuses...).Default("staging"),
-		field.Bytes("capability_hash").NotEmpty().Sensitive(),
+		field.Bytes("capability_hash").NotEmpty().Sensitive().Validate(validateSHA256Hash),
 		field.Int64("total_bytes").NonNegative().Default(0),
 		field.Int("file_count").NonNegative().Default(0),
 		field.Time("ready_at").Optional().Nillable(),
@@ -89,6 +89,7 @@ func (TransferShare) Indexes() []ent.Index {
 	return []ent.Index{
 		index.Fields("user_id", "created_at"),
 		index.Fields("user_id", "status", "expires_at"),
+		index.Fields("status", "expires_at"),
 		index.Fields("server_id", "created_at"),
 	}
 }

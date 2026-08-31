@@ -135,7 +135,9 @@ func (_c *ShareFileCreate) Mutation() *ShareFileMutation {
 
 // Save creates the ShareFile in the database.
 func (_c *ShareFileCreate) Save(ctx context.Context) (*ShareFile, error) {
-	_c.defaults()
+	if err := _c.defaults(); err != nil {
+		return nil, err
+	}
 	return withHooks(ctx, _c.sqlSave, _c.mutation, _c.hooks)
 }
 
@@ -162,19 +164,26 @@ func (_c *ShareFileCreate) ExecX(ctx context.Context) {
 }
 
 // defaults sets the default values of the builder before save.
-func (_c *ShareFileCreate) defaults() {
+func (_c *ShareFileCreate) defaults() error {
 	if _, ok := _c.mutation.BlockSize(); !ok {
 		v := sharefile.DefaultBlockSize
 		_c.mutation.SetBlockSize(v)
 	}
 	if _, ok := _c.mutation.CreatedAt(); !ok {
+		if sharefile.DefaultCreatedAt == nil {
+			return fmt.Errorf("ent: uninitialized sharefile.DefaultCreatedAt (forgotten import ent/runtime?)")
+		}
 		v := sharefile.DefaultCreatedAt()
 		_c.mutation.SetCreatedAt(v)
 	}
 	if _, ok := _c.mutation.ID(); !ok {
+		if sharefile.DefaultID == nil {
+			return fmt.Errorf("ent: uninitialized sharefile.DefaultID (forgotten import ent/runtime?)")
+		}
 		v := sharefile.DefaultID()
 		_c.mutation.SetID(v)
 	}
+	return nil
 }
 
 // check runs all checks and user-defined validators on the builder.

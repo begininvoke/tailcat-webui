@@ -554,6 +554,11 @@ var (
 				Columns: []*schema.Column{TransferJobsColumns[13], TransferJobsColumns[3], TransferJobsColumns[8]},
 			},
 			{
+				Name:    "transferjob_status_expires_at",
+				Unique:  false,
+				Columns: []*schema.Column{TransferJobsColumns[3], TransferJobsColumns[8]},
+			},
+			{
 				Name:    "transferjob_client_id_created_at",
 				Unique:  false,
 				Columns: []*schema.Column{TransferJobsColumns[12], TransferJobsColumns[10]},
@@ -605,6 +610,11 @@ var (
 				Name:    "transfershare_user_id_status_expires_at",
 				Unique:  false,
 				Columns: []*schema.Column{TransferSharesColumns[12], TransferSharesColumns[1], TransferSharesColumns[7]},
+			},
+			{
+				Name:    "transfershare_status_expires_at",
+				Unique:  false,
+				Columns: []*schema.Column{TransferSharesColumns[1], TransferSharesColumns[7]},
 			},
 			{
 				Name:    "transfershare_server_id_created_at",

@@ -17,8 +17,8 @@ func (ShareFile) Fields() []ent.Field {
 		idField(),
 		field.String("user_id").Immutable(),
 		field.String("share_id").Immutable(),
-		field.String("storage_name").NotEmpty().Immutable().Sensitive(),
-		field.String("virtual_path").NotEmpty().Immutable(),
+		field.String("storage_name").NotEmpty().Immutable().Sensitive().Validate(validateStorageName),
+		field.String("virtual_path").NotEmpty().Immutable().Validate(validateVirtualPath),
 		field.Int64("size_bytes").NonNegative().Immutable(),
 		field.Time("mtime").Immutable(),
 		field.String("blake3").NotEmpty().Immutable().Validate(validateBLAKE3),
@@ -42,3 +42,5 @@ func (ShareFile) Edges() []ent.Edge {
 		edge.From("share", TransferShare.Type).Ref("files").Field("share_id").Unique().Required().Immutable().Annotations(entsql.OnDelete(entsql.Cascade)),
 	}
 }
+
+func (ShareFile) Hooks() []ent.Hook { return []ent.Hook{validateShareFileMutation} }

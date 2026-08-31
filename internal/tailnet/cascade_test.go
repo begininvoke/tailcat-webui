@@ -128,7 +128,7 @@ func createTransferShare(t *testing.T, ctx context.Context, db *ent.Client, owne
 	return db.TransferShare.Create().
 		SetUserID(ownerID).
 		SetServerID(serverID).
-		SetCapabilityHash([]byte("sha256-capability-hash")).
+		SetCapabilityHash([]byte("01234567890123456789012345678901")).
 		SetExpiresAt(time.Now().Add(time.Hour)).
 		SaveX(ctx)
 }

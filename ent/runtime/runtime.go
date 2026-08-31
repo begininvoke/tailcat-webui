@@ -2,7 +2,582 @@
 
 package runtime
 
-// The schema-stitching logic is generated in github.com/ca-x/tailcat-webui/ent/runtime.go
+import (
+	"time"
+
+	"github.com/ca-x/tailcat-webui/ent/allowedclient"
+	"github.com/ca-x/tailcat-webui/ent/auditevent"
+	"github.com/ca-x/tailcat-webui/ent/diagnosticrun"
+	"github.com/ca-x/tailcat-webui/ent/exitrule"
+	"github.com/ca-x/tailcat-webui/ent/loginflow"
+	"github.com/ca-x/tailcat-webui/ent/portmapping"
+	"github.com/ca-x/tailcat-webui/ent/publishedroute"
+	"github.com/ca-x/tailcat-webui/ent/schema"
+	"github.com/ca-x/tailcat-webui/ent/session"
+	"github.com/ca-x/tailcat-webui/ent/sharefile"
+	"github.com/ca-x/tailcat-webui/ent/tailclient"
+	"github.com/ca-x/tailcat-webui/ent/tailserver"
+	"github.com/ca-x/tailcat-webui/ent/transferitem"
+	"github.com/ca-x/tailcat-webui/ent/transferjob"
+	"github.com/ca-x/tailcat-webui/ent/transfershare"
+	"github.com/ca-x/tailcat-webui/ent/user"
+)
+
+// The init function reads all schema descriptors with runtime code
+// (default values, validators, hooks and policies) and stitches it
+// to their package variables.
+func init() {
+	allowedclientFields := schema.AllowedClient{}.Fields()
+	_ = allowedclientFields
+	// allowedclientDescName is the schema descriptor for name field.
+	allowedclientDescName := allowedclientFields[3].Descriptor()
+	// allowedclient.NameValidator is a validator for the "name" field. It is called by the builders before save.
+	allowedclient.NameValidator = allowedclientDescName.Validators[0].(func(string) error)
+	// allowedclientDescPublicKey is the schema descriptor for public_key field.
+	allowedclientDescPublicKey := allowedclientFields[4].Descriptor()
+	// allowedclient.PublicKeyValidator is a validator for the "public_key" field. It is called by the builders before save.
+	allowedclient.PublicKeyValidator = allowedclientDescPublicKey.Validators[0].(func(string) error)
+	// allowedclientDescCreatedAt is the schema descriptor for created_at field.
+	allowedclientDescCreatedAt := allowedclientFields[5].Descriptor()
+	// allowedclient.DefaultCreatedAt holds the default value on creation for the created_at field.
+	allowedclient.DefaultCreatedAt = allowedclientDescCreatedAt.Default.(func() time.Time)
+	// allowedclientDescID is the schema descriptor for id field.
+	allowedclientDescID := allowedclientFields[0].Descriptor()
+	// allowedclient.DefaultID holds the default value on creation for the id field.
+	allowedclient.DefaultID = allowedclientDescID.Default.(func() string)
+	auditeventFields := schema.AuditEvent{}.Fields()
+	_ = auditeventFields
+	// auditeventDescAction is the schema descriptor for action field.
+	auditeventDescAction := auditeventFields[2].Descriptor()
+	// auditevent.ActionValidator is a validator for the "action" field. It is called by the builders before save.
+	auditevent.ActionValidator = auditeventDescAction.Validators[0].(func(string) error)
+	// auditeventDescCreatedAt is the schema descriptor for created_at field.
+	auditeventDescCreatedAt := auditeventFields[8].Descriptor()
+	// auditevent.DefaultCreatedAt holds the default value on creation for the created_at field.
+	auditevent.DefaultCreatedAt = auditeventDescCreatedAt.Default.(func() time.Time)
+	// auditeventDescID is the schema descriptor for id field.
+	auditeventDescID := auditeventFields[0].Descriptor()
+	// auditevent.DefaultID holds the default value on creation for the id field.
+	auditevent.DefaultID = auditeventDescID.Default.(func() string)
+	diagnosticrunFields := schema.DiagnosticRun{}.Fields()
+	_ = diagnosticrunFields
+	// diagnosticrunDescUploadBytes is the schema descriptor for upload_bytes field.
+	diagnosticrunDescUploadBytes := diagnosticrunFields[7].Descriptor()
+	// diagnosticrun.DefaultUploadBytes holds the default value on creation for the upload_bytes field.
+	diagnosticrun.DefaultUploadBytes = diagnosticrunDescUploadBytes.Default.(int64)
+	// diagnosticrunDescDownloadBytes is the schema descriptor for download_bytes field.
+	diagnosticrunDescDownloadBytes := diagnosticrunFields[8].Descriptor()
+	// diagnosticrun.DefaultDownloadBytes holds the default value on creation for the download_bytes field.
+	diagnosticrun.DefaultDownloadBytes = diagnosticrunDescDownloadBytes.Default.(int64)
+	// diagnosticrunDescUploadBps is the schema descriptor for upload_bps field.
+	diagnosticrunDescUploadBps := diagnosticrunFields[9].Descriptor()
+	// diagnosticrun.DefaultUploadBps holds the default value on creation for the upload_bps field.
+	diagnosticrun.DefaultUploadBps = diagnosticrunDescUploadBps.Default.(int64)
+	// diagnosticrunDescDownloadBps is the schema descriptor for download_bps field.
+	diagnosticrunDescDownloadBps := diagnosticrunFields[10].Descriptor()
+	// diagnosticrun.DefaultDownloadBps holds the default value on creation for the download_bps field.
+	diagnosticrun.DefaultDownloadBps = diagnosticrunDescDownloadBps.Default.(int64)
+	// diagnosticrunDescStartedAt is the schema descriptor for started_at field.
+	diagnosticrunDescStartedAt := diagnosticrunFields[12].Descriptor()
+	// diagnosticrun.DefaultStartedAt holds the default value on creation for the started_at field.
+	diagnosticrun.DefaultStartedAt = diagnosticrunDescStartedAt.Default.(func() time.Time)
+	// diagnosticrunDescID is the schema descriptor for id field.
+	diagnosticrunDescID := diagnosticrunFields[0].Descriptor()
+	// diagnosticrun.DefaultID holds the default value on creation for the id field.
+	diagnosticrun.DefaultID = diagnosticrunDescID.Default.(func() string)
+	exitruleFields := schema.ExitRule{}.Fields()
+	_ = exitruleFields
+	// exitruleDescPrefix is the schema descriptor for prefix field.
+	exitruleDescPrefix := exitruleFields[3].Descriptor()
+	// exitrule.PrefixValidator is a validator for the "prefix" field. It is called by the builders before save.
+	exitrule.PrefixValidator = exitruleDescPrefix.Validators[0].(func(string) error)
+	// exitruleDescEnabled is the schema descriptor for enabled field.
+	exitruleDescEnabled := exitruleFields[6].Descriptor()
+	// exitrule.DefaultEnabled holds the default value on creation for the enabled field.
+	exitrule.DefaultEnabled = exitruleDescEnabled.Default.(bool)
+	// exitruleDescCreatedAt is the schema descriptor for created_at field.
+	exitruleDescCreatedAt := exitruleFields[7].Descriptor()
+	// exitrule.DefaultCreatedAt holds the default value on creation for the created_at field.
+	exitrule.DefaultCreatedAt = exitruleDescCreatedAt.Default.(func() time.Time)
+	// exitruleDescUpdatedAt is the schema descriptor for updated_at field.
+	exitruleDescUpdatedAt := exitruleFields[8].Descriptor()
+	// exitrule.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	exitrule.DefaultUpdatedAt = exitruleDescUpdatedAt.Default.(func() time.Time)
+	// exitrule.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	exitrule.UpdateDefaultUpdatedAt = exitruleDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// exitruleDescID is the schema descriptor for id field.
+	exitruleDescID := exitruleFields[0].Descriptor()
+	// exitrule.DefaultID holds the default value on creation for the id field.
+	exitrule.DefaultID = exitruleDescID.Default.(func() string)
+	loginflowFields := schema.LoginFlow{}.Fields()
+	_ = loginflowFields
+	// loginflowDescReturnTo is the schema descriptor for return_to field.
+	loginflowDescReturnTo := loginflowFields[4].Descriptor()
+	// loginflow.DefaultReturnTo holds the default value on creation for the return_to field.
+	loginflow.DefaultReturnTo = loginflowDescReturnTo.Default.(string)
+	// loginflowDescCreatedAt is the schema descriptor for created_at field.
+	loginflowDescCreatedAt := loginflowFields[6].Descriptor()
+	// loginflow.DefaultCreatedAt holds the default value on creation for the created_at field.
+	loginflow.DefaultCreatedAt = loginflowDescCreatedAt.Default.(func() time.Time)
+	// loginflowDescID is the schema descriptor for id field.
+	loginflowDescID := loginflowFields[0].Descriptor()
+	// loginflow.DefaultID holds the default value on creation for the id field.
+	loginflow.DefaultID = loginflowDescID.Default.(func() string)
+	portmappingFields := schema.PortMapping{}.Fields()
+	_ = portmappingFields
+	// portmappingDescName is the schema descriptor for name field.
+	portmappingDescName := portmappingFields[3].Descriptor()
+	// portmapping.NameValidator is a validator for the "name" field. It is called by the builders before save.
+	portmapping.NameValidator = portmappingDescName.Validators[0].(func(string) error)
+	// portmappingDescTargetHost is the schema descriptor for target_host field.
+	portmappingDescTargetHost := portmappingFields[6].Descriptor()
+	// portmapping.DefaultTargetHost holds the default value on creation for the target_host field.
+	portmapping.DefaultTargetHost = portmappingDescTargetHost.Default.(string)
+	// portmappingDescEnabled is the schema descriptor for enabled field.
+	portmappingDescEnabled := portmappingFields[8].Descriptor()
+	// portmapping.DefaultEnabled holds the default value on creation for the enabled field.
+	portmapping.DefaultEnabled = portmappingDescEnabled.Default.(bool)
+	// portmappingDescCreatedAt is the schema descriptor for created_at field.
+	portmappingDescCreatedAt := portmappingFields[9].Descriptor()
+	// portmapping.DefaultCreatedAt holds the default value on creation for the created_at field.
+	portmapping.DefaultCreatedAt = portmappingDescCreatedAt.Default.(func() time.Time)
+	// portmappingDescUpdatedAt is the schema descriptor for updated_at field.
+	portmappingDescUpdatedAt := portmappingFields[10].Descriptor()
+	// portmapping.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	portmapping.DefaultUpdatedAt = portmappingDescUpdatedAt.Default.(func() time.Time)
+	// portmapping.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	portmapping.UpdateDefaultUpdatedAt = portmappingDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// portmappingDescID is the schema descriptor for id field.
+	portmappingDescID := portmappingFields[0].Descriptor()
+	// portmapping.DefaultID holds the default value on creation for the id field.
+	portmapping.DefaultID = portmappingDescID.Default.(func() string)
+	publishedrouteFields := schema.PublishedRoute{}.Fields()
+	_ = publishedrouteFields
+	// publishedrouteDescName is the schema descriptor for name field.
+	publishedrouteDescName := publishedrouteFields[3].Descriptor()
+	// publishedroute.NameValidator is a validator for the "name" field. It is called by the builders before save.
+	publishedroute.NameValidator = publishedrouteDescName.Validators[0].(func(string) error)
+	// publishedrouteDescSlug is the schema descriptor for slug field.
+	publishedrouteDescSlug := publishedrouteFields[4].Descriptor()
+	// publishedroute.SlugValidator is a validator for the "slug" field. It is called by the builders before save.
+	publishedroute.SlugValidator = publishedrouteDescSlug.Validators[0].(func(string) error)
+	// publishedrouteDescBasePath is the schema descriptor for base_path field.
+	publishedrouteDescBasePath := publishedrouteFields[6].Descriptor()
+	// publishedroute.DefaultBasePath holds the default value on creation for the base_path field.
+	publishedroute.DefaultBasePath = publishedrouteDescBasePath.Default.(string)
+	// publishedrouteDescAllowedMethods is the schema descriptor for allowed_methods field.
+	publishedrouteDescAllowedMethods := publishedrouteFields[8].Descriptor()
+	// publishedroute.DefaultAllowedMethods holds the default value on creation for the allowed_methods field.
+	publishedroute.DefaultAllowedMethods = publishedrouteDescAllowedMethods.Default.([]string)
+	// publishedrouteDescEnabled is the schema descriptor for enabled field.
+	publishedrouteDescEnabled := publishedrouteFields[9].Descriptor()
+	// publishedroute.DefaultEnabled holds the default value on creation for the enabled field.
+	publishedroute.DefaultEnabled = publishedrouteDescEnabled.Default.(bool)
+	// publishedrouteDescCreatedAt is the schema descriptor for created_at field.
+	publishedrouteDescCreatedAt := publishedrouteFields[10].Descriptor()
+	// publishedroute.DefaultCreatedAt holds the default value on creation for the created_at field.
+	publishedroute.DefaultCreatedAt = publishedrouteDescCreatedAt.Default.(func() time.Time)
+	// publishedrouteDescUpdatedAt is the schema descriptor for updated_at field.
+	publishedrouteDescUpdatedAt := publishedrouteFields[11].Descriptor()
+	// publishedroute.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	publishedroute.DefaultUpdatedAt = publishedrouteDescUpdatedAt.Default.(func() time.Time)
+	// publishedroute.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	publishedroute.UpdateDefaultUpdatedAt = publishedrouteDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// publishedrouteDescID is the schema descriptor for id field.
+	publishedrouteDescID := publishedrouteFields[0].Descriptor()
+	// publishedroute.DefaultID holds the default value on creation for the id field.
+	publishedroute.DefaultID = publishedrouteDescID.Default.(func() string)
+	sessionFields := schema.Session{}.Fields()
+	_ = sessionFields
+	// sessionDescCreatedAt is the schema descriptor for created_at field.
+	sessionDescCreatedAt := sessionFields[5].Descriptor()
+	// session.DefaultCreatedAt holds the default value on creation for the created_at field.
+	session.DefaultCreatedAt = sessionDescCreatedAt.Default.(func() time.Time)
+	// sessionDescID is the schema descriptor for id field.
+	sessionDescID := sessionFields[0].Descriptor()
+	// session.DefaultID holds the default value on creation for the id field.
+	session.DefaultID = sessionDescID.Default.(func() string)
+	sharefileHooks := schema.ShareFile{}.Hooks()
+	sharefile.Hooks[0] = sharefileHooks[0]
+	sharefileFields := schema.ShareFile{}.Fields()
+	_ = sharefileFields
+	// sharefileDescStorageName is the schema descriptor for storage_name field.
+	sharefileDescStorageName := sharefileFields[3].Descriptor()
+	// sharefile.StorageNameValidator is a validator for the "storage_name" field. It is called by the builders before save.
+	sharefile.StorageNameValidator = func() func(string) error {
+		validators := sharefileDescStorageName.Validators
+		fns := [...]func(string) error{
+			validators[0].(func(string) error),
+			validators[1].(func(string) error),
+		}
+		return func(storage_name string) error {
+			for _, fn := range fns {
+				if err := fn(storage_name); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}()
+	// sharefileDescVirtualPath is the schema descriptor for virtual_path field.
+	sharefileDescVirtualPath := sharefileFields[4].Descriptor()
+	// sharefile.VirtualPathValidator is a validator for the "virtual_path" field. It is called by the builders before save.
+	sharefile.VirtualPathValidator = func() func(string) error {
+		validators := sharefileDescVirtualPath.Validators
+		fns := [...]func(string) error{
+			validators[0].(func(string) error),
+			validators[1].(func(string) error),
+		}
+		return func(virtual_path string) error {
+			for _, fn := range fns {
+				if err := fn(virtual_path); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}()
+	// sharefileDescSizeBytes is the schema descriptor for size_bytes field.
+	sharefileDescSizeBytes := sharefileFields[5].Descriptor()
+	// sharefile.SizeBytesValidator is a validator for the "size_bytes" field. It is called by the builders before save.
+	sharefile.SizeBytesValidator = sharefileDescSizeBytes.Validators[0].(func(int64) error)
+	// sharefileDescBlake3 is the schema descriptor for blake3 field.
+	sharefileDescBlake3 := sharefileFields[7].Descriptor()
+	// sharefile.Blake3Validator is a validator for the "blake3" field. It is called by the builders before save.
+	sharefile.Blake3Validator = func() func(string) error {
+		validators := sharefileDescBlake3.Validators
+		fns := [...]func(string) error{
+			validators[0].(func(string) error),
+			validators[1].(func(string) error),
+		}
+		return func(blake3 string) error {
+			for _, fn := range fns {
+				if err := fn(blake3); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}()
+	// sharefileDescBlockSize is the schema descriptor for block_size field.
+	sharefileDescBlockSize := sharefileFields[8].Descriptor()
+	// sharefile.DefaultBlockSize holds the default value on creation for the block_size field.
+	sharefile.DefaultBlockSize = sharefileDescBlockSize.Default.(int64)
+	// sharefile.BlockSizeValidator is a validator for the "block_size" field. It is called by the builders before save.
+	sharefile.BlockSizeValidator = sharefileDescBlockSize.Validators[0].(func(int64) error)
+	// sharefileDescBlockHashes is the schema descriptor for block_hashes field.
+	sharefileDescBlockHashes := sharefileFields[9].Descriptor()
+	// sharefile.BlockHashesValidator is a validator for the "block_hashes" field. It is called by the builders before save.
+	sharefile.BlockHashesValidator = sharefileDescBlockHashes.Validators[0].(func([]string) error)
+	// sharefileDescCreatedAt is the schema descriptor for created_at field.
+	sharefileDescCreatedAt := sharefileFields[10].Descriptor()
+	// sharefile.DefaultCreatedAt holds the default value on creation for the created_at field.
+	sharefile.DefaultCreatedAt = sharefileDescCreatedAt.Default.(func() time.Time)
+	// sharefileDescID is the schema descriptor for id field.
+	sharefileDescID := sharefileFields[0].Descriptor()
+	// sharefile.DefaultID holds the default value on creation for the id field.
+	sharefile.DefaultID = sharefileDescID.Default.(func() string)
+	tailclientFields := schema.TailClient{}.Fields()
+	_ = tailclientFields
+	// tailclientDescName is the schema descriptor for name field.
+	tailclientDescName := tailclientFields[2].Descriptor()
+	// tailclient.NameValidator is a validator for the "name" field. It is called by the builders before save.
+	tailclient.NameValidator = tailclientDescName.Validators[0].(func(string) error)
+	// tailclientDescServerTokenCipher is the schema descriptor for server_token_cipher field.
+	tailclientDescServerTokenCipher := tailclientFields[3].Descriptor()
+	// tailclient.ServerTokenCipherValidator is a validator for the "server_token_cipher" field. It is called by the builders before save.
+	tailclient.ServerTokenCipherValidator = tailclientDescServerTokenCipher.Validators[0].(func([]byte) error)
+	// tailclientDescTokenHint is the schema descriptor for token_hint field.
+	tailclientDescTokenHint := tailclientFields[4].Descriptor()
+	// tailclient.TokenHintValidator is a validator for the "token_hint" field. It is called by the builders before save.
+	tailclient.TokenHintValidator = tailclientDescTokenHint.Validators[0].(func(string) error)
+	// tailclientDescCreatedAt is the schema descriptor for created_at field.
+	tailclientDescCreatedAt := tailclientFields[10].Descriptor()
+	// tailclient.DefaultCreatedAt holds the default value on creation for the created_at field.
+	tailclient.DefaultCreatedAt = tailclientDescCreatedAt.Default.(func() time.Time)
+	// tailclientDescUpdatedAt is the schema descriptor for updated_at field.
+	tailclientDescUpdatedAt := tailclientFields[11].Descriptor()
+	// tailclient.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	tailclient.DefaultUpdatedAt = tailclientDescUpdatedAt.Default.(func() time.Time)
+	// tailclient.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	tailclient.UpdateDefaultUpdatedAt = tailclientDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// tailclientDescID is the schema descriptor for id field.
+	tailclientDescID := tailclientFields[0].Descriptor()
+	// tailclient.DefaultID holds the default value on creation for the id field.
+	tailclient.DefaultID = tailclientDescID.Default.(func() string)
+	tailserverFields := schema.TailServer{}.Fields()
+	_ = tailserverFields
+	// tailserverDescName is the schema descriptor for name field.
+	tailserverDescName := tailserverFields[2].Descriptor()
+	// tailserver.NameValidator is a validator for the "name" field. It is called by the builders before save.
+	tailserver.NameValidator = tailserverDescName.Validators[0].(func(string) error)
+	// tailserverDescRegion is the schema descriptor for region field.
+	tailserverDescRegion := tailserverFields[5].Descriptor()
+	// tailserver.DefaultRegion holds the default value on creation for the region field.
+	tailserver.DefaultRegion = tailserverDescRegion.Default.(string)
+	// tailserverDescAllowlistEnabled is the schema descriptor for allowlist_enabled field.
+	tailserverDescAllowlistEnabled := tailserverFields[7].Descriptor()
+	// tailserver.DefaultAllowlistEnabled holds the default value on creation for the allowlist_enabled field.
+	tailserver.DefaultAllowlistEnabled = tailserverDescAllowlistEnabled.Default.(bool)
+	// tailserverDescExitNodeEnabled is the schema descriptor for exit_node_enabled field.
+	tailserverDescExitNodeEnabled := tailserverFields[8].Descriptor()
+	// tailserver.DefaultExitNodeEnabled holds the default value on creation for the exit_node_enabled field.
+	tailserver.DefaultExitNodeEnabled = tailserverDescExitNodeEnabled.Default.(bool)
+	// tailserverDescDesiredRunning is the schema descriptor for desired_running field.
+	tailserverDescDesiredRunning := tailserverFields[9].Descriptor()
+	// tailserver.DefaultDesiredRunning holds the default value on creation for the desired_running field.
+	tailserver.DefaultDesiredRunning = tailserverDescDesiredRunning.Default.(bool)
+	// tailserverDescCreatedAt is the schema descriptor for created_at field.
+	tailserverDescCreatedAt := tailserverFields[10].Descriptor()
+	// tailserver.DefaultCreatedAt holds the default value on creation for the created_at field.
+	tailserver.DefaultCreatedAt = tailserverDescCreatedAt.Default.(func() time.Time)
+	// tailserverDescUpdatedAt is the schema descriptor for updated_at field.
+	tailserverDescUpdatedAt := tailserverFields[11].Descriptor()
+	// tailserver.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	tailserver.DefaultUpdatedAt = tailserverDescUpdatedAt.Default.(func() time.Time)
+	// tailserver.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	tailserver.UpdateDefaultUpdatedAt = tailserverDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// tailserverDescID is the schema descriptor for id field.
+	tailserverDescID := tailserverFields[0].Descriptor()
+	// tailserver.DefaultID holds the default value on creation for the id field.
+	tailserver.DefaultID = tailserverDescID.Default.(func() string)
+	transferitemHooks := schema.TransferItem{}.Hooks()
+	transferitem.Hooks[0] = transferitemHooks[0]
+	transferitemFields := schema.TransferItem{}.Fields()
+	_ = transferitemFields
+	// transferitemDescRemoteFileID is the schema descriptor for remote_file_id field.
+	transferitemDescRemoteFileID := transferitemFields[3].Descriptor()
+	// transferitem.RemoteFileIDValidator is a validator for the "remote_file_id" field. It is called by the builders before save.
+	transferitem.RemoteFileIDValidator = func() func(string) error {
+		validators := transferitemDescRemoteFileID.Validators
+		fns := [...]func(string) error{
+			validators[0].(func(string) error),
+			validators[1].(func(string) error),
+		}
+		return func(remote_file_id string) error {
+			for _, fn := range fns {
+				if err := fn(remote_file_id); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}()
+	// transferitemDescStorageName is the schema descriptor for storage_name field.
+	transferitemDescStorageName := transferitemFields[4].Descriptor()
+	// transferitem.StorageNameValidator is a validator for the "storage_name" field. It is called by the builders before save.
+	transferitem.StorageNameValidator = func() func(string) error {
+		validators := transferitemDescStorageName.Validators
+		fns := [...]func(string) error{
+			validators[0].(func(string) error),
+			validators[1].(func(string) error),
+		}
+		return func(storage_name string) error {
+			for _, fn := range fns {
+				if err := fn(storage_name); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}()
+	// transferitemDescVirtualPath is the schema descriptor for virtual_path field.
+	transferitemDescVirtualPath := transferitemFields[5].Descriptor()
+	// transferitem.VirtualPathValidator is a validator for the "virtual_path" field. It is called by the builders before save.
+	transferitem.VirtualPathValidator = func() func(string) error {
+		validators := transferitemDescVirtualPath.Validators
+		fns := [...]func(string) error{
+			validators[0].(func(string) error),
+			validators[1].(func(string) error),
+		}
+		return func(virtual_path string) error {
+			for _, fn := range fns {
+				if err := fn(virtual_path); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}()
+	// transferitemDescSizeBytes is the schema descriptor for size_bytes field.
+	transferitemDescSizeBytes := transferitemFields[6].Descriptor()
+	// transferitem.SizeBytesValidator is a validator for the "size_bytes" field. It is called by the builders before save.
+	transferitem.SizeBytesValidator = transferitemDescSizeBytes.Validators[0].(func(int64) error)
+	// transferitemDescBlake3 is the schema descriptor for blake3 field.
+	transferitemDescBlake3 := transferitemFields[8].Descriptor()
+	// transferitem.Blake3Validator is a validator for the "blake3" field. It is called by the builders before save.
+	transferitem.Blake3Validator = func() func(string) error {
+		validators := transferitemDescBlake3.Validators
+		fns := [...]func(string) error{
+			validators[0].(func(string) error),
+			validators[1].(func(string) error),
+		}
+		return func(blake3 string) error {
+			for _, fn := range fns {
+				if err := fn(blake3); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}()
+	// transferitemDescBlockSize is the schema descriptor for block_size field.
+	transferitemDescBlockSize := transferitemFields[9].Descriptor()
+	// transferitem.DefaultBlockSize holds the default value on creation for the block_size field.
+	transferitem.DefaultBlockSize = transferitemDescBlockSize.Default.(int64)
+	// transferitem.BlockSizeValidator is a validator for the "block_size" field. It is called by the builders before save.
+	transferitem.BlockSizeValidator = transferitemDescBlockSize.Validators[0].(func(int64) error)
+	// transferitemDescBlockHashes is the schema descriptor for block_hashes field.
+	transferitemDescBlockHashes := transferitemFields[10].Descriptor()
+	// transferitem.BlockHashesValidator is a validator for the "block_hashes" field. It is called by the builders before save.
+	transferitem.BlockHashesValidator = transferitemDescBlockHashes.Validators[0].(func([]string) error)
+	// transferitemDescCompletedBlocks is the schema descriptor for completed_blocks field.
+	transferitemDescCompletedBlocks := transferitemFields[11].Descriptor()
+	// transferitem.DefaultCompletedBlocks holds the default value on creation for the completed_blocks field.
+	transferitem.DefaultCompletedBlocks = transferitemDescCompletedBlocks.Default.([]int)
+	// transferitemDescReceivedBytes is the schema descriptor for received_bytes field.
+	transferitemDescReceivedBytes := transferitemFields[12].Descriptor()
+	// transferitem.DefaultReceivedBytes holds the default value on creation for the received_bytes field.
+	transferitem.DefaultReceivedBytes = transferitemDescReceivedBytes.Default.(int64)
+	// transferitem.ReceivedBytesValidator is a validator for the "received_bytes" field. It is called by the builders before save.
+	transferitem.ReceivedBytesValidator = transferitemDescReceivedBytes.Validators[0].(func(int64) error)
+	// transferitemDescCreatedAt is the schema descriptor for created_at field.
+	transferitemDescCreatedAt := transferitemFields[17].Descriptor()
+	// transferitem.DefaultCreatedAt holds the default value on creation for the created_at field.
+	transferitem.DefaultCreatedAt = transferitemDescCreatedAt.Default.(func() time.Time)
+	// transferitemDescUpdatedAt is the schema descriptor for updated_at field.
+	transferitemDescUpdatedAt := transferitemFields[18].Descriptor()
+	// transferitem.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	transferitem.DefaultUpdatedAt = transferitemDescUpdatedAt.Default.(func() time.Time)
+	// transferitem.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	transferitem.UpdateDefaultUpdatedAt = transferitemDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// transferitemDescID is the schema descriptor for id field.
+	transferitemDescID := transferitemFields[0].Descriptor()
+	// transferitem.DefaultID holds the default value on creation for the id field.
+	transferitem.DefaultID = transferitemDescID.Default.(func() string)
+	transferjobHooks := schema.TransferJob{}.Hooks()
+	transferjob.Hooks[0] = transferjobHooks[0]
+	transferjobFields := schema.TransferJob{}.Fields()
+	_ = transferjobFields
+	// transferjobDescRemoteShareID is the schema descriptor for remote_share_id field.
+	transferjobDescRemoteShareID := transferjobFields[3].Descriptor()
+	// transferjob.RemoteShareIDValidator is a validator for the "remote_share_id" field. It is called by the builders before save.
+	transferjob.RemoteShareIDValidator = func() func(string) error {
+		validators := transferjobDescRemoteShareID.Validators
+		fns := [...]func(string) error{
+			validators[0].(func(string) error),
+			validators[1].(func(string) error),
+		}
+		return func(remote_share_id string) error {
+			for _, fn := range fns {
+				if err := fn(remote_share_id); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}()
+	// transferjobDescRemoteCapabilityCipher is the schema descriptor for remote_capability_cipher field.
+	transferjobDescRemoteCapabilityCipher := transferjobFields[4].Descriptor()
+	// transferjob.RemoteCapabilityCipherValidator is a validator for the "remote_capability_cipher" field. It is called by the builders before save.
+	transferjob.RemoteCapabilityCipherValidator = transferjobDescRemoteCapabilityCipher.Validators[0].(func([]byte) error)
+	// transferjobDescTotalBytes is the schema descriptor for total_bytes field.
+	transferjobDescTotalBytes := transferjobFields[6].Descriptor()
+	// transferjob.DefaultTotalBytes holds the default value on creation for the total_bytes field.
+	transferjob.DefaultTotalBytes = transferjobDescTotalBytes.Default.(int64)
+	// transferjob.TotalBytesValidator is a validator for the "total_bytes" field. It is called by the builders before save.
+	transferjob.TotalBytesValidator = transferjobDescTotalBytes.Validators[0].(func(int64) error)
+	// transferjobDescReceivedBytes is the schema descriptor for received_bytes field.
+	transferjobDescReceivedBytes := transferjobFields[7].Descriptor()
+	// transferjob.DefaultReceivedBytes holds the default value on creation for the received_bytes field.
+	transferjob.DefaultReceivedBytes = transferjobDescReceivedBytes.Default.(int64)
+	// transferjob.ReceivedBytesValidator is a validator for the "received_bytes" field. It is called by the builders before save.
+	transferjob.ReceivedBytesValidator = transferjobDescReceivedBytes.Validators[0].(func(int64) error)
+	// transferjobDescCreatedAt is the schema descriptor for created_at field.
+	transferjobDescCreatedAt := transferjobFields[12].Descriptor()
+	// transferjob.DefaultCreatedAt holds the default value on creation for the created_at field.
+	transferjob.DefaultCreatedAt = transferjobDescCreatedAt.Default.(func() time.Time)
+	// transferjobDescUpdatedAt is the schema descriptor for updated_at field.
+	transferjobDescUpdatedAt := transferjobFields[13].Descriptor()
+	// transferjob.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	transferjob.DefaultUpdatedAt = transferjobDescUpdatedAt.Default.(func() time.Time)
+	// transferjob.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	transferjob.UpdateDefaultUpdatedAt = transferjobDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// transferjobDescID is the schema descriptor for id field.
+	transferjobDescID := transferjobFields[0].Descriptor()
+	// transferjob.DefaultID holds the default value on creation for the id field.
+	transferjob.DefaultID = transferjobDescID.Default.(func() string)
+	transfershareFields := schema.TransferShare{}.Fields()
+	_ = transfershareFields
+	// transfershareDescCapabilityHash is the schema descriptor for capability_hash field.
+	transfershareDescCapabilityHash := transfershareFields[4].Descriptor()
+	// transfershare.CapabilityHashValidator is a validator for the "capability_hash" field. It is called by the builders before save.
+	transfershare.CapabilityHashValidator = func() func([]byte) error {
+		validators := transfershareDescCapabilityHash.Validators
+		fns := [...]func([]byte) error{
+			validators[0].(func([]byte) error),
+			validators[1].(func([]byte) error),
+		}
+		return func(capability_hash []byte) error {
+			for _, fn := range fns {
+				if err := fn(capability_hash); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}()
+	// transfershareDescTotalBytes is the schema descriptor for total_bytes field.
+	transfershareDescTotalBytes := transfershareFields[5].Descriptor()
+	// transfershare.DefaultTotalBytes holds the default value on creation for the total_bytes field.
+	transfershare.DefaultTotalBytes = transfershareDescTotalBytes.Default.(int64)
+	// transfershare.TotalBytesValidator is a validator for the "total_bytes" field. It is called by the builders before save.
+	transfershare.TotalBytesValidator = transfershareDescTotalBytes.Validators[0].(func(int64) error)
+	// transfershareDescFileCount is the schema descriptor for file_count field.
+	transfershareDescFileCount := transfershareFields[6].Descriptor()
+	// transfershare.DefaultFileCount holds the default value on creation for the file_count field.
+	transfershare.DefaultFileCount = transfershareDescFileCount.Default.(int)
+	// transfershare.FileCountValidator is a validator for the "file_count" field. It is called by the builders before save.
+	transfershare.FileCountValidator = transfershareDescFileCount.Validators[0].(func(int) error)
+	// transfershareDescCreatedAt is the schema descriptor for created_at field.
+	transfershareDescCreatedAt := transfershareFields[11].Descriptor()
+	// transfershare.DefaultCreatedAt holds the default value on creation for the created_at field.
+	transfershare.DefaultCreatedAt = transfershareDescCreatedAt.Default.(func() time.Time)
+	// transfershareDescUpdatedAt is the schema descriptor for updated_at field.
+	transfershareDescUpdatedAt := transfershareFields[12].Descriptor()
+	// transfershare.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	transfershare.DefaultUpdatedAt = transfershareDescUpdatedAt.Default.(func() time.Time)
+	// transfershare.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	transfershare.UpdateDefaultUpdatedAt = transfershareDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// transfershareDescID is the schema descriptor for id field.
+	transfershareDescID := transfershareFields[0].Descriptor()
+	// transfershare.DefaultID holds the default value on creation for the id field.
+	transfershare.DefaultID = transfershareDescID.Default.(func() string)
+	userFields := schema.User{}.Fields()
+	_ = userFields
+	// userDescIssuer is the schema descriptor for issuer field.
+	userDescIssuer := userFields[1].Descriptor()
+	// user.IssuerValidator is a validator for the "issuer" field. It is called by the builders before save.
+	user.IssuerValidator = userDescIssuer.Validators[0].(func(string) error)
+	// userDescSubject is the schema descriptor for subject field.
+	userDescSubject := userFields[2].Descriptor()
+	// user.SubjectValidator is a validator for the "subject" field. It is called by the builders before save.
+	user.SubjectValidator = userDescSubject.Validators[0].(func(string) error)
+	// userDescCreatedAt is the schema descriptor for created_at field.
+	userDescCreatedAt := userFields[6].Descriptor()
+	// user.DefaultCreatedAt holds the default value on creation for the created_at field.
+	user.DefaultCreatedAt = userDescCreatedAt.Default.(func() time.Time)
+	// userDescUpdatedAt is the schema descriptor for updated_at field.
+	userDescUpdatedAt := userFields[7].Descriptor()
+	// user.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	user.DefaultUpdatedAt = userDescUpdatedAt.Default.(func() time.Time)
+	// user.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	user.UpdateDefaultUpdatedAt = userDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// userDescID is the schema descriptor for id field.
+	userDescID := userFields[0].Descriptor()
+	// user.DefaultID holds the default value on creation for the id field.
+	user.DefaultID = userDescID.Default.(func() string)
+}
 
 const (
 	Version = "v0.14.6"                                         // Version of ent codegen.

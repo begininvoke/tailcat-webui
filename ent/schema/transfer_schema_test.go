@@ -178,8 +178,10 @@ func requireAssociationCascade(t *testing.T, edges []ent.Edge, name, typ string)
 func TestTransferParentIndexesAreScoped(t *testing.T) {
 	t.Parallel()
 	requireIndex(t, TransferShare{}.Indexes(), false, "user_id", "status", "expires_at")
+	requireIndex(t, TransferShare{}.Indexes(), false, "status", "expires_at")
 	requireUniqueIndex(t, ShareFile{}.Indexes(), "share_id", "virtual_path")
 	requireIndex(t, TransferJob{}.Indexes(), false, "user_id", "status", "expires_at")
+	requireIndex(t, TransferJob{}.Indexes(), false, "status", "expires_at")
 	requireUniqueIndex(t, TransferItem{}.Indexes(), "job_id", "remote_file_id")
 }
 

@@ -17,7 +17,7 @@ func (TransferJob) Fields() []ent.Field {
 		idField(),
 		field.String("user_id").Immutable(),
 		field.String("client_id").Immutable(),
-		field.String("remote_share_id").NotEmpty().Immutable(),
+		field.String("remote_share_id").NotEmpty().Immutable().Validate(validateUUIDv7),
 		field.Bytes("remote_capability_cipher").NotEmpty().Immutable().Sensitive(),
 		field.Enum("status").Values(transferStatuses...).Default("staging"),
 		field.Int64("total_bytes").NonNegative().Default(0),
@@ -35,9 +35,12 @@ func (TransferJob) Indexes() []ent.Index {
 	return []ent.Index{
 		index.Fields("user_id", "created_at"),
 		index.Fields("user_id", "status", "expires_at"),
+		index.Fields("status", "expires_at"),
 		index.Fields("client_id", "created_at"),
 	}
 }
+
+func (TransferJob) Hooks() []ent.Hook { return []ent.Hook{validateTransferJobMutation} }
 
 func (TransferJob) Edges() []ent.Edge {
 	return []ent.Edge{

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"entgo.io/ent"
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 )
@@ -100,7 +101,13 @@ func ValidColumn(column string) bool {
 	return false
 }
 
+// Note that the variables below are initialized by the runtime
+// package on the initialization of the application. Therefore,
+// it should be imported in the main as follows:
+//
+//	import _ "github.com/ca-x/tailcat-webui/ent/runtime"
 var (
+	Hooks [1]ent.Hook
 	// RemoteShareIDValidator is a validator for the "remote_share_id" field. It is called by the builders before save.
 	RemoteShareIDValidator func(string) error
 	// RemoteCapabilityCipherValidator is a validator for the "remote_capability_cipher" field. It is called by the builders before save.

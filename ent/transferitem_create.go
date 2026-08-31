@@ -231,7 +231,9 @@ func (_c *TransferItemCreate) Mutation() *TransferItemMutation {
 
 // Save creates the TransferItem in the database.
 func (_c *TransferItemCreate) Save(ctx context.Context) (*TransferItem, error) {
-	_c.defaults()
+	if err := _c.defaults(); err != nil {
+		return nil, err
+	}
 	return withHooks(ctx, _c.sqlSave, _c.mutation, _c.hooks)
 }
 
@@ -258,7 +260,7 @@ func (_c *TransferItemCreate) ExecX(ctx context.Context) {
 }
 
 // defaults sets the default values of the builder before save.
-func (_c *TransferItemCreate) defaults() {
+func (_c *TransferItemCreate) defaults() error {
 	if _, ok := _c.mutation.BlockSize(); !ok {
 		v := transferitem.DefaultBlockSize
 		_c.mutation.SetBlockSize(v)
@@ -276,17 +278,27 @@ func (_c *TransferItemCreate) defaults() {
 		_c.mutation.SetStatus(v)
 	}
 	if _, ok := _c.mutation.CreatedAt(); !ok {
+		if transferitem.DefaultCreatedAt == nil {
+			return fmt.Errorf("ent: uninitialized transferitem.DefaultCreatedAt (forgotten import ent/runtime?)")
+		}
 		v := transferitem.DefaultCreatedAt()
 		_c.mutation.SetCreatedAt(v)
 	}
 	if _, ok := _c.mutation.UpdatedAt(); !ok {
+		if transferitem.DefaultUpdatedAt == nil {
+			return fmt.Errorf("ent: uninitialized transferitem.DefaultUpdatedAt (forgotten import ent/runtime?)")
+		}
 		v := transferitem.DefaultUpdatedAt()
 		_c.mutation.SetUpdatedAt(v)
 	}
 	if _, ok := _c.mutation.ID(); !ok {
+		if transferitem.DefaultID == nil {
+			return fmt.Errorf("ent: uninitialized transferitem.DefaultID (forgotten import ent/runtime?)")
+		}
 		v := transferitem.DefaultID()
 		_c.mutation.SetID(v)
 	}
+	return nil
 }
 
 // check runs all checks and user-defined validators on the builder.

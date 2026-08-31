@@ -17,9 +17,9 @@ func (TransferItem) Fields() []ent.Field {
 		idField(),
 		field.String("user_id").Immutable(),
 		field.String("job_id").Immutable(),
-		field.String("remote_file_id").NotEmpty().Immutable(),
-		field.String("storage_name").NotEmpty().Immutable().Sensitive(),
-		field.String("virtual_path").NotEmpty().Immutable(),
+		field.String("remote_file_id").NotEmpty().Immutable().Validate(validateUUIDv7),
+		field.String("storage_name").NotEmpty().Immutable().Sensitive().Validate(validateStorageName),
+		field.String("virtual_path").NotEmpty().Immutable().Validate(validateVirtualPath),
 		field.Int64("size_bytes").NonNegative().Immutable(),
 		field.Time("mtime").Immutable(),
 		field.String("blake3").NotEmpty().Immutable().Validate(validateBLAKE3),
@@ -35,6 +35,8 @@ func (TransferItem) Fields() []ent.Field {
 		updatedAtField(),
 	}
 }
+
+func (TransferItem) Hooks() []ent.Hook { return []ent.Hook{validateTransferItemMutation} }
 
 func (TransferItem) Indexes() []ent.Index {
 	return []ent.Index{

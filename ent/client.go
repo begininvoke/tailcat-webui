@@ -1687,7 +1687,8 @@ func (c *ShareFileClient) QueryShare(_m *ShareFile) *TransferShareQuery {
 
 // Hooks returns the client hooks.
 func (c *ShareFileClient) Hooks() []Hook {
-	return c.hooks.ShareFile
+	hooks := c.hooks.ShareFile
+	return append(hooks[:len(hooks):len(hooks)], sharefile.Hooks[:]...)
 }
 
 // Interceptors returns the client interceptors.
@@ -2262,7 +2263,8 @@ func (c *TransferItemClient) QueryJob(_m *TransferItem) *TransferJobQuery {
 
 // Hooks returns the client hooks.
 func (c *TransferItemClient) Hooks() []Hook {
-	return c.hooks.TransferItem
+	hooks := c.hooks.TransferItem
+	return append(hooks[:len(hooks):len(hooks)], transferitem.Hooks[:]...)
 }
 
 // Interceptors returns the client interceptors.
@@ -2443,7 +2445,8 @@ func (c *TransferJobClient) QueryItems(_m *TransferJob) *TransferItemQuery {
 
 // Hooks returns the client hooks.
 func (c *TransferJobClient) Hooks() []Hook {
-	return c.hooks.TransferJob
+	hooks := c.hooks.TransferJob
+	return append(hooks[:len(hooks):len(hooks)], transferjob.Hooks[:]...)
 }
 
 // Interceptors returns the client interceptors.
