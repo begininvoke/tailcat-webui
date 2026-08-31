@@ -31,7 +31,7 @@
 - [x] Owner-scoped exit-node rule persistence and runtime enforcement
 - [x] Server policy management UI in English and Chinese
 - [x] Diagnostic schema and bounded reserved-port protocol
-- [ ] Diagnostic lifecycle, API, retention and audit integration
+- [x] Diagnostic lifecycle, API, retention and audit integration
 - [ ] Client diagnostics tab with progress, history and cancellation
 - [ ] Transfer share/job/file/item schemas and migrations
 - [ ] Rooted staging storage and BLAKE3 block manifests
