@@ -100,6 +100,7 @@ type storageHooks struct {
 	link                          func(*os.Root, string, string) error
 	remove                        func(*os.Root, string) error
 	closeVerifiedFinal            func(*os.File) error
+	validateRecoveredFinal        func(*os.Root, verifiedPair) error
 	beforePublish                 func()
 	afterIngest                   func(int64, string)
 	afterPairVerified             func()
@@ -107,9 +108,10 @@ type storageHooks struct {
 }
 
 type constructorHooks struct {
-	afterInitialLstat  func()
-	syncDir            func(*os.File) error
-	closeVerifiedFinal func(*os.File) error
+	afterInitialLstat      func()
+	syncDir                func(*os.File) error
+	closeVerifiedFinal     func(*os.File) error
+	validateRecoveredFinal func(*os.Root, verifiedPair) error
 }
 
 // Storage owns all filesystem path construction for staged transfer bytes.
@@ -249,11 +251,15 @@ func newStorage(rootPath string, constructorHooks constructorHooks) (*Storage, e
 	storage.hooks.link = (*os.Root).Link
 	storage.hooks.remove = (*os.Root).Remove
 	storage.hooks.closeVerifiedFinal = (*os.File).Close
+	storage.hooks.validateRecoveredFinal = validateRecoveredFinal
 	if constructorHooks.syncDir != nil {
 		storage.hooks.syncDir = constructorHooks.syncDir
 	}
 	if constructorHooks.closeVerifiedFinal != nil {
 		storage.hooks.closeVerifiedFinal = constructorHooks.closeVerifiedFinal
+	}
+	if constructorHooks.validateRecoveredFinal != nil {
+		storage.hooks.validateRecoveredFinal = constructorHooks.validateRecoveredFinal
 	}
 	if initializeQuota {
 		finishSharedQuotaInitialization(sharedQuota, storage.rebuildQuota())
@@ -831,7 +837,7 @@ func (s *Storage) Remove(ctx context.Context, ownerID, shareID, storageName stri
 }
 
 // CleanupTemps removes only internal temporary files in one validated share.
-func (s *Storage) CleanupTemps(ctx context.Context, ownerID, shareID string) (int, error) {
+func (s *Storage) CleanupTemps(ctx context.Context, ownerID, shareID string) (removed int, retErr error) {
 	operationCtx, end, err := s.beginOperation(ctx)
 	if err != nil {
 		return 0, err
@@ -845,6 +851,15 @@ func (s *Storage) CleanupTemps(ctx context.Context, ownerID, shareID string) (in
 		return 0, err
 	}
 	defer shareRoot.Close()
+	directoryDirty := false
+	defer func() {
+		if !directoryDirty {
+			return
+		}
+		if err := s.syncShareDirectory(shareRoot); err != nil {
+			retErr = errors.Join(retErr, fmt.Errorf("sync cleaned directory: %w", err))
+		}
+	}()
 	directory, err := shareRoot.Open(".")
 	if err != nil {
 		return 0, fmt.Errorf("open share directory: %w", err)
@@ -857,7 +872,6 @@ func (s *Storage) CleanupTemps(ctx context.Context, ownerID, shareID string) (in
 	if closeErr != nil {
 		return 0, fmt.Errorf("close share directory: %w", closeErr)
 	}
-	removed := 0
 	for _, entry := range entries {
 		if err := contextError(operationCtx); err != nil {
 			return removed, err
@@ -883,33 +897,27 @@ func (s *Storage) CleanupTemps(ctx context.Context, ownerID, shareID string) (in
 			return removed, linkErr
 		}
 		if available && links == 2 {
-			recovered, recoverErr := s.recoverTempAlias(shareRoot, entry.Name())
-			if recovered {
+			outcome, recoverErr := s.recoverTempAlias(shareRoot, entry.Name())
+			if outcome.aliasRemoved {
 				removed++
+				directoryDirty = true
 			}
 			if recoverErr != nil {
-				var syncErr error
-				if recovered {
-					if err := s.syncShareDirectory(shareRoot); err != nil {
-						syncErr = fmt.Errorf("sync cleaned directory: %w", err)
-					}
-				}
-				return removed, errors.Join(recoverErr, syncErr)
+				return removed, recoverErr
+			}
+			if !outcome.finalValidated {
+				return removed, ErrFileChanged
 			}
 			continue
 		}
 		if err := validateStoredFileInfo(info); err != nil {
 			return removed, err
 		}
-		if err := shareRoot.Remove(entry.Name()); err != nil {
+		if err := s.hooks.remove(shareRoot, entry.Name()); err != nil {
 			return removed, fmt.Errorf("remove temporary file: %w", err)
 		}
 		removed++
-	}
-	if removed > 0 {
-		if err := s.syncShareDirectory(shareRoot); err != nil {
-			return removed, fmt.Errorf("sync cleaned directory: %w", err)
-		}
+		directoryDirty = true
 	}
 	return removed, nil
 }
@@ -1167,107 +1175,10 @@ func (s *Storage) rebuildQuota() error {
 				_ = ownerRoot.Close()
 				return fmt.Errorf("scan share directory: %w", err)
 			}
-			files, err := readRootDirectory(shareRoot)
-			if err != nil {
+			if err := s.rebuildShareQuota(ownerID, shareID, shareRoot); err != nil {
 				_ = shareRoot.Close()
 				_ = ownerRoot.Close()
-				return fmt.Errorf("scan staged files: %w", err)
-			}
-			recoveredAlias := false
-			for _, fileEntry := range files {
-				if !isTempName(fileEntry.Name()) {
-					continue
-				}
-				info, err := privateRegularInfo(shareRoot, fileEntry.Name())
-				if err != nil {
-					_ = shareRoot.Close()
-					_ = ownerRoot.Close()
-					return err
-				}
-				links, available, linkErr := rootedFileLinkCount(shareRoot, fileEntry.Name(), info)
-				if linkErr != nil {
-					_ = shareRoot.Close()
-					_ = ownerRoot.Close()
-					return linkErr
-				}
-				if available && links == 2 {
-					recovered, recoverErr := s.recoverTempAlias(shareRoot, fileEntry.Name())
-					if recovered {
-						recoveredAlias = true
-					}
-					if recoverErr != nil {
-						var syncErr error
-						if recovered {
-							if err := s.syncShareDirectory(shareRoot); err != nil {
-								syncErr = fmt.Errorf("sync recovered share directory: %w", err)
-							}
-						}
-						_ = shareRoot.Close()
-						_ = ownerRoot.Close()
-						return errors.Join(recoverErr, syncErr)
-					}
-				}
-			}
-			if recoveredAlias {
-				if err := s.syncShareDirectory(shareRoot); err != nil {
-					_ = shareRoot.Close()
-					_ = ownerRoot.Close()
-					return fmt.Errorf("sync recovered share directory: %w", err)
-				}
-				files, err = readRootDirectory(shareRoot)
-				if err != nil {
-					_ = shareRoot.Close()
-					_ = ownerRoot.Close()
-					return fmt.Errorf("rescan recovered staged files: %w", err)
-				}
-			}
-			for _, fileEntry := range files {
-				name := fileEntry.Name()
-				if isTempName(name) {
-					info, err := shareRoot.Lstat(name)
-					if err != nil {
-						_ = shareRoot.Close()
-						_ = ownerRoot.Close()
-						return fmt.Errorf("scan temporary file: %w", err)
-					}
-					if info.Mode()&os.ModeSymlink != 0 {
-						_ = shareRoot.Close()
-						_ = ownerRoot.Close()
-						return fmt.Errorf("%w: temporary file", ErrSymlink)
-					}
-					if !info.Mode().IsRegular() {
-						_ = shareRoot.Close()
-						_ = ownerRoot.Close()
-						return fmt.Errorf("%w: temporary file", ErrNotRegular)
-					}
-					if err := validateStoredFileInfo(info); err != nil {
-						_ = shareRoot.Close()
-						_ = ownerRoot.Close()
-						return err
-					}
-					continue
-				}
-				if err := validateStorageName(name); err != nil {
-					_ = shareRoot.Close()
-					_ = ownerRoot.Close()
-					return fmt.Errorf("scan storage name: %w", err)
-				}
-				info, err := safeRegularInfo(shareRoot, name)
-				if err != nil {
-					_ = shareRoot.Close()
-					_ = ownerRoot.Close()
-					return err
-				}
-				if info.Size() < 0 || info.Size() > MaxFileBytes {
-					_ = shareRoot.Close()
-					_ = ownerRoot.Close()
-					return ErrFileTooLarge
-				}
-				if err := s.quota.addCommitted(ownerID, shareID, name, info.Size()); err != nil {
-					_ = shareRoot.Close()
-					_ = ownerRoot.Close()
-					return fmt.Errorf("rebuild storage quota: %w", err)
-				}
+				return err
 			}
 			if err := shareRoot.Close(); err != nil {
 				_ = ownerRoot.Close()
@@ -1276,6 +1187,91 @@ func (s *Storage) rebuildQuota() error {
 		}
 		if err := ownerRoot.Close(); err != nil {
 			return fmt.Errorf("close scanned owner: %w", err)
+		}
+	}
+	return nil
+}
+
+func (s *Storage) rebuildShareQuota(ownerID, shareID string, shareRoot *os.Root) (retErr error) {
+	directoryDirty := false
+	defer func() {
+		if !directoryDirty {
+			return
+		}
+		if err := s.syncShareDirectory(shareRoot); err != nil {
+			retErr = errors.Join(retErr, fmt.Errorf("sync recovered share directory: %w", err))
+		}
+	}()
+
+	files, err := readRootDirectory(shareRoot)
+	if err != nil {
+		return fmt.Errorf("scan staged files: %w", err)
+	}
+	recoveredAlias := false
+	for _, fileEntry := range files {
+		if !isTempName(fileEntry.Name()) {
+			continue
+		}
+		info, err := privateRegularInfo(shareRoot, fileEntry.Name())
+		if err != nil {
+			return err
+		}
+		links, available, linkErr := rootedFileLinkCount(shareRoot, fileEntry.Name(), info)
+		if linkErr != nil {
+			return linkErr
+		}
+		if available && links == 2 {
+			outcome, recoverErr := s.recoverTempAlias(shareRoot, fileEntry.Name())
+			if outcome.aliasRemoved {
+				directoryDirty = true
+			}
+			if outcome.finalValidated {
+				recoveredAlias = true
+			}
+			if recoverErr != nil {
+				return recoverErr
+			}
+			if outcome.aliasRemoved && !outcome.finalValidated {
+				return ErrFileChanged
+			}
+		}
+	}
+	if recoveredAlias {
+		files, err = readRootDirectory(shareRoot)
+		if err != nil {
+			return fmt.Errorf("rescan recovered staged files: %w", err)
+		}
+	}
+	for _, fileEntry := range files {
+		name := fileEntry.Name()
+		if isTempName(name) {
+			info, err := shareRoot.Lstat(name)
+			if err != nil {
+				return fmt.Errorf("scan temporary file: %w", err)
+			}
+			if info.Mode()&os.ModeSymlink != 0 {
+				return fmt.Errorf("%w: temporary file", ErrSymlink)
+			}
+			if !info.Mode().IsRegular() {
+				return fmt.Errorf("%w: temporary file", ErrNotRegular)
+			}
+			if err := validateStoredFileInfo(info); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := validateStorageName(name); err != nil {
+			return fmt.Errorf("scan storage name: %w", err)
+		}
+		info, err := safeRegularInfo(shareRoot, name)
+		if err != nil {
+			return err
+		}
+		if info.Size() < 0 || info.Size() > MaxFileBytes {
+			return ErrFileTooLarge
+		}
+		if err := s.quota.addCommitted(ownerID, shareID, name, info.Size()); err != nil {
+			return fmt.Errorf("rebuild storage quota: %w", err)
 		}
 	}
 	return nil
@@ -1355,42 +1351,56 @@ func (s *Storage) prepareFinalEntry(root *os.Root, finalName string) (_ os.FileI
 	if pair.finalName != finalName {
 		return nil, ErrMultipleLinks
 	}
+	aliasRemoved := false
+	defer func() {
+		if !aliasRemoved {
+			return
+		}
+		if err := s.syncShareDirectory(root); err != nil {
+			retErr = errors.Join(retErr, fmt.Errorf("sync temporary-alias removal: %w", err))
+		}
+	}()
 	if s.hooks.afterPairVerified != nil {
 		s.hooks.afterPairVerified()
 	}
 	if err := s.hooks.remove(root, pair.tempName); err != nil {
 		return nil, fmt.Errorf("remove temporary alias: %w", err)
 	}
-	if err := validateRecoveredFinal(root, pair); err != nil {
+	aliasRemoved = true
+	if err := s.hooks.validateRecoveredFinal(root, pair); err != nil {
 		return nil, err
-	}
-	if err := s.syncShareDirectory(root); err != nil {
-		return nil, fmt.Errorf("sync temporary-alias removal: %w", err)
 	}
 	return safeRegularInfo(root, finalName)
 }
 
-// recoverTempAlias reports a completed unlink and validation independently of
-// an error closing the pinned final handle.
-func (s *Storage) recoverTempAlias(root *os.Root, tempName string) (recovered bool, retErr error) {
+type aliasRecovery struct {
+	aliasRemoved   bool
+	finalValidated bool
+}
+
+// recoverTempAlias reports alias removal independently from post-unlink final
+// validation and pinned-handle cleanup.
+func (s *Storage) recoverTempAlias(root *os.Root, tempName string) (outcome aliasRecovery, retErr error) {
 	pair, err := verifiedTempFinalPair(root, tempName)
 	if err != nil {
-		return false, errors.Join(ErrMultipleLinks, err)
+		return outcome, errors.Join(ErrMultipleLinks, err)
 	}
 	defer s.joinVerifiedFinalClose(pair.final, &retErr)
 	if pair.tempName != tempName {
-		return false, ErrMultipleLinks
+		return outcome, ErrMultipleLinks
 	}
 	if s.hooks.afterPairVerified != nil {
 		s.hooks.afterPairVerified()
 	}
 	if err := s.hooks.remove(root, tempName); err != nil {
-		return false, fmt.Errorf("remove temporary alias: %w", err)
+		return outcome, fmt.Errorf("remove temporary alias: %w", err)
 	}
-	if err := validateRecoveredFinal(root, pair); err != nil {
-		return false, err
+	outcome.aliasRemoved = true
+	if err := s.hooks.validateRecoveredFinal(root, pair); err != nil {
+		return outcome, err
 	}
-	return true, nil
+	outcome.finalValidated = true
+	return outcome, nil
 }
 
 type verifiedPair struct {

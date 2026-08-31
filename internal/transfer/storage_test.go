@@ -1450,6 +1450,98 @@ func TestCleanupTempsAccountsAndSyncsSuccessfulRecoveryBeforeReturningCloseError
 	}
 }
 
+func TestCleanupTempsSyncsAliasRemovalWhenRecoveredFinalValidationFails(t *testing.T) {
+	storage, _, tempName, finalName := makeFailedTempFinalPair(t)
+	validationFailure := errors.New("validate recovered final failed")
+	syncFailure := errors.New("sync recovered alias failed")
+	storage.hooks.remove = (*os.Root).Remove
+	storage.hooks.validateRecoveredFinal = func(root *os.Root, pair verifiedPair) error {
+		if _, err := root.Lstat(pair.tempName); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("validation ran before alias removal: %v", err)
+		}
+		return validationFailure
+	}
+	syncCalls := 0
+	storage.hooks.syncDir = func(*os.File) error {
+		syncCalls++
+		return syncFailure
+	}
+
+	removed, err := storage.CleanupTemps(t.Context(), testOwnerID, testShareID)
+	if !errors.Is(err, validationFailure) || !errors.Is(err, syncFailure) {
+		t.Fatalf("CleanupTemps error = %v, want validation and sync failures", err)
+	}
+	if removed != 1 {
+		t.Fatalf("CleanupTemps removed %d entries, want the unlinked alias", removed)
+	}
+	if syncCalls != 1 {
+		t.Fatalf("directory sync calls = %d, want 1", syncCalls)
+	}
+	if _, err := os.Lstat(filepath.Join(storageTestSharePath(storage), tempName)); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("temporary alias still exists: %v", err)
+	}
+	requireSingleStoredLink(t, storage, finalName)
+	if got := requireUsage(t, storage); got != (QuotaUsage{OwnerBytes: 3, ShareBytes: 3, ShareFiles: 1}) {
+		t.Fatalf("quota after failed validation = %+v", got)
+	}
+
+	storage.hooks.validateRecoveredFinal = validateRecoveredFinal
+	storage.hooks.syncDir = syncDirectory
+	removed, err = storage.CleanupTemps(t.Context(), testOwnerID, testShareID)
+	if err != nil || removed != 0 {
+		t.Fatalf("idempotent CleanupTemps result = (%d, %v), want (0, nil)", removed, err)
+	}
+}
+
+func TestCleanupTempsSyncsEarlierRemovalBeforeLaterEntryError(t *testing.T) {
+	storage := newTestStorage(t)
+	reservation, err := storage.Reserve(t.Context(), testOwnerID, testShareID, 0)
+	if err != nil {
+		t.Fatalf("Reserve: %v", err)
+	}
+	reservation.Release()
+	sharePath := storageTestSharePath(storage)
+	for index := range 2 {
+		name := fmt.Sprintf("%s%032x", tempNamePrefix, index+1)
+		if err := os.WriteFile(filepath.Join(sharePath, name), nil, 0o600); err != nil {
+			t.Fatalf("WriteFile %q: %v", name, err)
+		}
+	}
+	laterFailure := errors.New("later temporary removal failed")
+	syncFailure := errors.New("sync earlier removal failed")
+	removeCalls := 0
+	storage.hooks.remove = func(root *os.Root, name string) error {
+		removeCalls++
+		if removeCalls == 2 {
+			return laterFailure
+		}
+		return root.Remove(name)
+	}
+	syncCalls := 0
+	storage.hooks.syncDir = func(*os.File) error {
+		syncCalls++
+		return syncFailure
+	}
+
+	removed, err := storage.CleanupTemps(t.Context(), testOwnerID, testShareID)
+	if !errors.Is(err, laterFailure) || !errors.Is(err, syncFailure) {
+		t.Fatalf("CleanupTemps error = %v, want later removal and sync failures", err)
+	}
+	if removed != 1 {
+		t.Fatalf("CleanupTemps removed %d entries, want the earlier removal", removed)
+	}
+	if syncCalls != 1 {
+		t.Fatalf("directory sync calls = %d, want 1", syncCalls)
+	}
+
+	storage.hooks.remove = (*os.Root).Remove
+	storage.hooks.syncDir = syncDirectory
+	removed, err = storage.CleanupTemps(t.Context(), testOwnerID, testShareID)
+	if err != nil || removed != 1 {
+		t.Fatalf("retry CleanupTemps result = (%d, %v), want (1, nil)", removed, err)
+	}
+}
+
 func TestRestartRecoversVerifiedTempFinalPairAndChargesOnce(t *testing.T) {
 	storage, rootPath, tempName, finalName := makeFailedTempFinalPair(t)
 	if err := storage.Close(); err != nil {
@@ -1509,6 +1601,51 @@ func TestRestartSyncsSuccessfulRecoveryBeforeReturningCloseError(t *testing.T) {
 	requireSingleStoredLink(t, reopened, finalName)
 	if got := requireUsage(t, reopened); got != (QuotaUsage{OwnerBytes: 3, ShareBytes: 3, ShareFiles: 1}) {
 		t.Fatalf("second-restart usage = %+v", got)
+	}
+}
+
+func TestRestartSyncsAliasRemovalWhenRecoveredFinalValidationFails(t *testing.T) {
+	storage, rootPath, tempName, finalName := makeFailedTempFinalPair(t)
+	if err := storage.Close(); err != nil {
+		t.Fatalf("Close failed Storage: %v", err)
+	}
+	validationFailure := errors.New("validate recovered final failed")
+	syncFailure := errors.New("sync recovered alias failed")
+	syncCalls := 0
+	reopened, err := newStorage(rootPath, constructorHooks{
+		syncDir: func(*os.File) error {
+			syncCalls++
+			return syncFailure
+		},
+		validateRecoveredFinal: func(root *os.Root, pair verifiedPair) error {
+			if _, err := root.Lstat(pair.tempName); !errors.Is(err, fs.ErrNotExist) {
+				t.Fatalf("validation ran before alias removal: %v", err)
+			}
+			return validationFailure
+		},
+	})
+	if reopened != nil {
+		_ = reopened.Close()
+		t.Fatal("newStorage returned a Storage after failed recovery validation")
+	}
+	if !errors.Is(err, validationFailure) || !errors.Is(err, syncFailure) {
+		t.Fatalf("newStorage error = %v, want validation and sync failures", err)
+	}
+	if syncCalls != 1 {
+		t.Fatalf("directory sync calls = %d, want 1", syncCalls)
+	}
+	if _, err := os.Lstat(filepath.Join(rootPath, testOwnerID, testShareID, tempName)); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("temporary alias still exists: %v", err)
+	}
+
+	reopened, err = NewStorage(rootPath)
+	if err != nil {
+		t.Fatalf("clean restart: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	requireSingleStoredLink(t, reopened, finalName)
+	if got := requireUsage(t, reopened); got != (QuotaUsage{OwnerBytes: 3, ShareBytes: 3, ShareFiles: 1}) {
+		t.Fatalf("reconciled quota = %+v", got)
 	}
 }
 
@@ -1573,6 +1710,48 @@ func TestRemoveSyncsRecoveredAliasBeforeReturningCloseErrorAndRetries(t *testing
 	}
 	if syncCalls != 2 {
 		t.Fatalf("directory sync calls after idempotent retry = %d, want 2", syncCalls)
+	}
+}
+
+func TestRemoveSyncsAliasRemovalWhenRecoveredFinalValidationFails(t *testing.T) {
+	storage, _, tempName, finalName := makeFailedTempFinalPair(t)
+	validationFailure := errors.New("validate recovered final failed")
+	syncFailure := errors.New("sync recovered alias failed")
+	storage.hooks.remove = (*os.Root).Remove
+	storage.hooks.validateRecoveredFinal = func(root *os.Root, pair verifiedPair) error {
+		if _, err := root.Lstat(pair.tempName); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("validation ran before alias removal: %v", err)
+		}
+		return validationFailure
+	}
+	syncCalls := 0
+	storage.hooks.syncDir = func(*os.File) error {
+		syncCalls++
+		return syncFailure
+	}
+
+	err := storage.Remove(t.Context(), testOwnerID, testShareID, finalName)
+	if !errors.Is(err, validationFailure) || !errors.Is(err, syncFailure) {
+		t.Fatalf("Remove error = %v, want validation and sync failures", err)
+	}
+	if syncCalls != 1 {
+		t.Fatalf("directory sync calls = %d, want 1", syncCalls)
+	}
+	if _, err := os.Lstat(filepath.Join(storageTestSharePath(storage), tempName)); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("temporary alias still exists: %v", err)
+	}
+	requireSingleStoredLink(t, storage, finalName)
+	if got := requireUsage(t, storage); got != (QuotaUsage{OwnerBytes: 3, ShareBytes: 3, ShareFiles: 1}) {
+		t.Fatalf("quota after failed validation = %+v", got)
+	}
+
+	storage.hooks.validateRecoveredFinal = validateRecoveredFinal
+	storage.hooks.syncDir = syncDirectory
+	if err := storage.Remove(t.Context(), testOwnerID, testShareID, finalName); err != nil {
+		t.Fatalf("clean retry Remove: %v", err)
+	}
+	if got := requireUsage(t, storage); got != (QuotaUsage{}) {
+		t.Fatalf("quota after clean retry = %+v", got)
 	}
 }
 
