@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	json "encoding/json/v2"
 	"errors"
 	"io"
 	"log/slog"
@@ -13,9 +14,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ca-x/tailcat-webui/ent"
 	"github.com/ca-x/tailcat-webui/ent/enttest"
+	"github.com/ca-x/tailcat-webui/internal/audit"
 	"github.com/ca-x/tailcat-webui/internal/auth"
 	"github.com/ca-x/tailcat-webui/internal/config"
+	"github.com/ca-x/tailcat-webui/internal/diagnostics"
+	"github.com/ca-x/tailcat-webui/internal/events"
 	"github.com/ca-x/tailcat-webui/internal/secrets"
 	"github.com/ca-x/tailcat-webui/internal/tailnet"
 	"github.com/labstack/echo/v5"
@@ -26,6 +31,18 @@ import (
 
 type exitPolicyTestRuntime struct {
 	events []string
+}
+
+type diagnosticAPIDialer func(context.Context, string, string, uint16) (net.Conn, error)
+
+func (f diagnosticAPIDialer) DialPort(ctx context.Context, ownerID, clientID string, port uint16) (net.Conn, error) {
+	return f(ctx, ownerID, clientID, port)
+}
+
+type diagnosticAPIPublisher func(string, string, events.RuntimePhase, diagnostics.EventPayload)
+
+func (f diagnosticAPIPublisher) PublishDiagnostic(ownerID, runID string, phase events.RuntimePhase, payload diagnostics.EventPayload) {
+	f(ownerID, runID, phase, payload)
 }
 
 func (r *exitPolicyTestRuntime) Start() error {
@@ -254,6 +271,147 @@ func TestSetExitNodeHandlerRequiresEnabledBeforeMutation(t *testing.T) {
 	if row.ExitNodeEnabled || row.DesiredRunning || !slices.Equal(runtime.events, []string{"start", "drain", "close"}) {
 		t.Fatalf("explicit false result: exit=%t desired_running=%t events=%v", row.ExitNodeEnabled, row.DesiredRunning, runtime.events)
 	}
+}
+
+func TestDiagnosticHandlersUseAuthenticatedOwner(t *testing.T) {
+	db, owner, client, other, service := newDiagnosticAPIService(t)
+	api := &API{diagnostics: service}
+
+	foreign := diagnosticAPIContext(t, other.ID, client.ID, `{"kind":"invalid","duration_ms":1000}`)
+	if err := api.startDiagnostic(foreign); !errors.Is(err, diagnostics.ErrNotFound) {
+		t.Fatalf("cross-owner start error = %v, want not found", err)
+	}
+	ctx := diagnosticAPIContext(t, owner.ID, client.ID, `{"kind":"ping","duration_ms":5000}`)
+	if err := api.startDiagnostic(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := diagnosticAPIRecorder(t, ctx).Code; got != http.StatusCreated {
+		t.Fatalf("start status = %d", got)
+	}
+	run := db.DiagnosticRun.Query().OnlyX(t.Context())
+
+	listRequest := httptest.NewRequest(http.MethodGet, "https://tailcat.example.com/api/v1/diagnostics", nil)
+	listRecorder := httptest.NewRecorder()
+	listContext := echo.New().NewContext(listRequest, listRecorder)
+	listContext.Set(principalKey, auth.Principal{ID: other.ID})
+	if err := api.listDiagnostics(listContext); err != nil {
+		t.Fatal(err)
+	}
+	var response struct {
+		Items []diagnostics.RunView `json:"items"`
+	}
+	if err := json.Unmarshal(listRecorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Items) != 0 {
+		t.Fatalf("cross-owner diagnostics = %+v", response.Items)
+	}
+
+	cancel := diagnosticAPIContext(t, other.ID, run.ID, "")
+	if err := api.cancelDiagnostic(cancel); !errors.Is(err, diagnostics.ErrNotFound) {
+		t.Fatalf("cross-owner cancel error = %v, want not found", err)
+	}
+}
+
+func TestDiagnosticHandlerRejectsKindsAndLimitsWithStableErrors(t *testing.T) {
+	_, owner, client, _, service := newDiagnosticAPIService(t)
+	api := &API{diagnostics: service}
+	tests := []struct {
+		body string
+		err  error
+		code string
+	}{
+		{`{"kind":"trace","duration_ms":1000}`, diagnostics.ErrInvalidKind, "DIAGNOSTIC_INVALID_KIND"},
+		{`{"kind":"ping","duration_ms":5001}`, diagnostics.ErrInvalidLimits, "DIAGNOSTIC_INVALID_LIMITS"},
+		{`{"kind":"throughput","duration_ms":1000,"bytes":33554433}`, diagnostics.ErrInvalidLimits, "DIAGNOSTIC_INVALID_LIMITS"},
+	}
+	for _, test := range tests {
+		ctx := diagnosticAPIContext(t, owner.ID, client.ID, test.body)
+		err := api.startDiagnostic(ctx)
+		if !errors.Is(err, test.err) {
+			t.Fatalf("body %s error = %v", test.body, err)
+		}
+		errorHandler(ctx, err)
+		response := diagnosticAPIRecorder(t, ctx)
+		if response.Code != http.StatusUnprocessableEntity || !strings.Contains(response.Body.String(), `"code":"`+test.code+`"`) {
+			t.Fatalf("body %s response = %d %s", test.body, response.Code, response.Body.String())
+		}
+	}
+}
+
+func TestDiagnosticErrorsHaveStable4xxEnvelopes(t *testing.T) {
+	tests := []struct {
+		err    error
+		status int
+		code   string
+	}{
+		{diagnostics.ErrNotFound, http.StatusNotFound, "DIAGNOSTIC_NOT_FOUND"},
+		{diagnostics.ErrInvalidKind, http.StatusUnprocessableEntity, "DIAGNOSTIC_INVALID_KIND"},
+		{diagnostics.ErrInvalidLimits, http.StatusUnprocessableEntity, "DIAGNOSTIC_INVALID_LIMITS"},
+		{diagnostics.ErrClientActive, http.StatusConflict, "DIAGNOSTIC_CLIENT_ACTIVE"},
+		{diagnostics.ErrOwnerCapacity, http.StatusTooManyRequests, "DIAGNOSTIC_OWNER_LIMIT"},
+		{diagnostics.ErrTerminal, http.StatusConflict, "DIAGNOSTIC_NOT_RUNNING"},
+	}
+	for _, test := range tests {
+		request := httptest.NewRequest(http.MethodPost, "https://tailcat.example.com", nil)
+		ctx := echo.NewWithConfig(echo.Config{JSONSerializer: jsonV2Serializer{}}).NewContext(request, httptest.NewRecorder())
+		errorHandler(ctx, test.err)
+		response := diagnosticAPIRecorder(t, ctx)
+		if response.Code != test.status || !strings.Contains(response.Body.String(), `"code":"`+test.code+`"`) {
+			t.Errorf("error %v response = %d %s", test.err, response.Code, response.Body.String())
+		}
+		if strings.Contains(response.Body.String(), test.err.Error()) {
+			t.Errorf("error %v exposed internal text: %s", test.err, response.Body.String())
+		}
+	}
+}
+
+func newDiagnosticAPIService(t *testing.T) (*ent.Client, *ent.User, *ent.TailClient, *ent.User, *diagnostics.Service) {
+	t.Helper()
+	db := enttest.Open(t, "sqlite3", "file:"+t.Name()+"?mode=memory&cache=shared&_pragma=foreign_keys(1)")
+	owner := db.User.Create().SetIssuer("test").SetSubject(t.Name() + "-owner").SaveX(t.Context())
+	other := db.User.Create().SetIssuer("test").SetSubject(t.Name() + "-other").SaveX(t.Context())
+	client := db.TailClient.Create().SetUserID(owner.ID).SetName("client").SetServerTokenCipher([]byte("token")).SetTokenHint("token").SaveX(t.Context())
+	auditor, err := audit.NewService(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dialer := diagnosticAPIDialer(func(context.Context, string, string, uint16) (net.Conn, error) {
+		server, peer := net.Pipe()
+		t.Cleanup(func() { _ = server.Close() })
+		return peer, nil
+	})
+	service, err := diagnostics.NewService(t.Context(), db, dialer, auditor, diagnosticAPIPublisher(func(string, string, events.RuntimePhase, diagnostics.EventPayload) {}), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = service.Close() })
+	return db, owner, client, other, service
+}
+
+func diagnosticAPIContext(t *testing.T, ownerID, id, body string) *echo.Context {
+	t.Helper()
+	request := httptest.NewRequest(http.MethodPost, "https://tailcat.example.com", strings.NewReader(body))
+	request.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	recorder := httptest.NewRecorder()
+	e := echo.NewWithConfig(echo.Config{JSONSerializer: jsonV2Serializer{}})
+	ctx := e.NewContext(request, recorder)
+	ctx.Set(principalKey, auth.Principal{ID: ownerID})
+	ctx.SetPathValues(echo.PathValues{{Name: "id", Value: id}})
+	return ctx
+}
+
+func diagnosticAPIRecorder(t *testing.T, ctx *echo.Context) *httptest.ResponseRecorder {
+	t.Helper()
+	response, err := echo.UnwrapResponse(ctx.Response())
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder, ok := response.ResponseWriter.(*httptest.ResponseRecorder)
+	if !ok {
+		t.Fatalf("response writer type = %T", response.ResponseWriter)
+	}
+	return recorder
 }
 
 func exitPolicyTestContext(t *testing.T, ownerID, serverID, body string) *echo.Context {

@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/ca-x/tailcat-webui/internal/auth"
+	"github.com/ca-x/tailcat-webui/internal/diagnostics"
 	"github.com/ca-x/tailcat-webui/internal/secrets"
 	"github.com/ca-x/tailcat-webui/internal/tailnet"
 
@@ -49,6 +50,20 @@ func errorHandler(c *echo.Context, err error) {
 		status, code, message, fields = apiErr.Status, apiErr.Code, apiErr.Message, apiErr.Fields
 	} else if errors.Is(err, auth.ErrUnauthorized) {
 		status, code, message = http.StatusUnauthorized, "UNAUTHORIZED", "Authentication is required"
+	} else if errors.Is(err, diagnostics.ErrNotFound) {
+		status, code, message = http.StatusNotFound, "DIAGNOSTIC_NOT_FOUND", "The diagnostic resource was not found"
+	} else if errors.Is(err, diagnostics.ErrInvalidKind) {
+		status, code, message = http.StatusUnprocessableEntity, "DIAGNOSTIC_INVALID_KIND", "The diagnostic kind is invalid"
+	} else if errors.Is(err, diagnostics.ErrInvalidLimits) {
+		status, code, message = http.StatusUnprocessableEntity, "DIAGNOSTIC_INVALID_LIMITS", "The diagnostic limits are invalid"
+	} else if errors.Is(err, diagnostics.ErrClientActive) {
+		status, code, message = http.StatusConflict, "DIAGNOSTIC_CLIENT_ACTIVE", "This client already has an active diagnostic"
+	} else if errors.Is(err, diagnostics.ErrOwnerCapacity) {
+		status, code, message = http.StatusTooManyRequests, "DIAGNOSTIC_OWNER_LIMIT", "This workspace already has two active diagnostics"
+	} else if errors.Is(err, diagnostics.ErrTerminal) {
+		status, code, message = http.StatusConflict, "DIAGNOSTIC_NOT_RUNNING", "The diagnostic run is no longer active"
+	} else if errors.Is(err, diagnostics.ErrClosed) {
+		status, code, message = http.StatusServiceUnavailable, "DIAGNOSTICS_UNAVAILABLE", "Diagnostics are unavailable"
 	} else if errors.Is(err, tailnet.ErrNotFound) {
 		status, code, message = http.StatusNotFound, "NOT_FOUND", "The requested resource was not found"
 	} else if errors.Is(err, tailnet.ErrAlreadyRunning) {

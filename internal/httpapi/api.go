@@ -19,6 +19,7 @@ import (
 	"github.com/ca-x/tailcat-webui/internal/audit"
 	"github.com/ca-x/tailcat-webui/internal/auth"
 	"github.com/ca-x/tailcat-webui/internal/config"
+	"github.com/ca-x/tailcat-webui/internal/diagnostics"
 	"github.com/ca-x/tailcat-webui/internal/publish"
 	"github.com/ca-x/tailcat-webui/internal/tailnet"
 	"github.com/ca-x/tailcat-webui/internal/version"
@@ -35,6 +36,7 @@ type API struct {
 	db             *ent.Client
 	auth           *auth.Service
 	audit          *audit.Service
+	diagnostics    *diagnostics.Service
 	tailnet        *tailnet.Manager
 	publish        *publish.Service
 	cfg            config.Config
@@ -52,11 +54,11 @@ type API struct {
 	tunnelDial     func(context.Context, string, string, string) (net.Conn, error)
 }
 
-func New(db *ent.Client, authService *auth.Service, auditService *audit.Service, manager *tailnet.Manager, publisher *publish.Service, cfg config.Config, logger *slog.Logger, web fs.FS) (*API, error) {
-	if db == nil || authService == nil || auditService == nil || manager == nil || publisher == nil || logger == nil || web == nil {
+func New(db *ent.Client, authService *auth.Service, auditService *audit.Service, diagnosticService *diagnostics.Service, manager *tailnet.Manager, publisher *publish.Service, cfg config.Config, logger *slog.Logger, web fs.FS) (*API, error) {
+	if db == nil || authService == nil || auditService == nil || diagnosticService == nil || manager == nil || publisher == nil || logger == nil || web == nil {
 		return nil, errors.New("HTTP API: nil dependency")
 	}
-	return &API{db: db, auth: authService, audit: auditService, tailnet: manager, publish: publisher, cfg: cfg, logger: logger, web: web, startedAt: time.Now(), tunnels: make(map[string]int), mutationRates: make(map[string]*rate.Limiter), mutationActive: make(map[string]int), mutationSlots: make(chan struct{}, 64), eventStreams: make(map[string]int), tunnelDial: manager.Dial}, nil
+	return &API{db: db, auth: authService, audit: auditService, diagnostics: diagnosticService, tailnet: manager, publish: publisher, cfg: cfg, logger: logger, web: web, startedAt: time.Now(), tunnels: make(map[string]int), mutationRates: make(map[string]*rate.Limiter), mutationActive: make(map[string]int), mutationSlots: make(chan struct{}, 64), eventStreams: make(map[string]int), tunnelDial: manager.Dial}, nil
 }
 
 func (a *API) Handler() (http.Handler, error) {
@@ -118,8 +120,11 @@ func (a *API) Handler() (http.Handler, error) {
 	api.GET("/clients", a.listClients)
 	api.POST("/clients", a.createClient)
 	api.POST("/clients/:id/ping", a.pingClient)
+	api.POST("/clients/:id/diagnostics", a.startDiagnostic)
 	api.GET("/clients/:id/tunnel", a.tunnelClient)
 	api.DELETE("/clients/:id", a.deleteClient)
+	api.GET("/diagnostics", a.listDiagnostics)
+	api.POST("/diagnostics/:id/cancel", a.cancelDiagnostic)
 	api.POST("/tokens/parse", a.parseToken)
 	api.POST("/tokens/resolve", a.resolveToken)
 	api.GET("/routes", a.listRoutes)
@@ -619,6 +624,57 @@ func (a *API) pingClient(c *echo.Context) error {
 	return c.JSON(http.StatusOK, view)
 }
 
+func (a *API) listDiagnostics(c *echo.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	runs, err := a.diagnostics.List(c.Request().Context(), p.ID)
+	if err != nil {
+		return err
+	}
+	return c.JSON(http.StatusOK, map[string]any{"items": runs})
+}
+
+type startDiagnosticRequest struct {
+	Kind       diagnostics.RunKind `json:"kind"`
+	DurationMS int64               `json:"duration_ms"`
+	Bytes      int64               `json:"bytes,omitzero"`
+}
+
+func (a *API) startDiagnostic(c *echo.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	var request startDiagnosticRequest
+	if err := c.Bind(&request); err != nil {
+		return err
+	}
+	duration := time.Duration(0)
+	if request.DurationMS >= 1 && request.DurationMS <= diagnostics.MaxDuration.Milliseconds() {
+		duration = time.Duration(request.DurationMS) * time.Millisecond
+	}
+	run, err := a.diagnostics.Start(c.Request().Context(), p.ID, c.Param("id"), diagnostics.StartInput{
+		Kind: request.Kind, Duration: duration, Bytes: request.Bytes,
+	})
+	if err != nil {
+		return err
+	}
+	return c.JSON(http.StatusCreated, run)
+}
+
+func (a *API) cancelDiagnostic(c *echo.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	if err := a.diagnostics.Cancel(c.Request().Context(), p.ID, c.Param("id")); err != nil {
+		return err
+	}
+	return c.NoContent(http.StatusNoContent)
+}
+
 func (a *API) deleteClient(c *echo.Context) error {
 	p, err := principal(c)
 	if err != nil {
@@ -808,7 +864,7 @@ func (a *API) events(c *echo.Context) error {
 			if marshalErr != nil {
 				return marshalErr
 			}
-			if _, writeErr := fmt.Fprintf(response, "event: runtime\ndata: %s\n\n", data); writeErr != nil {
+			if _, writeErr := fmt.Fprintf(response, "event: %s\ndata: %s\n\n", event.Type, data); writeErr != nil {
 				return nil
 			}
 			_ = http.NewResponseController(response).Flush()

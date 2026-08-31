@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -17,6 +18,7 @@ import (
 	"github.com/ca-x/tailcat-webui/ent/enttest"
 	"github.com/ca-x/tailcat-webui/ent/exitrule"
 	"github.com/ca-x/tailcat-webui/ent/tailserver"
+	"github.com/ca-x/tailcat-webui/internal/diagnostics"
 	"github.com/ca-x/tailcat-webui/internal/secrets"
 
 	_ "github.com/lib-x/entsqlite"
@@ -257,6 +259,43 @@ func TestManagerStartFailureUsesRuntimeFactory(t *testing.T) {
 	}
 	if manager.isServerRunning(server.ID) {
 		t.Fatal("failed runtime remained registered")
+	}
+}
+
+func TestManagerRegistersBoundedDiagnosticHandlerOnEveryServer(t *testing.T) {
+	runtime := &fakeServerRuntime{token: "fake-token", public: "nodekey:fake-server"}
+	factory := &fakeRuntimeFactory{server: runtime}
+	manager, db, ownerID := newRuntimeFactoryTestManager(t, factory)
+	server := db.TailServer.Create().SetUserID(ownerID).SetName("diagnostic-server").SetRegion("tailcat.dev").SaveX(t.Context())
+
+	if _, err := manager.StartServer(t.Context(), ownerID, server.ID); err != nil {
+		t.Fatal(err)
+	}
+	if len(factory.serverSpecs) != 1 || factory.serverSpecs[0].ReservedTCPHandlers[diagnostics.ReservedPort] == nil {
+		t.Fatalf("reserved handlers = %+v", factory.serverSpecs)
+	}
+}
+
+func TestManagerRejectsReservedPortMappingsAtCreateAndRuntime(t *testing.T) {
+	for _, port := range []uint16{diagnostics.ReservedPort, ReservedTransferPort} {
+		t.Run(fmt.Sprintf("port-%d", port), func(t *testing.T) {
+			factory := &fakeRuntimeFactory{server: &fakeServerRuntime{}}
+			manager, db, ownerID := newRuntimeFactoryTestManager(t, factory)
+			server := db.TailServer.Create().SetUserID(ownerID).SetName("reserved").SetRegion("tailcat.dev").SaveX(t.Context())
+			if _, err := manager.CreateMapping(t.Context(), ownerID, server.ID, CreateMappingInput{Name: "collision", Kind: "tcp", ListenPort: port, TargetHost: "127.0.0.1", TargetPort: 80}); !errors.Is(err, ErrInvalid) {
+				t.Fatalf("CreateMapping port %d error = %v, want invalid", port, err)
+			}
+			if got := db.PortMapping.Query().CountX(t.Context()); got != 0 {
+				t.Fatalf("mappings after reserved create = %d", got)
+			}
+			db.PortMapping.Create().SetUserID(ownerID).SetServerID(server.ID).SetName("persisted-collision").SetListenPort(port).SetTargetPort(80).SaveX(t.Context())
+			if _, err := manager.StartServer(t.Context(), ownerID, server.ID); !errors.Is(err, ErrInvalid) {
+				t.Fatalf("StartServer with persisted port %d error = %v, want invalid", port, err)
+			}
+			if len(factory.serverSpecs) != 0 {
+				t.Fatal("runtime factory received a colliding server spec")
+			}
+		})
 	}
 }
 

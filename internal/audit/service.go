@@ -22,6 +22,7 @@ type Entry struct {
 	ResourceID   string
 	Outcome      string
 	RequestID    string
+	Detail       string
 }
 
 func NewService(db *ent.Client) (*Service, error) {
@@ -35,7 +36,7 @@ func (s *Service) Record(ctx context.Context, entry Entry) error {
 	if entry.Outcome != "failure" {
 		entry.Outcome = "success"
 	}
-	create := s.db.AuditEvent.Create().SetAction(entry.Action).SetResourceKind(entry.ResourceKind).SetResourceID(entry.ResourceID).SetOutcome(auditevent.Outcome(entry.Outcome)).SetRequestID(entry.RequestID)
+	create := s.db.AuditEvent.Create().SetAction(entry.Action).SetResourceKind(entry.ResourceKind).SetResourceID(entry.ResourceID).SetOutcome(auditevent.Outcome(entry.Outcome)).SetRequestID(entry.RequestID).SetDetail(entry.Detail)
 	if entry.UserID != "" {
 		create.SetUserID(entry.UserID)
 	}

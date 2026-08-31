@@ -48,6 +48,18 @@ func TestRunnerPing(t *testing.T) {
 	}
 }
 
+func TestRunnerTreatsNilConnectionAsIOError(t *testing.T) {
+	runner, err := NewRunner(func(context.Context) (net.Conn, error) { return nil, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = runner.Run(t.Context(), Request{Kind: RunKindPing, Duration: time.Second})
+	protocolErr, ok := errors.AsType[*ProtocolError](err)
+	if !ok || protocolErr.Code != CodeIO {
+		t.Fatalf("nil connection error = %v, want %s", err, CodeIO)
+	}
+}
+
 func TestRunnerThroughputTransfersEachDirectionSequentially(t *testing.T) {
 	client, server := net.Pipe()
 	errCh := make(chan error, 1)

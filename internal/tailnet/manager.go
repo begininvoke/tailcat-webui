@@ -20,6 +20,7 @@ import (
 	"github.com/ca-x/tailcat-webui/ent/portmapping"
 	"github.com/ca-x/tailcat-webui/ent/tailclient"
 	"github.com/ca-x/tailcat-webui/ent/tailserver"
+	"github.com/ca-x/tailcat-webui/internal/diagnostics"
 	"github.com/ca-x/tailcat-webui/internal/events"
 	"github.com/ca-x/tailcat-webui/internal/secrets"
 
@@ -27,6 +28,10 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 )
+
+// ReservedTransferPort is held for Tailcat's bounded file-transfer service.
+// User mappings cannot claim it before that service is wired.
+const ReservedTransferPort uint16 = 41641
 
 var (
 	ErrNotFound        = errors.New("tailnet resource not found")
@@ -620,7 +625,7 @@ func (m *Manager) CreateMapping(ctx context.Context, userID, serverID string, in
 	if m.isServerRunning(serverID) {
 		return PortMappingView{}, ErrRestartRequired
 	}
-	if in.ListenPort == 0 || len(strings.TrimSpace(in.Name)) == 0 || len(in.Name) > 80 || len(in.TargetHost) > 253 || (in.Kind != "tcp" && in.Kind != "no_auth_ssh") || (in.Kind == "no_auth_ssh" && !m.unsafeSSH) {
+	if in.ListenPort == 0 || reservedTailcatPort(in.ListenPort) || len(strings.TrimSpace(in.Name)) == 0 || len(in.Name) > 80 || len(in.TargetHost) > 253 || (in.Kind != "tcp" && in.Kind != "no_auth_ssh") || (in.Kind == "no_auth_ssh" && !m.unsafeSSH) {
 		return PortMappingView{}, ErrInvalid
 	}
 	if in.Kind == "no_auth_ssh" && (!serverRow.AllowlistEnabled || len(serverRow.Edges.AllowedClients) == 0) {
@@ -1080,6 +1085,13 @@ func (m *Manager) buildServer(ctx context.Context, row *ent.TailServer) (ServerR
 		ReservedTCPHandlers: make(map[uint16]TCPHandler),
 		NoAuthSSHPorts:      make(map[uint16]struct{}),
 	}
+	diagnosticHandler := diagnostics.Handler{}
+	spec.ReservedTCPHandlers[diagnostics.ReservedPort] = func(runtimeCtx context.Context, connection net.Conn) {
+		defer connection.Close()
+		if err := diagnosticHandler.Serve(runtimeCtx, connection); err != nil {
+			m.logger.DebugContext(runtimeCtx, "Tailcat diagnostic request ended", "server_id", row.ID, "error", err)
+		}
+	}
 	if row.KeyMode == tailserver.KeyModeSaved {
 		plaintext, err := m.box.Open(row.KeyCipher, secretAD(row.UserID, row.ID))
 		if err != nil {
@@ -1112,6 +1124,9 @@ func (m *Manager) buildServer(ctx context.Context, row *ent.TailServer) (ServerR
 		spec.AllowedClients = append(spec.AllowedClients, key.NewNode().Public())
 	}
 	for _, mapping := range row.Edges.Mappings {
+		if reservedTailcatPort(mapping.ListenPort) {
+			return nil, fmt.Errorf("%w: Tailcat TCP port %d is reserved", ErrInvalid, mapping.ListenPort)
+		}
 		if mapping.Kind == portmapping.KindNoAuthSSH && (!m.unsafeSSH || !row.AllowlistEnabled || len(row.Edges.AllowedClients) == 0) {
 			return nil, errors.New("auth-free SSH is disabled outside loopback demo mode")
 		}
@@ -1421,18 +1436,17 @@ func mappingView(row *ent.PortMapping) PortMappingView {
 	return PortMappingView{ID: row.ID, ServerID: row.ServerID, Name: row.Name, Kind: string(row.Kind), ListenPort: row.ListenPort, TargetHost: row.TargetHost, TargetPort: row.TargetPort, Enabled: row.Enabled, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt}
 }
 
+func reservedTailcatPort(port uint16) bool {
+	return port == diagnostics.ReservedPort || port == ReservedTransferPort
+}
+
 func exitRuleView(row *ent.ExitRule) ExitRuleView {
 	return ExitRuleView{ID: row.ID, ServerID: row.ServerID, Prefix: row.Prefix, StartPort: row.StartPort, EndPort: row.EndPort, Enabled: row.Enabled, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt}
 }
 
 func (m *Manager) publish(userID, kind, id string, phase RuntimePhase, message string) {
 	at := time.Now()
-	m.eventsMu.Lock()
-	broker := m.eventsForUserLocked(userID)
-	m.eventSequences[userID]++
-	sequence := m.eventSequences[userID]
-	broker.Publish(events.Envelope{Version: 1, Type: "runtime", ResourceKind: kind, ResourceID: id, Phase: phase, Sequence: sequence, At: at})
-	m.eventsMu.Unlock()
+	m.publishEnvelope(userID, events.Envelope{Version: 1, Type: "runtime", ResourceKind: kind, ResourceID: id, Phase: phase, At: at})
 	event := Event{UserID: userID, ResourceKind: kind, ResourceID: id, State: phase, Message: message, At: at}
 	if m.recordEvent != nil {
 		auditCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -1441,6 +1455,25 @@ func (m *Manager) publish(userID, kind, id string, phase RuntimePhase, message s
 			m.logger.ErrorContext(auditCtx, "Write runtime audit event failed", "error", err)
 		}
 	}
+}
+
+func (m *Manager) PublishDiagnostic(userID, runID string, phase events.RuntimePhase, payload diagnostics.EventPayload) {
+	m.publishEnvelope(userID, events.Envelope{
+		Version: 1, Type: "diagnostic", ResourceKind: "diagnostic", ResourceID: runID,
+		OperationID: runID, Phase: phase, Payload: payload,
+	})
+}
+
+func (m *Manager) publishEnvelope(userID string, event events.Envelope) {
+	if event.At.IsZero() {
+		event.At = time.Now()
+	}
+	m.eventsMu.Lock()
+	broker := m.eventsForUserLocked(userID)
+	m.eventSequences[userID]++
+	event.Sequence = m.eventSequences[userID]
+	broker.Publish(event)
+	m.eventsMu.Unlock()
 }
 
 func (m *Manager) setClientState(id string, state RuntimePhase) {

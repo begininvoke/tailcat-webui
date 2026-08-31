@@ -15,11 +15,11 @@ func TestRecordPersistsSecurityEvent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := service.Record(t.Context(), Entry{UserID: user.ID, Action: "server.start", ResourceKind: "server", ResourceID: "server-id", Outcome: "success", RequestID: "request-id"}); err != nil {
+	if err := service.Record(t.Context(), Entry{UserID: user.ID, Action: "server.start", ResourceKind: "server", ResourceID: "server-id", Outcome: "success", RequestID: "request-id", Detail: "client_id=client-id"}); err != nil {
 		t.Fatal(err)
 	}
 	record := db.AuditEvent.Query().OnlyX(t.Context())
-	if record.UserID == nil || *record.UserID != user.ID || record.Action != "server.start" || record.RequestID != "request-id" {
+	if record.UserID == nil || *record.UserID != user.ID || record.Action != "server.start" || record.RequestID != "request-id" || record.Detail != "client_id=client-id" {
 		t.Fatalf("audit record = %#v", record)
 	}
 }

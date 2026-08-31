@@ -16,6 +16,7 @@ import (
 	"github.com/ca-x/tailcat-webui/internal/auth"
 	"github.com/ca-x/tailcat-webui/internal/config"
 	"github.com/ca-x/tailcat-webui/internal/database"
+	"github.com/ca-x/tailcat-webui/internal/diagnostics"
 	"github.com/ca-x/tailcat-webui/internal/httpapi"
 	"github.com/ca-x/tailcat-webui/internal/publish"
 	"github.com/ca-x/tailcat-webui/internal/secrets"
@@ -27,13 +28,14 @@ import (
 )
 
 type App struct {
-	cfg     config.Config
-	logger  *slog.Logger
-	db      *ent.Client
-	tailnet *tailnet.Manager
-	publish *publish.Service
-	lock    *flock.Flock
-	handler http.Handler
+	cfg         config.Config
+	logger      *slog.Logger
+	db          *ent.Client
+	diagnostics *diagnostics.Service
+	tailnet     *tailnet.Manager
+	publish     *publish.Service
+	lock        *flock.Flock
+	handler     http.Handler
 }
 
 func New(ctx context.Context, logger *slog.Logger) (*App, error) {
@@ -95,8 +97,15 @@ func New(ctx context.Context, logger *slog.Logger) (*App, error) {
 		db.Close()
 		return nil, err
 	}
+	diagnosticService, err := diagnostics.NewService(ctx, db, manager, auditService, manager, logger)
+	if err != nil {
+		manager.Close()
+		db.Close()
+		return nil, err
+	}
 	publisher, err := publish.NewService(db, manager, cfg.BaseURL, cfg.PublishURL, cfg.MasterKey, cfg.SessionIdle, logger)
 	if err != nil {
+		diagnosticService.Close()
 		manager.Close()
 		db.Close()
 		return nil, err
@@ -104,13 +113,15 @@ func New(ctx context.Context, logger *slog.Logger) (*App, error) {
 	web, err := fs.Sub(webdist.Files, "dist")
 	if err != nil {
 		publisher.Close()
+		diagnosticService.Close()
 		manager.Close()
 		db.Close()
 		return nil, fmt.Errorf("open embedded web assets: %w", err)
 	}
-	api, err := httpapi.New(db, authService, auditService, manager, publisher, cfg, logger, web)
+	api, err := httpapi.New(db, authService, auditService, diagnosticService, manager, publisher, cfg, logger, web)
 	if err != nil {
 		publisher.Close()
+		diagnosticService.Close()
 		manager.Close()
 		db.Close()
 		return nil, err
@@ -118,6 +129,7 @@ func New(ctx context.Context, logger *slog.Logger) (*App, error) {
 	handler, err := api.Handler()
 	if err != nil {
 		publisher.Close()
+		diagnosticService.Close()
 		manager.Close()
 		db.Close()
 		return nil, err
@@ -130,7 +142,7 @@ func New(ctx context.Context, logger *slog.Logger) (*App, error) {
 		http.Error(w, "cross-origin request denied", http.StatusForbidden)
 	}))
 	releaseLock = false
-	return &App{cfg: cfg, logger: logger, db: db, tailnet: manager, publish: publisher, lock: processLock, handler: csrf.Handler(handler)}, nil
+	return &App{cfg: cfg, logger: logger, db: db, diagnostics: diagnosticService, tailnet: manager, publish: publisher, lock: processLock, handler: csrf.Handler(handler)}, nil
 }
 
 func (a *App) Run(ctx context.Context) error {
@@ -153,15 +165,17 @@ func (a *App) Run(ctx context.Context) error {
 }
 
 func (a *App) Close() error {
-	return errors.Join(closePublishedBeforeTailnet(a.publish, a.tailnet), a.db.Close(), a.lock.Unlock())
+	return errors.Join(closeServicesBeforeTailnet(a.publish, a.diagnostics, a.tailnet), a.db.Close(), a.lock.Unlock())
 }
 
 type publishedCloser interface{ Close() }
+type diagnosticsCloser interface{ Close() error }
 type tailnetCloser interface{ Close() error }
 
-func closePublishedBeforeTailnet(publisher publishedCloser, manager tailnetCloser) error {
+func closeServicesBeforeTailnet(publisher publishedCloser, diagnostics diagnosticsCloser, manager tailnetCloser) error {
 	publisher.Close()
-	return manager.Close()
+	diagnosticErr := diagnostics.Close()
+	return errors.Join(diagnosticErr, manager.Close())
 }
 
 func DefaultLogger() *slog.Logger {

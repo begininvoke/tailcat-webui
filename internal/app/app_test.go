@@ -10,18 +10,28 @@ import (
 	"testing"
 )
 
-func TestPublishedWorkExitsBeforeTailcatRuntimeClose(t *testing.T) {
-	activeExit := make(chan struct{})
-	publisher := closeFunc(func() { close(activeExit) })
-	runtime := closeErrorFunc(func() error {
+func TestPublishedAndDiagnosticWorkExitBeforeTailcatRuntimeClose(t *testing.T) {
+	publishedExit := make(chan struct{})
+	diagnosticExit := make(chan struct{})
+	publisher := closeFunc(func() { close(publishedExit) })
+	diagnostics := closeErrorFunc(func() error {
 		select {
-		case <-activeExit:
+		case <-publishedExit:
+			close(diagnosticExit)
 			return nil
 		default:
-			return errors.New("Tailcat runtime closed before published work exited")
+			return errors.New("diagnostics closed before published work exited")
 		}
 	})
-	if err := closePublishedBeforeTailnet(publisher, runtime); err != nil {
+	runtime := closeErrorFunc(func() error {
+		select {
+		case <-diagnosticExit:
+			return nil
+		default:
+			return errors.New("Tailcat runtime closed before diagnostic work exited")
+		}
+	})
+	if err := closeServicesBeforeTailnet(publisher, diagnostics, runtime); err != nil {
 		t.Fatal(err)
 	}
 }

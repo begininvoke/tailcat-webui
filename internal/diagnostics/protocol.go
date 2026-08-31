@@ -99,6 +99,9 @@ func (r Runner) Run(ctx context.Context, request Request) (Result, error) {
 	if err != nil {
 		return Result{}, classifyIOError(operationCtx, err)
 	}
+	if conn == nil {
+		return Result{}, protocolError(CodeIO, errors.New("diagnostic dialer returned nil connection"))
+	}
 	defer conn.Close()
 	stop := interruptOnCancel(operationCtx, conn)
 	defer stop()

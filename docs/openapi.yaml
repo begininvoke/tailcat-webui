@@ -189,7 +189,7 @@ paths:
               properties:
                 name: { type: string }
                 kind: { type: string, enum: [tcp, no_auth_ssh] }
-                listen_port: { type: integer, minimum: 1, maximum: 65535 }
+                listen_port: { type: integer, minimum: 1, maximum: 65535, description: Ports 41640 and 41641 are reserved for bounded Tailcat services and are rejected. }
                 target_host: { type: string }
                 target_port: { type: integer, minimum: 0, maximum: 65535 }
       responses:
@@ -262,6 +262,43 @@ paths:
       parameters: [{ $ref: '#/components/parameters/ID' }]
       responses:
         '200': { description: Updated client path, content: { application/json: { schema: { $ref: '#/components/schemas/Client' } } } }
+  /clients/{id}/diagnostics:
+    post:
+      operationId: startDiagnostic
+      description: Start one bounded diagnostic against the selected owner-scoped Tailcat client on reserved port 41640. No network target is accepted.
+      parameters: [{ $ref: '#/components/parameters/ID' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [kind, duration_ms]
+              properties:
+                kind: { type: string, enum: [ping, throughput] }
+                duration_ms: { type: integer, minimum: 1, maximum: 5000 }
+                bytes: { type: integer, minimum: 0, maximum: 33554432, description: Must be zero for ping and positive for throughput; applies independently to upload and download. }
+      responses:
+        '201': { description: Durable running summary created before the peer dial, content: { application/json: { schema: { $ref: '#/components/schemas/DiagnosticRun' } } } }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/Error' }
+  /diagnostics:
+    get:
+      operationId: listDiagnostics
+      description: List up to 100 owner-scoped diagnostic summaries from the last 30 days.
+      responses:
+        '200': { description: Owner diagnostic history, content: { application/json: { schema: { $ref: '#/components/schemas/DiagnosticRunList' } } } }
+  /diagnostics/{id}/cancel:
+    post:
+      operationId: cancelDiagnostic
+      parameters: [{ $ref: '#/components/parameters/ID' }]
+      responses:
+        '204': { description: Cancellation requested }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
   /clients/{id}/tunnel:
     get:
       operationId: tunnelClient
@@ -330,7 +367,7 @@ paths:
       operationId: runtimeEvents
       responses:
         '200':
-          description: Server-sent runtime events
+          description: Server-sent runtime and diagnostic events sharing one owner-scoped sequence.
           content:
             text/event-stream: { schema: { $ref: '#/components/schemas/RuntimeEvent' } }
 components:
@@ -433,6 +470,42 @@ components:
         enabled: { type: boolean }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+    DiagnosticRun:
+      type: object
+      additionalProperties: false
+      required: [id, client_id, kind, status, upload_bytes, download_bytes, upload_bps, download_bps, started_at]
+      properties:
+        id: { type: string, format: uuid }
+        client_id: { type: string, format: uuid }
+        kind: { type: string, enum: [ping, throughput] }
+        status: { type: string, enum: [running, succeeded, failed, canceled, interrupted] }
+        path: { type: string, enum: [direct, derp, peer_relay] }
+        latency_ms: { type: integer, minimum: 0 }
+        upload_bytes: { type: integer, minimum: 0, maximum: 33554432 }
+        download_bytes: { type: integer, minimum: 0, maximum: 33554432 }
+        upload_bps: { type: integer, minimum: 0 }
+        download_bps: { type: integer, minimum: 0 }
+        error_code: { $ref: '#/components/schemas/DiagnosticErrorCode' }
+        started_at: { type: string, format: date-time }
+        finished_at: { type: string, format: date-time }
+    DiagnosticErrorCode:
+      type: string
+      enum: [diagnostic_canceled, diagnostic_timeout, diagnostic_invalid_magic, diagnostic_header_too_large, diagnostic_malformed_header, diagnostic_invalid_request, diagnostic_limit_exceeded, diagnostic_io, diagnostic_invalid_runner]
+    DiagnosticEventPayload:
+      type: object
+      additionalProperties: false
+      required: [client_id, kind, status, progress]
+      properties:
+        client_id: { type: string, format: uuid }
+        kind: { type: string, enum: [ping, throughput] }
+        status: { type: string, enum: [running, succeeded, failed, canceled, interrupted] }
+        progress: { type: integer, minimum: 0, maximum: 100 }
+        latency_ms: { type: integer, minimum: 0 }
+        upload_bytes: { type: integer, minimum: 0, maximum: 33554432 }
+        download_bytes: { type: integer, minimum: 0, maximum: 33554432 }
+        upload_bps: { type: integer, minimum: 0 }
+        download_bps: { type: integer, minimum: 0 }
+        error_code: { $ref: '#/components/schemas/DiagnosticErrorCode' }
     ServerList:
       type: object
       properties: { items: { type: array, items: { $ref: '#/components/schemas/Server' } } }
@@ -442,6 +515,10 @@ components:
     ClientList:
       type: object
       properties: { items: { type: array, items: { $ref: '#/components/schemas/Client' } } }
+    DiagnosticRunList:
+      type: object
+      required: [items]
+      properties: { items: { type: array, maxItems: 100, items: { $ref: '#/components/schemas/DiagnosticRun' } } }
     RouteList:
       type: object
       properties: { items: { type: array, items: { $ref: '#/components/schemas/Route' } } }
@@ -454,14 +531,14 @@ components:
       required: [version, type, resource_kind, resource_id, phase, sequence, at]
       properties:
         version: { type: integer }
-        type: { type: string }
+        type: { type: string, enum: [runtime, diagnostic] }
         resource_kind: { type: string }
         resource_id: { type: string, format: uuid }
         operation_id: { type: string, format: uuid }
         phase: { $ref: '#/components/schemas/RuntimePhase' }
         sequence: { type: integer, minimum: 1 }
         at: { type: string, format: date-time }
-        payload: {}
+        payload: { $ref: '#/components/schemas/DiagnosticEventPayload' }
     Error:
       type: object
       required: [error]
