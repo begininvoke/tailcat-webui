@@ -102,11 +102,8 @@ func protocolError(code ErrorCode, cause error) error {
 
 func requestHeaderFor(request Request) (requestHeader, error) {
 	duration := request.Duration
-	if duration == 0 {
-		duration = MaxDuration
-	}
-	if duration < 0 {
-		return requestHeader{}, protocolError(CodeInvalidRequest, fmt.Errorf("negative duration"))
+	if duration <= 0 {
+		return requestHeader{}, protocolError(CodeInvalidRequest, fmt.Errorf("duration must be positive"))
 	}
 	if duration > MaxDuration {
 		return requestHeader{}, protocolError(CodeLimitExceeded, fmt.Errorf("duration exceeds %s", MaxDuration))
@@ -137,6 +134,17 @@ func requestHeaderFor(request Request) (requestHeader, error) {
 		return requestHeader{}, protocolError(CodeInvalidRequest, fmt.Errorf("unsupported operation %q", request.Kind))
 	}
 	return header, nil
+}
+
+func (c ErrorCode) valid() bool {
+	switch c {
+	case CodeCanceled, CodeTimeout, CodeInvalidMagic, CodeHeaderTooLarge,
+		CodeMalformedHeader, CodeInvalidRequest, CodeLimitExceeded, CodeIO,
+		CodeInvalidRunner:
+		return true
+	default:
+		return false
+	}
 }
 
 func (h requestHeader) request() (Request, error) {

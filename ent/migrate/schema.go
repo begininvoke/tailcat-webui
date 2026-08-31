@@ -97,7 +97,7 @@ var (
 		{Name: "download_bytes", Type: field.TypeInt64, Default: 0},
 		{Name: "upload_bps", Type: field.TypeInt64, Default: 0},
 		{Name: "download_bps", Type: field.TypeInt64, Default: 0},
-		{Name: "error_code", Type: field.TypeString, Nullable: true},
+		{Name: "error_code", Type: field.TypeEnum, Nullable: true, Enums: []string{"diagnostic_canceled", "diagnostic_timeout", "diagnostic_invalid_magic", "diagnostic_header_too_large", "diagnostic_malformed_header", "diagnostic_invalid_request", "diagnostic_limit_exceeded", "diagnostic_io", "diagnostic_invalid_runner"}},
 		{Name: "started_at", Type: field.TypeTime},
 		{Name: "finished_at", Type: field.TypeTime, Nullable: true},
 		{Name: "client_id", Type: field.TypeString},

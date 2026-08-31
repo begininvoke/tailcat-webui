@@ -1530,7 +1530,7 @@ type DiagnosticRunMutation struct {
 	addupload_bps     *int64
 	download_bps      *int64
 	adddownload_bps   *int64
-	error_code        *string
+	error_code        *diagnosticrun.ErrorCode
 	started_at        *time.Time
 	finished_at       *time.Time
 	clearedFields     map[string]struct{}
@@ -2135,12 +2135,12 @@ func (m *DiagnosticRunMutation) ResetDownloadBps() {
 }
 
 // SetErrorCode sets the "error_code" field.
-func (m *DiagnosticRunMutation) SetErrorCode(s string) {
-	m.error_code = &s
+func (m *DiagnosticRunMutation) SetErrorCode(dc diagnosticrun.ErrorCode) {
+	m.error_code = &dc
 }
 
 // ErrorCode returns the value of the "error_code" field in the mutation.
-func (m *DiagnosticRunMutation) ErrorCode() (r string, exists bool) {
+func (m *DiagnosticRunMutation) ErrorCode() (r diagnosticrun.ErrorCode, exists bool) {
 	v := m.error_code
 	if v == nil {
 		return
@@ -2151,7 +2151,7 @@ func (m *DiagnosticRunMutation) ErrorCode() (r string, exists bool) {
 // OldErrorCode returns the old "error_code" field's value of the DiagnosticRun entity.
 // If the DiagnosticRun object wasn't provided to the builder, the object is fetched from the database.
 // An error is returned if the mutation operation is not UpdateOne, or the database query fails.
-func (m *DiagnosticRunMutation) OldErrorCode(ctx context.Context) (v string, err error) {
+func (m *DiagnosticRunMutation) OldErrorCode(ctx context.Context) (v diagnosticrun.ErrorCode, err error) {
 	if !m.op.Is(OpUpdateOne) {
 		return v, errors.New("OldErrorCode is only allowed on UpdateOne operations")
 	}
@@ -2558,7 +2558,7 @@ func (m *DiagnosticRunMutation) SetField(name string, value ent.Value) error {
 		m.SetDownloadBps(v)
 		return nil
 	case diagnosticrun.FieldErrorCode:
-		v, ok := value.(string)
+		v, ok := value.(diagnosticrun.ErrorCode)
 		if !ok {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}

@@ -174,13 +174,13 @@ func (_u *DiagnosticRunUpdate) AddDownloadBps(v int64) *DiagnosticRunUpdate {
 }
 
 // SetErrorCode sets the "error_code" field.
-func (_u *DiagnosticRunUpdate) SetErrorCode(v string) *DiagnosticRunUpdate {
+func (_u *DiagnosticRunUpdate) SetErrorCode(v diagnosticrun.ErrorCode) *DiagnosticRunUpdate {
 	_u.mutation.SetErrorCode(v)
 	return _u
 }
 
 // SetNillableErrorCode sets the "error_code" field if the given value is not nil.
-func (_u *DiagnosticRunUpdate) SetNillableErrorCode(v *string) *DiagnosticRunUpdate {
+func (_u *DiagnosticRunUpdate) SetNillableErrorCode(v *diagnosticrun.ErrorCode) *DiagnosticRunUpdate {
 	if v != nil {
 		_u.SetErrorCode(*v)
 	}
@@ -257,6 +257,11 @@ func (_u *DiagnosticRunUpdate) check() error {
 			return &ValidationError{Name: "path", err: fmt.Errorf(`ent: validator failed for field "DiagnosticRun.path": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.ErrorCode(); ok {
+		if err := diagnosticrun.ErrorCodeValidator(v); err != nil {
+			return &ValidationError{Name: "error_code", err: fmt.Errorf(`ent: validator failed for field "DiagnosticRun.error_code": %w`, err)}
+		}
+	}
 	if _u.mutation.OwnerCleared() && len(_u.mutation.OwnerIDs()) > 0 {
 		return errors.New(`ent: clearing a required unique edge "DiagnosticRun.owner"`)
 	}
@@ -321,10 +326,10 @@ func (_u *DiagnosticRunUpdate) sqlSave(ctx context.Context) (_node int, err erro
 		_spec.AddField(diagnosticrun.FieldDownloadBps, field.TypeInt64, value)
 	}
 	if value, ok := _u.mutation.ErrorCode(); ok {
-		_spec.SetField(diagnosticrun.FieldErrorCode, field.TypeString, value)
+		_spec.SetField(diagnosticrun.FieldErrorCode, field.TypeEnum, value)
 	}
 	if _u.mutation.ErrorCodeCleared() {
-		_spec.ClearField(diagnosticrun.FieldErrorCode, field.TypeString)
+		_spec.ClearField(diagnosticrun.FieldErrorCode, field.TypeEnum)
 	}
 	if value, ok := _u.mutation.FinishedAt(); ok {
 		_spec.SetField(diagnosticrun.FieldFinishedAt, field.TypeTime, value)
@@ -498,13 +503,13 @@ func (_u *DiagnosticRunUpdateOne) AddDownloadBps(v int64) *DiagnosticRunUpdateOn
 }
 
 // SetErrorCode sets the "error_code" field.
-func (_u *DiagnosticRunUpdateOne) SetErrorCode(v string) *DiagnosticRunUpdateOne {
+func (_u *DiagnosticRunUpdateOne) SetErrorCode(v diagnosticrun.ErrorCode) *DiagnosticRunUpdateOne {
 	_u.mutation.SetErrorCode(v)
 	return _u
 }
 
 // SetNillableErrorCode sets the "error_code" field if the given value is not nil.
-func (_u *DiagnosticRunUpdateOne) SetNillableErrorCode(v *string) *DiagnosticRunUpdateOne {
+func (_u *DiagnosticRunUpdateOne) SetNillableErrorCode(v *diagnosticrun.ErrorCode) *DiagnosticRunUpdateOne {
 	if v != nil {
 		_u.SetErrorCode(*v)
 	}
@@ -594,6 +599,11 @@ func (_u *DiagnosticRunUpdateOne) check() error {
 			return &ValidationError{Name: "path", err: fmt.Errorf(`ent: validator failed for field "DiagnosticRun.path": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.ErrorCode(); ok {
+		if err := diagnosticrun.ErrorCodeValidator(v); err != nil {
+			return &ValidationError{Name: "error_code", err: fmt.Errorf(`ent: validator failed for field "DiagnosticRun.error_code": %w`, err)}
+		}
+	}
 	if _u.mutation.OwnerCleared() && len(_u.mutation.OwnerIDs()) > 0 {
 		return errors.New(`ent: clearing a required unique edge "DiagnosticRun.owner"`)
 	}
@@ -675,10 +685,10 @@ func (_u *DiagnosticRunUpdateOne) sqlSave(ctx context.Context) (_node *Diagnosti
 		_spec.AddField(diagnosticrun.FieldDownloadBps, field.TypeInt64, value)
 	}
 	if value, ok := _u.mutation.ErrorCode(); ok {
-		_spec.SetField(diagnosticrun.FieldErrorCode, field.TypeString, value)
+		_spec.SetField(diagnosticrun.FieldErrorCode, field.TypeEnum, value)
 	}
 	if _u.mutation.ErrorCodeCleared() {
-		_spec.ClearField(diagnosticrun.FieldErrorCode, field.TypeString)
+		_spec.ClearField(diagnosticrun.FieldErrorCode, field.TypeEnum)
 	}
 	if value, ok := _u.mutation.FinishedAt(); ok {
 		_spec.SetField(diagnosticrun.FieldFinishedAt, field.TypeTime, value)

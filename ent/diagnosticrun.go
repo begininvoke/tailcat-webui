@@ -40,7 +40,7 @@ type DiagnosticRun struct {
 	// DownloadBps holds the value of the "download_bps" field.
 	DownloadBps int64 `json:"download_bps,omitempty"`
 	// ErrorCode holds the value of the "error_code" field.
-	ErrorCode string `json:"error_code,omitempty"`
+	ErrorCode diagnosticrun.ErrorCode `json:"error_code,omitempty"`
 	// StartedAt holds the value of the "started_at" field.
 	StartedAt time.Time `json:"started_at,omitempty"`
 	// FinishedAt holds the value of the "finished_at" field.
@@ -181,7 +181,7 @@ func (_m *DiagnosticRun) assignValues(columns []string, values []any) error {
 			if value, ok := values[i].(*sql.NullString); !ok {
 				return fmt.Errorf("unexpected type %T for field error_code", values[i])
 			} else if value.Valid {
-				_m.ErrorCode = value.String
+				_m.ErrorCode = diagnosticrun.ErrorCode(value.String)
 			}
 		case diagnosticrun.FieldStartedAt:
 			if value, ok := values[i].(*sql.NullTime); !ok {
@@ -275,7 +275,7 @@ func (_m *DiagnosticRun) String() string {
 	builder.WriteString(fmt.Sprintf("%v", _m.DownloadBps))
 	builder.WriteString(", ")
 	builder.WriteString("error_code=")
-	builder.WriteString(_m.ErrorCode)
+	builder.WriteString(fmt.Sprintf("%v", _m.ErrorCode))
 	builder.WriteString(", ")
 	builder.WriteString("started_at=")
 	builder.WriteString(_m.StartedAt.Format(time.ANSIC))

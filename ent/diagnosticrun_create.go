@@ -139,13 +139,13 @@ func (_c *DiagnosticRunCreate) SetNillableDownloadBps(v *int64) *DiagnosticRunCr
 }
 
 // SetErrorCode sets the "error_code" field.
-func (_c *DiagnosticRunCreate) SetErrorCode(v string) *DiagnosticRunCreate {
+func (_c *DiagnosticRunCreate) SetErrorCode(v diagnosticrun.ErrorCode) *DiagnosticRunCreate {
 	_c.mutation.SetErrorCode(v)
 	return _c
 }
 
 // SetNillableErrorCode sets the "error_code" field if the given value is not nil.
-func (_c *DiagnosticRunCreate) SetNillableErrorCode(v *string) *DiagnosticRunCreate {
+func (_c *DiagnosticRunCreate) SetNillableErrorCode(v *diagnosticrun.ErrorCode) *DiagnosticRunCreate {
 	if v != nil {
 		_c.SetErrorCode(*v)
 	}
@@ -316,6 +316,11 @@ func (_c *DiagnosticRunCreate) check() error {
 	if _, ok := _c.mutation.DownloadBps(); !ok {
 		return &ValidationError{Name: "download_bps", err: errors.New(`ent: missing required field "DiagnosticRun.download_bps"`)}
 	}
+	if v, ok := _c.mutation.ErrorCode(); ok {
+		if err := diagnosticrun.ErrorCodeValidator(v); err != nil {
+			return &ValidationError{Name: "error_code", err: fmt.Errorf(`ent: validator failed for field "DiagnosticRun.error_code": %w`, err)}
+		}
+	}
 	if _, ok := _c.mutation.StartedAt(); !ok {
 		return &ValidationError{Name: "started_at", err: errors.New(`ent: missing required field "DiagnosticRun.started_at"`)}
 	}
@@ -393,7 +398,7 @@ func (_c *DiagnosticRunCreate) createSpec() (*DiagnosticRun, *sqlgraph.CreateSpe
 		_node.DownloadBps = value
 	}
 	if value, ok := _c.mutation.ErrorCode(); ok {
-		_spec.SetField(diagnosticrun.FieldErrorCode, field.TypeString, value)
+		_spec.SetField(diagnosticrun.FieldErrorCode, field.TypeEnum, value)
 		_node.ErrorCode = value
 	}
 	if value, ok := _c.mutation.StartedAt(); ok {

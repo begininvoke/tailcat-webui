@@ -182,6 +182,36 @@ func PathValidator(_path Path) error {
 	}
 }
 
+// ErrorCode defines the type for the "error_code" enum field.
+type ErrorCode string
+
+// ErrorCode values.
+const (
+	ErrorCodeDiagnosticCanceled        ErrorCode = "diagnostic_canceled"
+	ErrorCodeDiagnosticTimeout         ErrorCode = "diagnostic_timeout"
+	ErrorCodeDiagnosticInvalidMagic    ErrorCode = "diagnostic_invalid_magic"
+	ErrorCodeDiagnosticHeaderTooLarge  ErrorCode = "diagnostic_header_too_large"
+	ErrorCodeDiagnosticMalformedHeader ErrorCode = "diagnostic_malformed_header"
+	ErrorCodeDiagnosticInvalidRequest  ErrorCode = "diagnostic_invalid_request"
+	ErrorCodeDiagnosticLimitExceeded   ErrorCode = "diagnostic_limit_exceeded"
+	ErrorCodeDiagnosticIo              ErrorCode = "diagnostic_io"
+	ErrorCodeDiagnosticInvalidRunner   ErrorCode = "diagnostic_invalid_runner"
+)
+
+func (ec ErrorCode) String() string {
+	return string(ec)
+}
+
+// ErrorCodeValidator is a validator for the "error_code" field enum values. It is called by the builders before save.
+func ErrorCodeValidator(ec ErrorCode) error {
+	switch ec {
+	case ErrorCodeDiagnosticCanceled, ErrorCodeDiagnosticTimeout, ErrorCodeDiagnosticInvalidMagic, ErrorCodeDiagnosticHeaderTooLarge, ErrorCodeDiagnosticMalformedHeader, ErrorCodeDiagnosticInvalidRequest, ErrorCodeDiagnosticLimitExceeded, ErrorCodeDiagnosticIo, ErrorCodeDiagnosticInvalidRunner:
+		return nil
+	default:
+		return fmt.Errorf("diagnosticrun: invalid enum value for error_code field: %q", ec)
+	}
+}
+
 // OrderOption defines the ordering options for the DiagnosticRun queries.
 type OrderOption func(*sql.Selector)
 

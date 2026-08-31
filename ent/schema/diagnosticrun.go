@@ -27,7 +27,17 @@ func (DiagnosticRun) Fields() []ent.Field {
 		field.Int64("download_bytes").Default(0),
 		field.Int64("upload_bps").Default(0),
 		field.Int64("download_bps").Default(0),
-		field.String("error_code").Optional(),
+		field.Enum("error_code").Values(
+			"diagnostic_canceled",
+			"diagnostic_timeout",
+			"diagnostic_invalid_magic",
+			"diagnostic_header_too_large",
+			"diagnostic_malformed_header",
+			"diagnostic_invalid_request",
+			"diagnostic_limit_exceeded",
+			"diagnostic_io",
+			"diagnostic_invalid_runner",
+		).Optional(),
 		field.Time("started_at").Default(time.Now).Immutable(),
 		field.Time("finished_at").Optional().Nillable(),
 	}

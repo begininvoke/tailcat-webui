@@ -100,11 +100,6 @@ func DownloadBps(v int64) predicate.DiagnosticRun {
 	return predicate.DiagnosticRun(sql.FieldEQ(FieldDownloadBps, v))
 }
 
-// ErrorCode applies equality check predicate on the "error_code" field. It's identical to ErrorCodeEQ.
-func ErrorCode(v string) predicate.DiagnosticRun {
-	return predicate.DiagnosticRun(sql.FieldEQ(FieldErrorCode, v))
-}
-
 // StartedAt applies equality check predicate on the "started_at" field. It's identical to StartedAtEQ.
 func StartedAt(v time.Time) predicate.DiagnosticRun {
 	return predicate.DiagnosticRun(sql.FieldEQ(FieldStartedAt, v))
@@ -526,58 +521,23 @@ func DownloadBpsLTE(v int64) predicate.DiagnosticRun {
 }
 
 // ErrorCodeEQ applies the EQ predicate on the "error_code" field.
-func ErrorCodeEQ(v string) predicate.DiagnosticRun {
+func ErrorCodeEQ(v ErrorCode) predicate.DiagnosticRun {
 	return predicate.DiagnosticRun(sql.FieldEQ(FieldErrorCode, v))
 }
 
 // ErrorCodeNEQ applies the NEQ predicate on the "error_code" field.
-func ErrorCodeNEQ(v string) predicate.DiagnosticRun {
+func ErrorCodeNEQ(v ErrorCode) predicate.DiagnosticRun {
 	return predicate.DiagnosticRun(sql.FieldNEQ(FieldErrorCode, v))
 }
 
 // ErrorCodeIn applies the In predicate on the "error_code" field.
-func ErrorCodeIn(vs ...string) predicate.DiagnosticRun {
+func ErrorCodeIn(vs ...ErrorCode) predicate.DiagnosticRun {
 	return predicate.DiagnosticRun(sql.FieldIn(FieldErrorCode, vs...))
 }
 
 // ErrorCodeNotIn applies the NotIn predicate on the "error_code" field.
-func ErrorCodeNotIn(vs ...string) predicate.DiagnosticRun {
+func ErrorCodeNotIn(vs ...ErrorCode) predicate.DiagnosticRun {
 	return predicate.DiagnosticRun(sql.FieldNotIn(FieldErrorCode, vs...))
-}
-
-// ErrorCodeGT applies the GT predicate on the "error_code" field.
-func ErrorCodeGT(v string) predicate.DiagnosticRun {
-	return predicate.DiagnosticRun(sql.FieldGT(FieldErrorCode, v))
-}
-
-// ErrorCodeGTE applies the GTE predicate on the "error_code" field.
-func ErrorCodeGTE(v string) predicate.DiagnosticRun {
-	return predicate.DiagnosticRun(sql.FieldGTE(FieldErrorCode, v))
-}
-
-// ErrorCodeLT applies the LT predicate on the "error_code" field.
-func ErrorCodeLT(v string) predicate.DiagnosticRun {
-	return predicate.DiagnosticRun(sql.FieldLT(FieldErrorCode, v))
-}
-
-// ErrorCodeLTE applies the LTE predicate on the "error_code" field.
-func ErrorCodeLTE(v string) predicate.DiagnosticRun {
-	return predicate.DiagnosticRun(sql.FieldLTE(FieldErrorCode, v))
-}
-
-// ErrorCodeContains applies the Contains predicate on the "error_code" field.
-func ErrorCodeContains(v string) predicate.DiagnosticRun {
-	return predicate.DiagnosticRun(sql.FieldContains(FieldErrorCode, v))
-}
-
-// ErrorCodeHasPrefix applies the HasPrefix predicate on the "error_code" field.
-func ErrorCodeHasPrefix(v string) predicate.DiagnosticRun {
-	return predicate.DiagnosticRun(sql.FieldHasPrefix(FieldErrorCode, v))
-}
-
-// ErrorCodeHasSuffix applies the HasSuffix predicate on the "error_code" field.
-func ErrorCodeHasSuffix(v string) predicate.DiagnosticRun {
-	return predicate.DiagnosticRun(sql.FieldHasSuffix(FieldErrorCode, v))
 }
 
 // ErrorCodeIsNil applies the IsNil predicate on the "error_code" field.
@@ -588,16 +548,6 @@ func ErrorCodeIsNil() predicate.DiagnosticRun {
 // ErrorCodeNotNil applies the NotNil predicate on the "error_code" field.
 func ErrorCodeNotNil() predicate.DiagnosticRun {
 	return predicate.DiagnosticRun(sql.FieldNotNull(FieldErrorCode))
-}
-
-// ErrorCodeEqualFold applies the EqualFold predicate on the "error_code" field.
-func ErrorCodeEqualFold(v string) predicate.DiagnosticRun {
-	return predicate.DiagnosticRun(sql.FieldEqualFold(FieldErrorCode, v))
-}
-
-// ErrorCodeContainsFold applies the ContainsFold predicate on the "error_code" field.
-func ErrorCodeContainsFold(v string) predicate.DiagnosticRun {
-	return predicate.DiagnosticRun(sql.FieldContainsFold(FieldErrorCode, v))
 }
 
 // StartedAtEQ applies the EQ predicate on the "started_at" field.
