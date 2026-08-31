@@ -81,14 +81,19 @@ type sourceRateState struct {
 	element  *list.Element
 }
 
+type clientInvalidationState struct {
+	routeIDs []string
+	refs     int
+}
+
 type Service struct {
 	db                  *ent.Client
-	dialer              PortDialer
 	baseURL             *url.URL
 	managementURL       *url.URL
 	grantKey            []byte
 	sessionIdle         time.Duration
 	logger              *slog.Logger
+	transports          *transportRegistry
 	slots               chan struct{}
 	quotaMu             sync.Mutex
 	activeMu            sync.Mutex
@@ -101,6 +106,7 @@ type Service struct {
 	lastRateCleanup     time.Time
 	activeCancels       map[string]map[uint64]context.CancelFunc
 	deleting            map[string]bool
+	clientInvalidations map[string]*clientInvalidationState
 	nextActive          uint64
 }
 
@@ -114,7 +120,13 @@ func NewService(db *ent.Client, dialer PortDialer, managementURL, publishURL *ur
 			return nil, fmt.Errorf("publish service: generate grant key: %w", err)
 		}
 	}
-	return &Service{db: db, dialer: dialer, baseURL: publishURL.Clone(), managementURL: managementURL.Clone(), grantKey: append([]byte(nil), grantKey...), sessionIdle: sessionIdle, logger: logger, slots: make(chan struct{}, 128), activeByOwner: make(map[string]int), activeByRoute: make(map[string]int), activeBySource: make(map[string]int), activeByRouteSource: make(map[string]int), sourceRates: make(map[string]*sourceRateState), sourceRateLRU: list.New(), activeCancels: make(map[string]map[uint64]context.CancelFunc), deleting: make(map[string]bool)}, nil
+	return &Service{db: db, baseURL: publishURL.Clone(), managementURL: managementURL.Clone(), grantKey: append([]byte(nil), grantKey...), sessionIdle: sessionIdle, logger: logger, transports: newTransportRegistry(dialer, maxPublishedTransports), slots: make(chan struct{}, 128), activeByOwner: make(map[string]int), activeByRoute: make(map[string]int), activeBySource: make(map[string]int), activeByRouteSource: make(map[string]int), sourceRates: make(map[string]*sourceRateState), sourceRateLRU: list.New(), activeCancels: make(map[string]map[uint64]context.CancelFunc), deleting: make(map[string]bool), clientInvalidations: make(map[string]*clientInvalidationState)}, nil
+}
+
+func (s *Service) Close() {
+	if s.transports != nil {
+		s.transports.Close()
+	}
 }
 
 func (s *Service) List(ctx context.Context, userID string) ([]RouteView, error) {
@@ -155,6 +167,10 @@ func (s *Service) Create(ctx context.Context, userID string, in CreateRouteInput
 		return RouteView{}, err
 	}
 	s.quotaMu.Lock()
+	if s.clientInvalidating(userID, in.ClientID) {
+		s.quotaMu.Unlock()
+		return RouteView{}, tailnet.ErrConflict
+	}
 	count, countErr := s.db.PublishedRoute.Query().Where(publishedroute.UserIDEQ(userID)).Count(ctx)
 	if countErr != nil {
 		s.quotaMu.Unlock()
@@ -176,29 +192,108 @@ func (s *Service) Create(ctx context.Context, userID string, in CreateRouteInput
 }
 
 func (s *Service) Delete(ctx context.Context, userID, id string) error {
-	s.activeMu.Lock()
-	s.deleting[id] = true
-	s.activeMu.Unlock()
+	exists, err := s.db.PublishedRoute.Query().Where(publishedroute.IDEQ(id), publishedroute.UserIDEQ(userID)).Exist(ctx)
+	if err != nil {
+		return fmt.Errorf("load published route for delete: %w", err)
+	}
+	if !exists {
+		return tailnet.ErrNotFound
+	}
+	s.invalidateRoutes([]string{id})
 	count, err := s.db.PublishedRoute.Delete().Where(publishedroute.IDEQ(id), publishedroute.UserIDEQ(userID)).Exec(ctx)
 	if err != nil {
-		s.activeMu.Lock()
-		delete(s.deleting, id)
-		s.activeMu.Unlock()
+		s.restoreRoutes([]string{id})
 		return fmt.Errorf("delete published route: %w", err)
 	}
 	if count == 0 {
-		s.activeMu.Lock()
-		delete(s.deleting, id)
-		s.activeMu.Unlock()
+		s.restoreRoutes([]string{id})
 		return tailnet.ErrNotFound
 	}
 	s.activeMu.Lock()
-	for _, cancel := range s.activeCancels[id] {
-		cancel()
-	}
 	delete(s.deleting, id)
 	s.activeMu.Unlock()
 	return nil
+}
+
+func (s *Service) InvalidateClient(ctx context.Context, userID, clientID string) error {
+	s.quotaMu.Lock()
+	key := clientInvalidationKey(userID, clientID)
+	s.activeMu.Lock()
+	state := s.clientInvalidations[key]
+	if state == nil {
+		state = &clientInvalidationState{}
+		s.clientInvalidations[key] = state
+	}
+	state.refs++
+	s.activeMu.Unlock()
+	routeIDs, err := s.db.PublishedRoute.Query().Where(publishedroute.UserIDEQ(userID), publishedroute.ClientIDEQ(clientID)).IDs(ctx)
+	s.quotaMu.Unlock()
+	if err != nil {
+		s.CompleteClientInvalidation(userID, clientID)
+		return fmt.Errorf("list published routes for client invalidation: %w", err)
+	}
+	s.activeMu.Lock()
+	for _, routeID := range routeIDs {
+		if !slices.Contains(state.routeIDs, routeID) {
+			state.routeIDs = append(state.routeIDs, routeID)
+		}
+	}
+	s.activeMu.Unlock()
+	s.invalidateRoutes(routeIDs)
+	if s.transports != nil {
+		s.transports.InvalidateClient(userID, clientID)
+	}
+	return nil
+}
+
+func (s *Service) CompleteClientInvalidation(userID, clientID string) {
+	s.activeMu.Lock()
+	defer s.activeMu.Unlock()
+	key := clientInvalidationKey(userID, clientID)
+	state := s.clientInvalidations[key]
+	if state == nil {
+		return
+	}
+	state.refs--
+	if state.refs > 0 {
+		return
+	}
+	for _, routeID := range state.routeIDs {
+		delete(s.deleting, routeID)
+	}
+	delete(s.clientInvalidations, key)
+}
+
+func clientInvalidationKey(userID, clientID string) string { return userID + "\x00" + clientID }
+
+func (s *Service) clientInvalidating(userID, clientID string) bool {
+	s.activeMu.Lock()
+	defer s.activeMu.Unlock()
+	return s.clientInvalidations[clientInvalidationKey(userID, clientID)] != nil
+}
+
+func (s *Service) invalidateRoutes(routeIDs []string) {
+	s.activeMu.Lock()
+	for _, routeID := range routeIDs {
+		s.deleting[routeID] = true
+		for _, cancel := range s.activeCancels[routeID] {
+			cancel()
+		}
+	}
+	s.activeMu.Unlock()
+	if s.transports != nil {
+		for _, routeID := range routeIDs {
+			s.transports.InvalidateRoute(routeID)
+		}
+	}
+}
+
+func (s *Service) restoreRoutes(routeIDs []string) {
+	s.activeMu.Lock()
+	defer s.activeMu.Unlock()
+	for _, routeID := range routeIDs {
+		delete(s.deleting, routeID)
+	}
 }
 
 func (s *Service) OpenURL(ctx context.Context, userID, id, rawSessionToken string) (string, error) {
@@ -277,7 +372,7 @@ func (s *Service) Proxy(w http.ResponseWriter, r *http.Request, slug, remainder,
 			return
 		}
 	}
-	proxyCtx, release, ok := s.acquire(r.Context(), row.UserID, row.ID, source)
+	proxyCtx, release, ok := s.acquire(r.Context(), row.UserID, row.ClientID, row.ID, source)
 	if !ok {
 		http.Error(w, "Published route is at capacity", http.StatusServiceUnavailable)
 		return
@@ -292,20 +387,12 @@ func (s *Service) Proxy(w http.ResponseWriter, r *http.Request, slug, remainder,
 	s.logger.InfoContext(r.Context(), "Published route access", "route_id", row.ID, "access", row.Access, "method", r.Method)
 	target := &url.URL{Scheme: "http", Host: "server.tailcat", Path: joinPath(row.BasePath, remainder)}
 	cookiePrefix := "tc_" + strings.ReplaceAll(row.ID, "-", "") + "_"
-	transport := &http.Transport{
-		Proxy: nil,
-		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			connection, dialErr := s.dialer.DialPort(ctx, row.UserID, row.ClientID, row.RemotePort)
-			if dialErr != nil {
-				return nil, dialErr
-			}
-			return newActivityConn(connection, publishedConnectionIdleTimeout), nil
-		},
-		ForceAttemptHTTP2:     false,
-		ResponseHeaderTimeout: 30 * time.Second,
-		IdleConnTimeout:       90 * time.Second,
+	transport := s.transports.Get(RouteTransportKey{RouteID: row.ID, OwnerID: row.UserID, ClientID: row.ClientID, Port: row.RemotePort})
+	if transport == nil {
+		http.Error(w, "Published route is at capacity", http.StatusServiceUnavailable)
+		return
 	}
-	defer transport.CloseIdleConnections()
+	defer s.transports.Release(transport)
 	proxy := &httputil.ReverseProxy{
 		Transport:     transport,
 		FlushInterval: -1,
@@ -416,12 +503,12 @@ func accessCookieName(routeID string) string {
 	return "tailcat_access_" + strings.ReplaceAll(routeID, "-", "")
 }
 
-func (s *Service) acquire(ctx context.Context, ownerID, routeID, source string) (context.Context, func(), bool) {
+func (s *Service) acquire(ctx context.Context, ownerID, clientID, routeID, source string) (context.Context, func(), bool) {
 	s.activeMu.Lock()
 	defer s.activeMu.Unlock()
 	source = normalizeSource(source)
 	routeSource := routeID + "\x00" + source
-	if s.deleting[routeID] || s.activeByOwner[ownerID] >= 32 || s.activeByRoute[routeID] >= 16 || s.activeBySource[source] >= maxActiveBySource || s.activeByRouteSource[routeSource] >= maxActiveByRouteSource {
+	if s.clientInvalidations[clientInvalidationKey(ownerID, clientID)] != nil || s.deleting[routeID] || s.activeByOwner[ownerID] >= 32 || s.activeByRoute[routeID] >= 16 || s.activeBySource[source] >= maxActiveBySource || s.activeByRouteSource[routeSource] >= maxActiveByRouteSource {
 		return nil, nil, false
 	}
 	select {

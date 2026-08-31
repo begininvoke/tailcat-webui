@@ -145,16 +145,16 @@ func TestAcquirePartitionsCapacityBySource(t *testing.T) {
 	}
 	var releases []func()
 	for range 4 {
-		_, release, ok := service.acquire(t.Context(), "owner-a", "route-a", "192.0.2.10")
+		_, release, ok := service.acquire(t.Context(), "owner-a", "client-a", "route-a", "192.0.2.10")
 		if !ok {
 			t.Fatal("source was rejected before reaching its per-route limit")
 		}
 		releases = append(releases, release)
 	}
-	if _, _, ok := service.acquire(t.Context(), "owner-a", "route-a", "192.0.2.10"); ok {
+	if _, _, ok := service.acquire(t.Context(), "owner-a", "client-a", "route-a", "192.0.2.10"); ok {
 		t.Fatal("one source exceeded its per-route connection limit")
 	}
-	if _, release, ok := service.acquire(t.Context(), "owner-a", "route-a", "192.0.2.11"); !ok {
+	if _, release, ok := service.acquire(t.Context(), "owner-a", "client-a", "route-a", "192.0.2.11"); !ok {
 		t.Fatal("one source exhausted another source's route capacity")
 	} else {
 		releases = append(releases, release)
@@ -165,13 +165,13 @@ func TestAcquirePartitionsCapacityBySource(t *testing.T) {
 
 	releases = nil
 	for i := range 16 {
-		_, release, ok := service.acquire(t.Context(), "owner-a", fmt.Sprintf("route-%d", i), "192.0.2.10")
+		_, release, ok := service.acquire(t.Context(), "owner-a", "client-a", fmt.Sprintf("route-%d", i), "192.0.2.10")
 		if !ok {
 			t.Fatalf("source was rejected before reaching its global limit at connection %d", i+1)
 		}
 		releases = append(releases, release)
 	}
-	if _, _, ok := service.acquire(t.Context(), "owner-a", "route-overflow", "192.0.2.10"); ok {
+	if _, _, ok := service.acquire(t.Context(), "owner-a", "client-a", "route-overflow", "192.0.2.10"); ok {
 		t.Fatal("one source exceeded its global connection limit")
 	}
 	for _, release := range releases {

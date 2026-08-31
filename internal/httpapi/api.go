@@ -548,7 +548,12 @@ func (a *API) deleteClient(c *echo.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := a.tailnet.DeleteClient(c.Request().Context(), p.ID, c.Param("id")); err != nil {
+	clientID := c.Param("id")
+	if err := a.publish.InvalidateClient(c.Request().Context(), p.ID, clientID); err != nil {
+		return err
+	}
+	defer a.publish.CompleteClientInvalidation(p.ID, clientID)
+	if err := a.tailnet.DeleteClient(c.Request().Context(), p.ID, clientID); err != nil {
 		return err
 	}
 	return c.NoContent(http.StatusNoContent)

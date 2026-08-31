@@ -31,6 +31,7 @@ type App struct {
 	logger  *slog.Logger
 	db      *ent.Client
 	tailnet *tailnet.Manager
+	publish *publish.Service
 	lock    *flock.Flock
 	handler http.Handler
 }
@@ -102,18 +103,21 @@ func New(ctx context.Context, logger *slog.Logger) (*App, error) {
 	}
 	web, err := fs.Sub(webdist.Files, "dist")
 	if err != nil {
+		publisher.Close()
 		manager.Close()
 		db.Close()
 		return nil, fmt.Errorf("open embedded web assets: %w", err)
 	}
 	api, err := httpapi.New(db, authService, auditService, manager, publisher, cfg, logger, web)
 	if err != nil {
+		publisher.Close()
 		manager.Close()
 		db.Close()
 		return nil, err
 	}
 	handler, err := api.Handler()
 	if err != nil {
+		publisher.Close()
 		manager.Close()
 		db.Close()
 		return nil, err
@@ -126,7 +130,7 @@ func New(ctx context.Context, logger *slog.Logger) (*App, error) {
 		http.Error(w, "cross-origin request denied", http.StatusForbidden)
 	}))
 	releaseLock = false
-	return &App{cfg: cfg, logger: logger, db: db, tailnet: manager, lock: processLock, handler: csrf.Handler(handler)}, nil
+	return &App{cfg: cfg, logger: logger, db: db, tailnet: manager, publish: publisher, lock: processLock, handler: csrf.Handler(handler)}, nil
 }
 
 func (a *App) Run(ctx context.Context) error {
@@ -149,6 +153,7 @@ func (a *App) Run(ctx context.Context) error {
 }
 
 func (a *App) Close() error {
+	a.publish.Close()
 	return errors.Join(a.tailnet.Close(), a.db.Close(), a.lock.Unlock())
 }
 
