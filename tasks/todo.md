@@ -30,7 +30,7 @@
 - [x] Port-aware operator target-rule parser and resolver
 - [x] Owner-scoped exit-node rule persistence and runtime enforcement
 - [x] Server policy management UI in English and Chinese
-- [ ] Diagnostic schema and bounded reserved-port protocol
+- [x] Diagnostic schema and bounded reserved-port protocol
 - [ ] Diagnostic lifecycle, API, retention and audit integration
 - [ ] Client diagnostics tab with progress, history and cancellation
 - [ ] Transfer share/job/file/item schemas and migrations
