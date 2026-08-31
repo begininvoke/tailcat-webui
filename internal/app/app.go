@@ -88,7 +88,7 @@ func New(ctx context.Context, logger *slog.Logger) (*App, error) {
 		if event.State == "error" {
 			outcome = "failure"
 		}
-		return auditService.Record(ctx, audit.Entry{UserID: event.UserID, Action: "runtime." + event.State, ResourceKind: event.ResourceKind, ResourceID: event.ResourceID, Outcome: outcome})
+		return auditService.Record(ctx, audit.Entry{UserID: event.UserID, Action: "runtime." + string(event.State), ResourceKind: event.ResourceKind, ResourceID: event.ResourceID, Outcome: outcome})
 	}, logger)
 	if err != nil {
 		db.Close()
