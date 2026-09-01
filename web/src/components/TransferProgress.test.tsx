@@ -8,7 +8,7 @@ import { TransferProgress } from './TransferProgress'
 describe('TransferProgress', () => {
   it('renders zero totals safely with text and a non-active progress bar', () => {
     const { container } = render(<ConfigProvider><TransferProgress status="running" receivedBytes={0} totalBytes={0} completedFiles={0} totalFiles={0} /></ConfigProvider>)
-    expect(screen.getByText('Running')).not.toBeNull()
+    expect(screen.getAllByText('Running').length).toBe(2)
     expect(container.querySelector('.transfer-progress-amounts')?.textContent).toBe('0 B / 0 B · 0 / 0 files')
     expect(screen.getByText('0%')).not.toBeNull()
     expect(container.querySelector('.ant-progress-status-normal')).not.toBeNull()
@@ -19,5 +19,16 @@ describe('TransferProgress', () => {
     render(<ConfigProvider><TransferProgress status="failed" receivedBytes={200} totalBytes={100} completedFiles={2} totalFiles={1} errorCode="transfer_integrity_mismatch" /></ConfigProvider>)
     expect(screen.getByText('Integrity verification failed. Retry to receive verified blocks again.')).not.toBeNull()
     expect(screen.getByText('100%')).not.toBeNull()
+  })
+
+  it('announces status milestones without making exact byte ticks live', () => {
+    const view = render(<ConfigProvider><TransferProgress status="running" receivedBytes={1} totalBytes={10} completedFiles={0} totalFiles={1} /></ConfigProvider>)
+    const amounts = view.container.querySelector('.transfer-progress-amounts')
+    const announcement = view.container.querySelector('.transfer-progress-announcement')
+    expect(amounts?.hasAttribute('aria-live')).toBe(false)
+    expect(announcement?.getAttribute('aria-live')).toBe('polite')
+    expect(announcement?.textContent).toBe('Running')
+    view.rerender(<ConfigProvider><TransferProgress status="completed" receivedBytes={10} totalBytes={10} completedFiles={1} totalFiles={1} /></ConfigProvider>)
+    expect(view.container.querySelector('.transfer-progress-announcement')?.textContent).toBe('Completed')
   })
 })

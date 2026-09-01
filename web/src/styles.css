@@ -36,6 +36,7 @@ body { min-height: 100vh; min-height: 100dvh; background: var(--app-bg); }
 button, input, textarea, select { font: inherit; }
 button, a, [role="button"] { touch-action: manipulation; }
 code, pre, .mono-value, .mono-input input, .mono-input textarea { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.sr-only { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; margin: -1px !important; overflow: hidden !important; clip: rect(0, 0, 0, 0) !important; white-space: nowrap !important; border: 0 !important; }
 .skip-link { position: fixed; z-index: 1000; inset-block-start: 8px; inset-inline-start: 8px; padding: 10px 14px; border-radius: 8px; color: #fff; background: #003f46; transform: translateY(-160%); transition: transform 120ms var(--ease-out); }
 .skip-link:focus { transform: translateY(0); }
 
@@ -198,6 +199,8 @@ code, pre, .mono-value, .mono-input input, .mono-input textarea { font-family: u
 .sender-form { margin-top: 16px; }
 .upload-queue .ant-list-item { align-items: flex-start; }
 .upload-queue .ant-list-item-meta { min-width: 0; }
+.queue-delete-button { min-width: 44px; min-height: 44px; }
+.drawer-job-actions { margin: 12px 0 16px; }
 .transfer-item-list .ant-list-item-meta { min-width: 0; }
 .transfer-item-list .ant-list-item-action { margin-inline-start: 12px; }
 

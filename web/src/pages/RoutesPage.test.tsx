@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import '../i18n'
 import { transferEvent } from '../hooks/useRuntimeEvents'
 import { APIError, api } from '../services/api'
-import RoutesPage, { transferQueueReducer, type QueuedFile } from './RoutesPage'
+import RoutesPage, { compareAndClearOneTimeCode, initialTransferQueueState, transferQueueReducer, type QueuedFile } from './RoutesPage'
 
 const { config } = vi.hoisted(() => ({ config: { auth_mode: 'demo' as const, unsafe_ssh: false, version: 'test', transfers: { max_file_bytes: 4, max_share_bytes: 8, max_job_bytes: 8, max_owner_bytes: 16, max_files_per_share: 2, workers: 4 as const, max_jobs_per_owner: 2, expiry_seconds: 86400, retention_seconds: 86400, upload_timeout_seconds: 1800 } } }))
 vi.mock('../app/auth', () => ({ useAuth: () => ({ config, user: { id: 'user-1' }, logout: vi.fn() }) }))
@@ -21,9 +21,17 @@ const completedJob = { ...readyJob, id: '4f4c51fa-8d36-4c39-b9e4-4af06fe6189c', 
 const runningJob = { ...readyJob, id: '5f4c51fa-8d36-4c39-b9e4-4af06fe6189c', status: 'running' as const, received_bytes: 1 }
 const stagingShare = { id: '6f4c51fa-8d36-4c39-b9e4-4af06fe6189c', server_id: server.id, status: 'staging' as const, total_bytes: 0, file_count: 0, expires_at: timestamp, created_at: timestamp, updated_at: timestamp }
 const readyShare = { ...stagingShare, status: 'ready' as const, total_bytes: 3, file_count: 1, ready_at: timestamp }
+const route = { id: 'route-1', client_id: client.id, name: 'Existing published route', slug: 'existing', remote_port: 8080, base_path: '/', access: 'private' as const, enabled: true, url: '/r/existing', created_at: timestamp, updated_at: timestamp, allowed_methods: ['GET'] }
 
-function renderPage() {
-  return render(<ConfigProvider><App><MemoryRouter initialEntries={['/routes?tab=transfers']}><RoutesPage /></MemoryRouter></App></ConfigProvider>)
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (error: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => { resolve = resolvePromise; reject = rejectPromise })
+  return { promise, resolve, reject }
+}
+
+function renderPage(entry = '/routes?tab=transfers') {
+  return render(<ConfigProvider><App><MemoryRouter initialEntries={[entry]}><RoutesPage /></MemoryRouter></App></ConfigProvider>)
 }
 
 describe('RoutesPage transfers', () => {
@@ -112,12 +120,16 @@ describe('RoutesPage transfers', () => {
   it('keeps stable queue IDs and retries only state transitions through the reducer', () => {
     const first: QueuedFile = { uid: 'upload-1', file: new File(['one'], 'one.txt'), virtualPath: 'one.txt', status: 'queued' }
     const second: QueuedFile = { uid: 'upload-2', file: new File(['two'], 'two.txt'), virtualPath: 'nested/two.txt', status: 'queued' }
-    let state = transferQueueReducer([], { type: 'add', files: [first, second, first] })
-    expect(state.map((item) => item.uid)).toEqual(['upload-1', 'upload-2'])
-    state = transferQueueReducer(state, { type: 'status', uid: 'upload-2', status: 'failed', error: 'offline' })
-    expect(state[1]).toMatchObject({ uid: 'upload-2', status: 'failed', error: 'offline' })
+    let state = transferQueueReducer(initialTransferQueueState, { type: 'add', files: [first, second, first] })
+    expect(state.items.map((item) => item.uid)).toEqual(['upload-1', 'upload-2'])
+    state = transferQueueReducer(state, { type: 'begin', operationID: 1, uids: ['upload-1', 'upload-2'] })
+    expect(transferQueueReducer(state, { type: 'remove', uid: 'upload-1' })).toBe(state)
+    expect(transferQueueReducer(state, { type: 'add', files: [{ ...second, uid: 'upload-3' }] })).toBe(state)
+    state = transferQueueReducer(state, { type: 'status', operationID: 1, uid: 'upload-2', status: 'failed', error: 'offline' })
+    expect(state.items[1]).toMatchObject({ uid: 'upload-2', status: 'failed', error: 'offline' })
+    state = transferQueueReducer(state, { type: 'finish', operationID: 1, clearSucceeded: false })
     state = transferQueueReducer(state, { type: 'remove', uid: 'upload-1' })
-    expect(state.map((item) => item.uid)).toEqual(['upload-2'])
+    expect(state.items.map((item) => item.uid)).toEqual(['upload-2'])
   })
 
   it('applies only monotonic transfer progress immediately and coalesces transfer-only refreshes', async () => {
@@ -140,7 +152,7 @@ describe('RoutesPage transfers', () => {
   it('shows completed item downloads only from the authenticated same-origin endpoint', async () => {
     renderPage()
     await screen.findByRole('tab', { name: 'Transfers', selected: true })
-    await waitFor(() => expect(document.body.textContent).toContain('1 / 1 files'))
+    expect(document.body.textContent).toContain('File progress unavailable')
     const details = await screen.findAllByText('File details')
     const user = userEvent.setup()
     await user.click(details.at(-1)!)
@@ -269,5 +281,194 @@ describe('RoutesPage transfers', () => {
     await screen.findByRole('tab', { name: 'Transfers', selected: true })
     expect(document.querySelectorAll('.transfer-table').length).toBe(2)
     expect(document.querySelector('.transfer-mobile-card')).toBeNull()
+  })
+
+  it('freezes the sender operation queue and finalizes only its exact successful snapshot', async () => {
+    config.transfers.max_files_per_share = 4
+    const firstUpload = deferred<{ id: string; virtual_path: string; size: number; mtime: string; created_at: string }>()
+    vi.spyOn(api, 'createTransferShare').mockResolvedValue({ share: stagingShare, capability: 'tcs1.locked-code' })
+    const upload = vi.spyOn(api, 'uploadTransferShareFile').mockImplementation(async (_shareID, file, virtualPath) => {
+      if (file instanceof File && file.name === 'first.txt') return firstUpload.promise
+      return { id: `file-${virtualPath}`, virtual_path: virtualPath, size: file.size, mtime: timestamp, created_at: timestamp }
+    })
+    const finalize = vi.spyOn(api, 'finalizeTransferShare').mockResolvedValue(readyShare)
+    renderPage()
+    await screen.findByRole('tab', { name: 'Transfers', selected: true })
+    const user = userEvent.setup()
+    await user.click(screen.getAllByText('Send files').find((node) => node.closest('button'))!)
+    const fileInput = await waitFor(() => document.querySelector('input[type="file"]'))
+    if (!(fileInput instanceof HTMLInputElement)) throw new Error('Upload input missing')
+    const first = new File(['1'], 'first.txt')
+    const removed = new File(['2'], 'removed.txt')
+    fireEvent.change(fileInput, { target: { files: [first, removed] } })
+    await user.click(await screen.findByLabelText('Delete removed.txt'))
+    await user.click(await screen.findByText('Upload and finalize'))
+    await waitFor(() => expect(upload).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect((document.querySelector('input[type="file"]') as HTMLInputElement | null)?.disabled).toBe(true))
+    expect((screen.getByRole('combobox', { name: 'Tailcat server' }) as HTMLInputElement).disabled).toBe(true)
+    expect(screen.queryByRole('button', { name: 'Close' })).toBeNull()
+    expect((screen.getByLabelText('Delete first.txt') as HTMLButtonElement).disabled).toBe(true)
+    const late = new File(['3'], 'late.txt')
+    fireEvent.change(fileInput, { target: { files: [late] } })
+    firstUpload.resolve({ id: 'file-first', virtual_path: 'first.txt', size: 1, mtime: timestamp, created_at: timestamp })
+    await waitFor(() => expect(finalize).toHaveBeenCalledWith(stagingShare.id))
+    expect(upload.mock.calls.map((call) => (call[1] as File).name)).toEqual(['first.txt'])
+    expect(new Set(upload.mock.calls.map((call) => call[2])).size).toBe(upload.mock.calls.length)
+  })
+
+  it('reconciles an API-history staging share before resume and applies remaining limits and paths', async () => {
+    const existing = { id: 'existing-1', virtual_path: 'existing.txt', size: 3, mtime: timestamp, created_at: timestamp }
+    vi.mocked(api.transferShares).mockResolvedValue([{ ...stagingShare, total_bytes: 3, file_count: 1 }])
+    const history = vi.spyOn(api, 'transferShareFiles').mockResolvedValue([existing])
+    const upload = vi.spyOn(api, 'uploadTransferShareFile').mockResolvedValue({ id: 'new-1', virtual_path: 'new.txt', size: 4, mtime: timestamp, created_at: timestamp })
+    const finalize = vi.spyOn(api, 'finalizeTransferShare').mockResolvedValue(readyShare)
+    renderPage()
+    const user = userEvent.setup()
+    await user.click(await screen.findByText('Try again'))
+    await waitFor(() => expect(history).toHaveBeenCalledWith(stagingShare.id))
+    expect(document.body.textContent).toContain('3 B / 3 B · 1 / 1 files')
+    expect(screen.getAllByText('Finalize').length).toBeGreaterThan(0)
+    const fileInput = document.querySelector('input[type="file"]')
+    if (!(fileInput instanceof HTMLInputElement)) throw new Error('Upload input missing')
+    fireEvent.change(fileInput, { target: { files: [new File(['x'], 'existing.txt')] } })
+    expect(await screen.findByText('A file with this virtual path is already staged or queued.')).not.toBeNull()
+    const refreshedInput = document.querySelector('input[type="file"]')
+    if (!(refreshedInput instanceof HTMLInputElement)) throw new Error('Refreshed upload input missing')
+    fireEvent.change(refreshedInput, { target: { files: [new File(['1234'], 'new.txt')] } })
+    expect(await screen.findByText('new.txt')).not.toBeNull()
+    await user.click(await screen.findByText('Upload and finalize'))
+    await waitFor(() => expect(finalize).toHaveBeenCalledWith(stagingShare.id))
+    expect(upload).toHaveBeenCalledTimes(1)
+    expect(upload.mock.calls[0]?.[2]).toBe('new.txt')
+  })
+
+  it('keeps staging history load errors visible and retryable', async () => {
+    vi.mocked(api.transferShares).mockResolvedValue([{ ...stagingShare, total_bytes: 3, file_count: 1 }])
+    const history = vi.spyOn(api, 'transferShareFiles').mockRejectedValueOnce(new APIError(503, 'TRANSFERS_UNAVAILABLE', 'offline')).mockResolvedValue([{ id: 'existing-1', virtual_path: 'existing.txt', size: 3, mtime: timestamp, created_at: timestamp }])
+    renderPage()
+    const user = userEvent.setup()
+    await user.click(await screen.findByText('Try again'))
+    expect(await screen.findByText('Could not load the staged file history. Try again.')).not.toBeNull()
+    await user.click(screen.getByText('Retry staged history'))
+    await waitFor(() => expect(history).toHaveBeenCalledTimes(2))
+    expect(document.body.textContent).toContain('3 B / 3 B · 1 / 1 files')
+  })
+
+  it('finalizes a reconciled staging share with existing files and no new queue', async () => {
+    vi.mocked(api.transferShares).mockResolvedValue([{ ...stagingShare, total_bytes: 3, file_count: 1 }])
+    vi.spyOn(api, 'transferShareFiles').mockResolvedValue([{ id: 'existing-1', virtual_path: 'existing.txt', size: 3, mtime: timestamp, created_at: timestamp }])
+    const upload = vi.spyOn(api, 'uploadTransferShareFile')
+    const finalize = vi.spyOn(api, 'finalizeTransferShare').mockResolvedValue(readyShare)
+    renderPage()
+    const user = userEvent.setup()
+    await user.click(await screen.findByText('Try again'))
+    const finalizeButton = (await screen.findAllByText('Finalize')).find((node) => node.closest('.ant-drawer'))
+    if (!finalizeButton) throw new Error('Drawer finalize action missing')
+    await user.click(finalizeButton)
+    await waitFor(() => expect(finalize).toHaveBeenCalledWith(stagingShare.id))
+    expect(upload).not.toHaveBeenCalled()
+  })
+
+  it('coalesces many live job events without requesting unselected item lists', async () => {
+    renderPage()
+    await screen.findByRole('tab', { name: 'Transfers', selected: true })
+    const items = vi.mocked(api.transferJobItems)
+    await waitFor(() => expect(vi.mocked(api.transferJobs)).toHaveBeenCalledTimes(1))
+    expect(items).toHaveBeenCalledTimes(0)
+    vi.useFakeTimers()
+    const ids = [readyJob.id, runningJob.id, failedJob.id, completedJob.id]
+    act(() => ids.forEach((id, index) => window.dispatchEvent(new CustomEvent(transferEvent, { detail: { version: 1, type: 'transfer', resource_kind: 'transfer', resource_id: id, operation_id: id, phase: 'running', sequence: index + 1, at: timestamp, payload: { job_id: id, status: 'running', received_bytes: index, total_bytes: 4, completed_files: 0, total_files: 1 } } }))))
+    await act(async () => { vi.advanceTimersByTime(100); await Promise.resolve(); await Promise.resolve() })
+    expect(vi.mocked(api.transferJobs)).toHaveBeenCalledTimes(2)
+    expect(items).toHaveBeenCalledTimes(0)
+  })
+
+  it('refreshes only the selected Drawer item list once for an event burst', async () => {
+    renderPage()
+    await screen.findByRole('tab', { name: 'Transfers', selected: true })
+    const user = userEvent.setup()
+    await user.click((await screen.findAllByText('File details'))[0]!)
+    await waitFor(() => expect(api.transferJobItems).toHaveBeenCalledWith(readyJob.id))
+    vi.mocked(api.transferJobItems).mockClear()
+    vi.useFakeTimers()
+    act(() => [1, 2, 3].forEach((sequence) => window.dispatchEvent(new CustomEvent(transferEvent, { detail: { version: 1, type: 'transfer', resource_kind: 'transfer', resource_id: readyJob.id, operation_id: readyJob.id, phase: 'running', sequence, at: timestamp, payload: { job_id: readyJob.id, status: 'running', received_bytes: sequence, total_bytes: 4, completed_files: 0, total_files: 1 } } }))))
+    await act(async () => { vi.advanceTimersByTime(100); await Promise.resolve(); await Promise.resolve() })
+    expect(api.transferJobItems).toHaveBeenCalledTimes(1)
+    expect(api.transferJobItems).toHaveBeenCalledWith(readyJob.id)
+  })
+
+  it('derives an open Drawer from current live state and unlocks downloads only after selected items refresh', async () => {
+    const runningItem = { id: 'item-live', job_id: runningJob.id, virtual_path: 'live.txt', size: 4, status: 'running' as const, received_bytes: 1, completed_blocks: 0, mtime: timestamp, created_at: timestamp, updated_at: timestamp }
+    const completedItem = { ...runningItem, status: 'completed' as const, received_bytes: 4, completed_blocks: 1, finished_at: timestamp }
+    const refreshedItems = deferred<typeof completedItem[]>()
+    vi.mocked(api.transferJobItems).mockImplementation(async (jobID) => jobID === runningJob.id && vi.mocked(api.transferJobItems).mock.calls.filter((call) => call[0] === jobID).length > 1 ? refreshedItems.promise : [runningItem])
+    vi.mocked(api.transferJobs).mockResolvedValueOnce([readyJob, runningJob, failedJob, completedJob]).mockResolvedValue([{ ...runningJob, status: 'completed', received_bytes: 4, finished_at: timestamp }])
+    renderPage()
+    const user = userEvent.setup()
+    const details = await screen.findAllByText('File details')
+    await user.click(details[1]!)
+    await waitFor(() => expect(document.querySelector('.ant-drawer')?.textContent).toContain('Running'))
+    expect(screen.queryByText('Download')).toBeNull()
+    vi.useFakeTimers()
+    act(() => window.dispatchEvent(new CustomEvent(transferEvent, { detail: { version: 1, type: 'transfer', resource_kind: 'transfer', resource_id: runningJob.id, operation_id: runningJob.id, phase: 'ready', sequence: 1, at: timestamp, payload: { job_id: runningJob.id, status: 'completed', received_bytes: 4, total_bytes: 4, completed_files: 1, total_files: 1 } } })))
+    expect(document.querySelector('.ant-drawer')?.textContent).toContain('Completed')
+    expect(screen.queryByText('Download')).toBeNull()
+    await act(async () => { vi.advanceTimersByTime(100); await Promise.resolve(); refreshedItems.resolve([completedItem]); await Promise.resolve(); await Promise.resolve() })
+    vi.useRealTimers()
+    expect(await screen.findByText('Download')).not.toBeNull()
+  })
+
+  it('keeps selected item load failures explicit until retry succeeds', async () => {
+    vi.mocked(api.transferJobItems).mockRejectedValueOnce(new Error('offline')).mockResolvedValue([{ id: 'item-1', job_id: readyJob.id, virtual_path: 'retry.txt', size: 4, status: 'ready', received_bytes: 0, completed_blocks: 0, mtime: timestamp, created_at: timestamp, updated_at: timestamp }])
+    renderPage()
+    const user = userEvent.setup()
+    await user.click((await screen.findAllByText('File details'))[0]!)
+    expect(await screen.findByText('Could not load the files for this job.')).not.toBeNull()
+    expect(document.querySelector('.ant-drawer')?.textContent).toContain('File progress unavailable')
+    expect(document.querySelector('.ant-drawer')?.textContent).not.toContain('0 / 0 files')
+    await user.click(screen.getByText('Try again'))
+    expect(await screen.findByText('retry.txt')).not.toBeNull()
+  })
+
+  it('keeps route cards visible when client or transfer-server references fail independently', async () => {
+    vi.mocked(api.routes).mockResolvedValue([route])
+    vi.mocked(api.clients).mockRejectedValue(new Error('clients offline'))
+    renderPage('/routes')
+    expect(await screen.findByText('Existing published route')).not.toBeNull()
+    expect(screen.getByText('Could not load clients. Published routes remain available.')).not.toBeNull()
+  })
+
+  it('keeps receiver controls and routes available when transfer servers fail', async () => {
+    vi.mocked(api.routes).mockResolvedValue([route])
+    vi.mocked(api.servers).mockRejectedValue(new Error('servers offline'))
+    renderPage()
+    expect(await screen.findByText('Could not load transfer servers.')).not.toBeNull()
+    expect(screen.getByText('Create receive job')).not.toBeNull()
+    await userEvent.click(screen.getByRole('tab', { name: 'Published routes' }))
+    expect(await screen.findByText('Existing published route')).not.toBeNull()
+  })
+
+  it('compare-and-clears only the capability generation that was explicitly confirmed', async () => {
+    vi.mocked(api.transferShares).mockResolvedValue([readyShare])
+    const replacement = deferred<{ capability: string }>()
+    vi.spyOn(api, 'rotateTransferShare').mockResolvedValueOnce({ capability: 'tcs1.old-code' }).mockReturnValueOnce(replacement.promise)
+    renderPage()
+    const user = userEvent.setup()
+    await user.click(await screen.findByText('Rotate code'))
+    await user.click(within(Array.from(document.querySelectorAll('.ant-popconfirm')).at(-1) as HTMLElement).getByText('Rotate code'))
+    expect(await screen.findByText('tcs1.old-code')).not.toBeNull()
+    const old = { shareID: readyShare.id, value: 'tcs1.old-code', generation: 1 }
+    const rotateButton = () => Array.from(document.querySelectorAll('.transfer-history button')).find((button) => button.textContent?.includes('Rotate code')) as HTMLButtonElement | undefined
+    const secondRotate = rotateButton()
+    if (!secondRotate) throw new Error('Rotate button missing')
+    await user.click(secondRotate)
+    await user.click(within(Array.from(document.querySelectorAll('.ant-popconfirm')).at(-1) as HTMLElement).getByText('Rotate code'))
+    replacement.resolve({ capability: 'tcs1.new-code' })
+    expect(await screen.findByText('tcs1.new-code')).not.toBeNull()
+    const current = { shareID: readyShare.id, value: 'tcs1.new-code', generation: 2 }
+    expect(compareAndClearOneTimeCode(current, old)).toEqual(current)
+    expect(compareAndClearOneTimeCode(current, current)).toBeNull()
+    await user.click(screen.getByText('I saved the code'))
+    expect(screen.queryByText('tcs1.new-code')).toBeNull()
   })
 })

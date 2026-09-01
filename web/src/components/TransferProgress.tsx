@@ -7,8 +7,8 @@ export interface TransferProgressProps {
   status: TransferStatus
   receivedBytes: number
   totalBytes: number
-  completedFiles: number
-  totalFiles: number
+  completedFiles?: number
+  totalFiles?: number
   errorCode?: TransferErrorCode
   compact?: boolean
 }
@@ -40,8 +40,9 @@ export function TransferProgress({ status, receivedBytes, totalBytes, completedF
   return <div className={compact ? 'transfer-progress transfer-progress-compact' : 'transfer-progress'} aria-busy={status === 'running'}>
     <Flex className="transfer-progress-summary" align="center" gap={8} wrap="wrap">
       <Tag className={`transfer-status-tag transfer-status-${status}`} icon={statusIcons[status]}>{t(statusKeys[status])}</Tag>
-      <Typography.Text className="tabular-figure transfer-progress-amounts" aria-live="polite">
-        {formatTransferBytes(safeReceived, locale)} / {formatTransferBytes(safeTotal, locale)} · {Math.max(0, completedFiles)} / {Math.max(0, totalFiles)} {t('transfers.files')}
+      <span className="sr-only transfer-progress-announcement" role="status" aria-live="polite" aria-atomic="true">{t(statusKeys[status])}</span>
+      <Typography.Text className="tabular-figure transfer-progress-amounts">
+        {formatTransferBytes(safeReceived, locale)} / {formatTransferBytes(safeTotal, locale)} · {completedFiles === undefined || totalFiles === undefined ? t('transfers.fileProgressUnavailable') : `${Math.max(0, completedFiles)} / ${Math.max(0, totalFiles)} ${t('transfers.files')}`}
       </Typography.Text>
     </Flex>
     <Progress className="transfer-progress-bar" percent={percent} status="normal" aria-label={t('transfers.progressLabel', { percent })} format={() => `${percent}%`} strokeColor={status === 'failed' ? 'var(--ant-color-error)' : undefined} />
