@@ -5,7 +5,7 @@ scanner_version=1
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$repo_root"
 
-pattern='-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----|AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{82,}|tcs1\.[A-Za-z0-9_-]{64,}|sk_live_[A-Za-z0-9]{20,}|sk-(proj|svcacct)-[A-Za-z0-9_-]{20,}|xox[baprs]-[A-Za-z0-9-]{20,}|AIza[0-9A-Za-z_-]{35}'
+pattern='-----BEGIN (RSA |EC |OPENSSH |ENCRYPTED )?PRIVATE KEY-----|AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{82,}|(^|[^A-Za-z0-9_-])tc[A-Za-z0-9_-]{40,}|tcs1\.[A-Za-z0-9_-]{64,}|sk_live_[A-Za-z0-9]{20,}|sk-(proj|svcacct)-[A-Za-z0-9_-]{20,}|xox[baprs]-[A-Za-z0-9-]{20,}|AIza[0-9A-Za-z_-]{35}'
 scan_paths=("$@")
 if (( ${#scan_paths[@]} == 0 )); then
   scan_paths=(.)

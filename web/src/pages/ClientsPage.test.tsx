@@ -51,6 +51,7 @@ async function renderDiagnosticRace() {
   const terminalEvent: DiagnosticRuntimeEvent = { ...runningEvent, phase: 'ready', sequence: 2, payload: { ...runningEvent.payload, status: 'succeeded', progress: 100, latency_ms: 1 } }
   return {
     completed,
+    emitRunning: () => act(() => listener(runningEvent)),
     emitTerminal: () => act(() => { listener(runningEvent); listener(terminalEvent) }),
     refreshCompleted: () => act(() => setDiagnosticData?.([completed])),
     resolveStarted: async () => act(async () => { resolve(started); await Promise.resolve() }),
@@ -87,6 +88,16 @@ describe('ClientsPage diagnostics', () => {
     race.refreshCompleted()
     await waitFor(() => expect(screen.getByText('Succeeded')).not.toBeNull())
     expect(screen.queryByRole('button', { name: 'Cancel diagnostic' })).toBeNull()
+  })
+
+  it('uses an authoritative terminal refresh when the terminal SSE event is missed', async () => {
+    const race = await renderDiagnosticRace()
+    race.emitRunning()
+    race.refreshCompleted()
+    expect(await screen.findByText('Succeeded')).not.toBeNull()
+    expect(screen.queryByText('Running')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Cancel diagnostic' })).toBeNull()
+    await race.resolveStarted()
   })
 
   it('keeps a completed refresh when the stale start response arrives last', async () => {

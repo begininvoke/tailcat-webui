@@ -54,7 +54,7 @@ export function pruneAuthoritativeDiagnosticUpdates(current: Record<string, Diag
   if (terminalIDs.size === 0) return current
   let next: Record<string, DiagnosticEventPayload> | undefined
   for (const id of terminalIDs) {
-    if (current[id]?.status === 'running' || current[id] === undefined) continue
+    if (current[id] === undefined) continue
     next ??= { ...current }
     delete next[id]
   }

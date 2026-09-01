@@ -23,6 +23,7 @@ import (
 	"github.com/ca-x/tailcat-webui/internal/secrets"
 
 	_ "github.com/lib-x/entsqlite"
+	"github.com/tailscale/tailcat"
 	"tailscale.com/types/key"
 )
 
@@ -557,7 +558,7 @@ func TestManagerClientCloseUsesRuntimeFactory(t *testing.T) {
 	clientRuntime := new(fakeClientRuntime)
 	factory := &fakeRuntimeFactory{client: clientRuntime}
 	manager, db, ownerID := newRuntimeFactoryTestManager(t, factory)
-	const token = "tcoWFwWCAAAQIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHw"
+	token := string((&tailcat.ConnInfo{ServerPublic: tailcat.NodePublic{NodePublic: key.NewNode().Public()}}).ConnBlob())
 	ciphertext, err := manager.box.Seal([]byte(token), secretAD(ownerID, "client-1")+"/token")
 	if err != nil {
 		t.Fatal(err)
