@@ -146,6 +146,7 @@ export default function RoutesPage() {
   const [selectedJobID, setSelectedJobID] = useState('')
   const selectedJobIDRef = useRef('')
   const [detailsItems, setDetailsItems] = useState<TransferItem[]>([])
+  const [detailsItemsLoaded, setDetailsItemsLoaded] = useState(false)
   const [detailsLoading, setDetailsLoading] = useState(false)
   const [detailsError, setDetailsError] = useState('')
   const detailsRequestID = useRef(0)
@@ -162,7 +163,7 @@ export default function RoutesPage() {
   const jobsDataRef = useRef<TransferJob[] | null>(null)
   const transferSequences = useRef(new Map<string, number>())
   const transferRefreshTimer = useRef<number | null>(null)
-  const transferRefreshKinds = useRef({ shares: false, jobs: false, items: false })
+  const transferRefreshKinds = useRef({ shares: false, jobs: false, items: false, showItemsLoading: false })
   const durableCleanup = useRef({ shares: false, jobs: false })
   const [form] = Form.useForm<RouteFormValues>()
   const [receiveForm] = Form.useForm<ReceiveFormValues>()
@@ -198,6 +199,13 @@ export default function RoutesPage() {
       delete next[jobID]
       terminalFileSummariesRef.current = next
       setTerminalFileSummaries(next)
+    }
+    if (selectedJobIDRef.current === jobID) {
+      detailsRequestID.current += 1
+      setDetailsItems([])
+      setDetailsItemsLoaded(false)
+      setDetailsError('')
+      setDetailsLoading(false)
     }
     if (clearLive && liveProgressRef.current[jobID] && (forceLive || terminalEventStatuses.has(liveProgressRef.current[jobID].status))) {
       const next = { ...liveProgressRef.current }
@@ -264,35 +272,43 @@ export default function RoutesPage() {
   }, [jobs.data, shares.data])
 
   const loadJobItems = useCallback(async (jobID: string, silent = false) => {
+    if (selectedJobIDRef.current !== jobID) return
     const requestID = ++detailsRequestID.current
     const lifecycleGeneration = jobLifecycleGenerations.current.get(jobID) ?? 0
+    const isCurrent = () => requestID === detailsRequestID.current
+      && selectedJobIDRef.current === jobID
+      && (jobLifecycleGenerations.current.get(jobID) ?? 0) === lifecycleGeneration
     if (!silent) setDetailsLoading(true)
     setDetailsError('')
     try {
       const items = await api.transferJobItems(jobID)
-      if (requestID === detailsRequestID.current) {
+      if (isCurrent()) {
         setDetailsItems(items)
+        setDetailsItemsLoaded(true)
         const status = liveProgressRef.current[jobID]?.status ?? jobsDataRef.current?.find((job) => job.id === jobID)?.status
-        if ((jobLifecycleGenerations.current.get(jobID) ?? 0) === lifecycleGeneration && status && terminalEventStatuses.has(status)) commitTerminalSummary(jobID, { completed: items.filter((item) => item.status === 'completed').length, total: items.length })
+        if (status && terminalEventStatuses.has(status)) commitTerminalSummary(jobID, { completed: items.filter((item) => item.status === 'completed').length, total: items.length })
       }
     } catch {
-      if (requestID === detailsRequestID.current) setDetailsError(t('transfers.loadItemsFailed'))
+      if (isCurrent()) { setDetailsItemsLoaded(false); setDetailsError(t('transfers.loadItemsFailed')) }
     } finally {
-      if (requestID === detailsRequestID.current) setDetailsLoading(false)
+      if (isCurrent()) setDetailsLoading(false)
     }
   }, [commitTerminalSummary, t])
 
-  const queueTransferRefresh = useCallback((kind: 'shares' | 'jobs', refreshItems: boolean) => {
+  const queueTransferRefresh = useCallback((kind: 'shares' | 'jobs', refreshItems: boolean, showItemsLoading = false) => {
     transferRefreshKinds.current[kind] = true
-    if (refreshItems) transferRefreshKinds.current.items = true
+    if (refreshItems) {
+      transferRefreshKinds.current.items = true
+      if (showItemsLoading) transferRefreshKinds.current.showItemsLoading = true
+    }
     if (transferRefreshTimer.current !== null) return
     transferRefreshTimer.current = window.setTimeout(() => {
       transferRefreshTimer.current = null
       const pending = transferRefreshKinds.current
-      transferRefreshKinds.current = { shares: false, jobs: false, items: false }
+      transferRefreshKinds.current = { shares: false, jobs: false, items: false, showItemsLoading: false }
       if (pending.shares) { durableCleanup.current.shares = true; sharesRefresh.current({ silent: true }) }
       if (pending.jobs) { durableCleanup.current.jobs = true; jobsRefresh.current({ silent: true }) }
-      if (pending.items && selectedJobIDRef.current) void loadJobItems(selectedJobIDRef.current, true)
+      if (pending.items && selectedJobIDRef.current) void loadJobItems(selectedJobIDRef.current, !pending.showItemsLoading)
     }, transferRefreshDelayMS)
   }, [loadJobItems])
 
@@ -301,7 +317,9 @@ export default function RoutesPage() {
     if (previous !== undefined && event.sequence <= previous) return
     transferSequences.current.set(event.resource_id, event.sequence)
     const previousStatus = liveProgressRef.current[event.resource_id]?.status ?? (event.payload.share_id ? sharesDataRef.current?.find((share) => share.id === event.resource_id)?.status : jobsDataRef.current?.find((job) => job.id === event.resource_id)?.status)
-    if (event.payload.job_id && event.payload.status === 'running' && previousStatus !== undefined && restartableTransferStatuses.has(previousStatus)) clearTerminalLifecycle(event.resource_id, true)
+    const lifecycleReset = Boolean(event.payload.job_id && event.payload.status === 'running' && previousStatus !== undefined && restartableTransferStatuses.has(previousStatus))
+    const loadResetItems = lifecycleReset && selectedJobIDRef.current === event.resource_id
+    if (lifecycleReset) clearTerminalLifecycle(event.resource_id, true)
     if (event.payload.job_id && event.payload.status === 'deleted') {
       clearTerminalLifecycle(event.resource_id, false)
       if (selectedJobIDRef.current === event.resource_id) { detailsRequestID.current += 1; selectedJobIDRef.current = ''; setSelectedJobID(''); setDetailsItems([]); setDetailsError('') }
@@ -320,7 +338,7 @@ export default function RoutesPage() {
       if (event.payload.status === 'deleted') { resumeRequestGeneration.current += 1; setResumeLoadingID('') }
       queueTransferRefresh('shares', false)
     } else if (event.payload.job_id) {
-      queueTransferRefresh('jobs', selectedJobIDRef.current === event.resource_id)
+      queueTransferRefresh('jobs', selectedJobIDRef.current === event.resource_id, loadResetItems)
     }
   }, [clearTerminalLifecycle, commitTerminalSummary, queueTransferRefresh, t])
   useTransferEvents(onTransfer)
@@ -487,7 +505,7 @@ export default function RoutesPage() {
       jobs.refresh({ silent: true })
     } catch (error) { void message.error(localizedError(error)) } finally { setJobBusyID('') }
   }
-  const openDetails = (job: TransferJob) => { selectedJobIDRef.current = job.id; setSelectedJobID(job.id); setDetailsItems([]); void loadJobItems(job.id) }
+  const openDetails = (job: TransferJob) => { selectedJobIDRef.current = job.id; setSelectedJobID(job.id); setDetailsItems([]); setDetailsItemsLoaded(false); void loadJobItems(job.id) }
 
   const locale = i18n.resolvedLanguage === 'zh-CN' ? 'zh-CN' : 'en-US'
   const serverNames = useMemo(() => new Map(servers.map((server) => [server.id, server.name])), [servers])
@@ -499,7 +517,7 @@ export default function RoutesPage() {
     const live = liveProgress[jobID]
     if (live?.completed_files !== undefined && live.total_files !== undefined) return { completed: live.completed_files, total: live.total_files }
     if (terminalFileSummaries[jobID]) return terminalFileSummaries[jobID]
-    if (selectedJobID === jobID && !detailsError && !detailsLoading) return { completed: detailsItems.filter((item) => item.status === 'completed').length, total: detailsItems.length }
+    if (selectedJobID === jobID && detailsItemsLoaded && !detailsError && !detailsLoading) return { completed: detailsItems.filter((item) => item.status === 'completed').length, total: detailsItems.length }
     return null
   }
   const succeededFiles = queue.filter((item) => item.status === 'succeeded')
@@ -595,7 +613,7 @@ export default function RoutesPage() {
       {(queue.length > 0 || existingFiles.length > 0) && <><Divider>{t('transfers.queue')}</Divider><TransferProgress status={senderBusy ? 'running' : 'staging'} receivedBytes={uploadTotals.received} totalBytes={uploadTotals.total} completedFiles={uploadTotals.files} totalFiles={uploadTotals.totalFiles} /><List className="upload-queue" dataSource={queue} renderItem={(item) => <List.Item actions={item.status === 'succeeded' ? [] : [<Button key="remove" className="queue-delete-button" type="text" danger disabled={senderBusy} aria-label={`${t('common.delete')} ${item.file.name}`} icon={<DeleteOutlined aria-hidden />} onClick={() => dispatchQueue({ type: 'remove', uid: item.uid })} />]}><List.Item.Meta title={<span className="transfer-path">{item.virtualPath}</span>} description={<Flex vertical gap={4}><Typography.Text className="tabular-figure" type="secondary">{formatTransferBytes(item.file.size, locale)}</Typography.Text><Tag color={item.status === 'succeeded' ? 'success' : item.status === 'failed' ? 'error' : item.status === 'uploading' ? 'processing' : 'default'}>{t(`transfers.${item.status}`)}</Tag>{item.error && <Typography.Text type="danger">{item.error}</Typography.Text>}</Flex>} /></List.Item>} /></>}
     </Drawer>
 
-    <Drawer title={t('transfers.details')} width={680} placement={screens.md ? 'right' : 'bottom'} height={screens.md ? undefined : '92dvh'} open={Boolean(selectedJob)} onClose={() => { detailsRequestID.current += 1; selectedJobIDRef.current = ''; setSelectedJobID(''); setDetailsItems([]); setDetailsError('') }}>
+    <Drawer title={t('transfers.details')} width={680} placement={screens.md ? 'right' : 'bottom'} height={screens.md ? undefined : '92dvh'} open={Boolean(selectedJob)} onClose={() => { detailsRequestID.current += 1; selectedJobIDRef.current = ''; setSelectedJobID(''); setDetailsItems([]); setDetailsItemsLoaded(false); setDetailsLoading(false); setDetailsError('') }}>
       {selectedJob && <><TransferProgress status={selectedJob.status} receivedBytes={selectedJob.received_bytes} totalBytes={selectedJob.total_bytes} completedFiles={fileProgress(selectedJob.id)?.completed} totalFiles={fileProgress(selectedJob.id)?.total} errorCode={selectedJob.error_code} /><div className="drawer-job-actions">{jobActions(selectedJob, false)}</div></>}
       {detailsError && <Alert className="drawer-alert" type="error" showIcon message={detailsError} action={selectedJobID ? <Button onClick={() => void loadJobItems(selectedJobID)}>{t('common.retry')}</Button> : undefined} />}
       {detailsLoading ? <Result status="info" title={t('common.loading')} /> : !detailsError && <List className="transfer-item-list" locale={{ emptyText: <Empty description={t('transfers.noItems')} /> }} dataSource={detailsItems} renderItem={(item: TransferItem) => <List.Item actions={selectedJob?.status === 'completed' && item.status === 'completed' ? [<Button key="download" type="link" icon={<CloudDownloadOutlined aria-hidden />} href={api.transferItemDownloadHref(item.job_id, item.id)} download>{t('transfers.download')}</Button>] : []}><List.Item.Meta title={<span className="transfer-path" tabIndex={0}>{item.virtual_path}</span>} description={<TransferProgress compact status={item.status} receivedBytes={item.received_bytes} totalBytes={item.size} completedFiles={item.status === 'completed' ? 1 : 0} totalFiles={1} errorCode={selectedJob?.error_code} />} /></List.Item>} />}
