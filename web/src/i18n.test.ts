@@ -5,6 +5,11 @@ import i18n from './i18n'
 import { RuntimeState } from './components/RuntimeState'
 
 describe('localization resources', () => {
+  const collectKeys = (value: unknown, prefix = ''): string[] => {
+    if (typeof value !== 'object' || value === null) return [prefix]
+    return Object.entries(value).flatMap(([key, nested]) => collectKeys(nested, prefix ? `${prefix}.${key}` : key))
+  }
+
   it('ships matching navigation labels in English and Chinese', () => {
     expect(i18n.getResource('en', 'translation', 'nav.servers')).toBe('Servers')
     expect(i18n.getResource('zh-CN', 'translation', 'nav.servers')).toBe('服务端')
@@ -59,5 +64,20 @@ describe('localization resources', () => {
       expect(i18n.getResource('en', 'translation', `diagnostics.errors.${code}`)).toEqual(expect.any(String))
       expect(i18n.getResource('zh-CN', 'translation', `diagnostics.errors.${code}`)).toEqual(expect.any(String))
     }
+  })
+
+  it('ships every transfer action, status, recovery and stable API error in English and Chinese', () => {
+    const keys = ['tab', 'sender', 'receiver', 'sendFiles', 'receiveFiles', 'limits', 'capability', 'confirmSaved', 'rotate', 'finalize', 'details', 'download', 'staging', 'ready', 'running', 'completed', 'failed', 'canceled', 'interrupted', 'expired', 'deleting', 'transfer_canceled', 'transfer_expired', 'transfer_remote_unavailable', 'transfer_invalid_capability', 'transfer_share_not_found', 'transfer_protocol_invalid', 'transfer_integrity_mismatch', 'transfer_storage_failed', 'transfer_limit_exceeded']
+    for (const key of keys) {
+      expect(i18n.getResource('en', 'translation', `transfers.${key}`)).toEqual(expect.any(String))
+      expect(i18n.getResource('zh-CN', 'translation', `transfers.${key}`)).toEqual(expect.any(String))
+    }
+    for (const code of ['REQUEST_FAILED', 'TRANSFER_NOT_FOUND', 'TRANSFER_INVALID_STATE', 'TRANSFER_INVALID_CAPABILITY', 'TRANSFER_LIMIT_EXCEEDED', 'TRANSFER_UNAVAILABLE', 'TRANSFER_OWNER_LIMIT']) {
+      expect(i18n.getResource('en', 'translation', `transfers.errors.${code}`)).toEqual(expect.any(String))
+      expect(i18n.getResource('zh-CN', 'translation', `transfers.errors.${code}`)).toEqual(expect.any(String))
+    }
+    const english = i18n.getDataByLanguage('en')?.translation
+    const chinese = i18n.getDataByLanguage('zh-CN')?.translation
+    expect(collectKeys(english)).toEqual(collectKeys(chinese))
   })
 })

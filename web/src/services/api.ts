@@ -1,4 +1,9 @@
-export interface PublicConfig { auth_mode: 'oidc' | 'demo'; unsafe_ssh: boolean; version: string }
+export interface PublicTransferConfig {
+  max_file_bytes: number; max_share_bytes: number; max_job_bytes: number; max_owner_bytes: number;
+  max_files_per_share: number; workers: 4; max_jobs_per_owner: number; expiry_seconds: number;
+  retention_seconds: number; upload_timeout_seconds: number;
+}
+export interface PublicConfig { auth_mode: 'oidc' | 'demo'; unsafe_ssh: boolean; version: string; transfers: PublicTransferConfig }
 export interface User { id: string; email?: string; display_name?: string; avatar_url?: string }
 export const runtimePhases = ['idle', 'starting', 'connecting', 'ready', 'running', 'stopping', 'stopped', 'error', 'interrupted'] as const
 export type RuntimePhase = typeof runtimePhases[number]
@@ -6,6 +11,33 @@ export type RuntimePhase = typeof runtimePhases[number]
 export interface RuntimeEvent {
   version: number; type: string; resource_kind: string; resource_id: string; operation_id?: string;
   phase: RuntimePhase; sequence: number; at: string; payload?: unknown;
+}
+
+export const transferStatuses = ['staging', 'ready', 'running', 'completed', 'failed', 'canceled', 'interrupted', 'expired', 'deleting'] as const
+export type TransferStatus = typeof transferStatuses[number]
+export const transferEventStatuses = [...transferStatuses, 'deleted'] as const
+export type TransferEventStatus = typeof transferEventStatuses[number]
+export const transferErrorCodes = ['transfer_canceled', 'transfer_expired', 'transfer_remote_unavailable', 'transfer_invalid_capability', 'transfer_share_not_found', 'transfer_protocol_invalid', 'transfer_integrity_mismatch', 'transfer_storage_failed', 'transfer_limit_exceeded'] as const
+export type TransferErrorCode = typeof transferErrorCodes[number]
+
+export interface TransferShare {
+  id: string; server_id: string; status: TransferStatus; total_bytes: number; file_count: number;
+  expires_at: string; ready_at?: string; created_at: string; updated_at: string;
+}
+export interface TransferShareCreated { share: TransferShare; capability: string }
+export interface TransferCapabilityRotated { capability: string }
+export interface TransferShareFile { id: string; virtual_path: string; size: number; mtime: string; created_at: string }
+export interface TransferJob {
+  id: string; client_id: string; remote_share_id: string; status: TransferStatus; total_bytes: number; received_bytes: number;
+  expires_at: string; error_code?: TransferErrorCode; started_at?: string; finished_at?: string; created_at: string; updated_at: string;
+}
+export interface TransferItem {
+  id: string; job_id: string; virtual_path: string; size: number; status: TransferStatus; received_bytes: number;
+  completed_blocks: number; mtime: string; started_at?: string; finished_at?: string; created_at: string; updated_at: string;
+}
+export interface TransferEventPayload {
+  share_id?: string; job_id?: string; item_id?: string; status: TransferEventStatus; received_bytes?: number;
+  total_bytes?: number; completed_files?: number; total_files?: number; error_code?: TransferErrorCode;
 }
 
 export const diagnosticKinds = ['ping', 'throughput'] as const
@@ -95,6 +127,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>
 }
 
+function headerByteString(value: string) {
+  return Array.from(new TextEncoder().encode(value), (byte) => String.fromCharCode(byte)).join('')
+}
+
 export const api = {
   config: () => request<PublicConfig>('/api/v1/config'),
   me: () => request<User>('/api/v1/auth/me'),
@@ -128,4 +164,38 @@ export const api = {
   routes: () => request<{ items: PublishedRoute[] }>('/api/v1/routes').then((r) => r.items),
   createRoute: (body: object) => request<PublishedRoute>('/api/v1/routes', { method: 'POST', body: JSON.stringify(body) }),
   deleteRoute: (id: string) => request<void>(`/api/v1/routes/${id}`, { method: 'DELETE' }),
+  transferShares: () => request<{ items: TransferShare[] }>('/api/v1/transfers/shares').then((r) => r.items),
+  createTransferShare: (body: { server_id: string }) => request<TransferShareCreated>('/api/v1/transfers/shares', { method: 'POST', body: JSON.stringify(body) }),
+  transferShare: (id: string) => request<TransferShare>(`/api/v1/transfers/shares/${id}`),
+  transferShareFiles: (id: string) => request<{ items: TransferShareFile[] }>(`/api/v1/transfers/shares/${id}/files`).then((r) => r.items),
+  uploadTransferShareFile: async (id: string, body: Blob, virtualPath: string): Promise<TransferShareFile> => {
+    const response = await fetch(`/api/v1/transfers/shares/${id}/files`, {
+      credentials: 'same-origin', method: 'POST', body,
+      headers: { 'Content-Type': 'application/octet-stream', 'X-Tailcat-Virtual-Path': headerByteString(virtualPath) },
+    })
+    if (!response.ok) {
+      let code = 'REQUEST_FAILED'
+      let message = response.statusText
+      try {
+        const errorBody = await response.json() as { error?: { code?: string; message?: string } }
+        code = errorBody.error?.code ?? code
+        message = errorBody.error?.message ?? message
+      } catch { /* response is not JSON */ }
+      throw new APIError(response.status, code, message)
+    }
+    return response.json() as Promise<TransferShareFile>
+  },
+  finalizeTransferShare: (id: string) => request<TransferShare>(`/api/v1/transfers/shares/${id}/finalize`, { method: 'POST' }),
+  rotateTransferShare: (id: string) => request<TransferCapabilityRotated>(`/api/v1/transfers/shares/${id}/rotate`, { method: 'POST' }),
+  deleteTransferShare: (id: string) => request<void>(`/api/v1/transfers/shares/${id}`, { method: 'DELETE' }),
+  transferJobs: () => request<{ items: TransferJob[] }>('/api/v1/transfers/jobs').then((r) => r.items),
+  createTransferJob: (body: { client_id: string; capability: string }) => request<TransferJob>('/api/v1/transfers/jobs', { method: 'POST', body: JSON.stringify(body) }),
+  transferJob: (id: string) => request<TransferJob>(`/api/v1/transfers/jobs/${id}`),
+  startTransferJob: (id: string) => request<TransferJob>(`/api/v1/transfers/jobs/${id}/start`, { method: 'POST' }),
+  cancelTransferJob: (id: string) => request<void>(`/api/v1/transfers/jobs/${id}/cancel`, { method: 'POST' }),
+  retryTransferJob: (id: string) => request<TransferJob>(`/api/v1/transfers/jobs/${id}/retry`, { method: 'POST' }),
+  deleteTransferJob: (id: string) => request<void>(`/api/v1/transfers/jobs/${id}`, { method: 'DELETE' }),
+  transferJobItems: (id: string) => request<{ items: TransferItem[] }>(`/api/v1/transfers/jobs/${id}/items`).then((r) => r.items),
+  transferJobItem: (jobID: string, itemID: string) => request<TransferItem>(`/api/v1/transfers/jobs/${jobID}/items/${itemID}`),
+  transferItemDownloadHref: (jobID: string, itemID: string) => `/api/v1/transfers/jobs/${jobID}/items/${itemID}/download`,
 }

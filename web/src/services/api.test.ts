@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { api, APIError, runtimePhases } from './api'
+import { api, APIError, runtimePhases, transferErrorCodes, transferEventStatuses, transferStatuses } from './api'
 
 afterEach(() => vi.unstubAllGlobals())
 
@@ -65,5 +65,75 @@ describe('API client', () => {
       credentials: 'same-origin', method: 'POST', body: JSON.stringify({ kind: 'throughput', duration_ms: 5000, bytes: 33554432 }),
     }))
     expect(fetchMock).toHaveBeenNthCalledWith(3, '/api/v1/diagnostics/run-1/cancel', expect.objectContaining({ credentials: 'same-origin', method: 'POST' }))
+  })
+
+  it('exports the exhaustive transfer vocabularies', () => {
+    expect(transferStatuses).toEqual(['staging', 'ready', 'running', 'completed', 'failed', 'canceled', 'interrupted', 'expired', 'deleting'])
+    expect(transferEventStatuses).toEqual([...transferStatuses, 'deleted'])
+    expect(transferErrorCodes).toEqual(['transfer_canceled', 'transfer_expired', 'transfer_remote_unavailable', 'transfer_invalid_capability', 'transfer_share_not_found', 'transfer_protocol_invalid', 'transfer_integrity_mismatch', 'transfer_storage_failed', 'transfer_limit_exceeded'])
+  })
+
+  it('uses every transfer management route with exact methods, JSON bodies and raw upload headers', async () => {
+    const file = new File(['tailcat'], 'notes.txt', { type: 'text/plain' })
+    const fetchMock = vi.fn(async (path: string, init?: RequestInit) => {
+      if (!init?.method || init.method === 'GET') return new Response(JSON.stringify({ items: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      if (init.method === 'DELETE' || path.endsWith('/cancel')) return new Response(null, { status: 204 })
+      if (path === '/api/v1/transfers/shares') return new Response(JSON.stringify({ share: { id: 'share-1' }, capability: 'tcs1.once' }), { status: 201, headers: { 'Content-Type': 'application/json' } })
+      if (path.endsWith('/rotate')) return new Response(JSON.stringify({ capability: 'tcs1.rotated' }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      return new Response(JSON.stringify({ id: 'resource-1' }), { status: path.endsWith('/files') ? 201 : 200, headers: { 'Content-Type': 'application/json' } })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await api.transferShares()
+    await api.createTransferShare({ server_id: 'server-1' })
+    await api.transferShare('share-1')
+    await api.transferShareFiles('share-1')
+    await api.uploadTransferShareFile('share-1', file, 'folder/notes.txt')
+    await api.finalizeTransferShare('share-1')
+    await api.rotateTransferShare('share-1')
+    await api.deleteTransferShare('share-1')
+    await api.transferJobs()
+    await api.createTransferJob({ client_id: 'client-1', capability: 'tcs1.secret' })
+    await api.transferJob('job-1')
+    await api.startTransferJob('job-1')
+    await api.cancelTransferJob('job-1')
+    await api.retryTransferJob('job-1')
+    await api.deleteTransferJob('job-1')
+    await api.transferJobItems('job-1')
+    await api.transferJobItem('job-1', 'item-1')
+
+    expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/v1/transfers/shares', expect.objectContaining({ credentials: 'same-origin', method: 'POST', body: '{"server_id":"server-1"}' }))
+    expect(fetchMock).toHaveBeenNthCalledWith(5, '/api/v1/transfers/shares/share-1/files', {
+      credentials: 'same-origin', method: 'POST', body: file, headers: { 'Content-Type': 'application/octet-stream', 'X-Tailcat-Virtual-Path': 'folder/notes.txt' },
+    })
+    expect(fetchMock).toHaveBeenNthCalledWith(6, '/api/v1/transfers/shares/share-1/finalize', expect.objectContaining({ credentials: 'same-origin', method: 'POST' }))
+    expect(fetchMock).toHaveBeenNthCalledWith(7, '/api/v1/transfers/shares/share-1/rotate', expect.objectContaining({ credentials: 'same-origin', method: 'POST' }))
+    expect(fetchMock).toHaveBeenNthCalledWith(8, '/api/v1/transfers/shares/share-1', expect.objectContaining({ credentials: 'same-origin', method: 'DELETE' }))
+    expect(fetchMock).toHaveBeenNthCalledWith(10, '/api/v1/transfers/jobs', expect.objectContaining({ credentials: 'same-origin', method: 'POST', body: '{"client_id":"client-1","capability":"tcs1.secret"}' }))
+    expect(fetchMock).toHaveBeenNthCalledWith(12, '/api/v1/transfers/jobs/job-1/start', expect.objectContaining({ credentials: 'same-origin', method: 'POST' }))
+    expect(fetchMock).toHaveBeenNthCalledWith(13, '/api/v1/transfers/jobs/job-1/cancel', expect.objectContaining({ credentials: 'same-origin', method: 'POST' }))
+    expect(fetchMock).toHaveBeenNthCalledWith(14, '/api/v1/transfers/jobs/job-1/retry', expect.objectContaining({ credentials: 'same-origin', method: 'POST' }))
+    expect(fetchMock).toHaveBeenNthCalledWith(15, '/api/v1/transfers/jobs/job-1', expect.objectContaining({ credentials: 'same-origin', method: 'DELETE' }))
+    expect(api.transferItemDownloadHref('job-1', 'item-1')).toBe('/api/v1/transfers/jobs/job-1/items/item-1/download')
+  })
+
+  it('sends Unicode virtual paths as their exact UTF-8 header bytes', async () => {
+    const fetchMock = vi.fn(async (path: string, init?: RequestInit) => {
+      void path; void init
+      return new Response(JSON.stringify({ id: 'file-1' }), { status: 201, headers: { 'Content-Type': 'application/json' } })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    await api.uploadTransferShareFile('share-1', new Blob(['data']), '资料/文件.txt')
+    const init = fetchMock.mock.calls[0]?.[1]
+    const header = (init?.headers as Record<string, string>)['X-Tailcat-Virtual-Path']
+    if (!header) throw new Error('virtual path header missing')
+    expect(Array.from(header, (character) => character.charCodeAt(0))).toEqual(Array.from(new TextEncoder().encode('资料/文件.txt')))
+  })
+
+  it('keeps one-time capability material out of transfer list values', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ items: [{ id: 'share-1', server_id: 'server-1', status: 'ready', total_bytes: 0, file_count: 0, expires_at: '2026-09-01T00:00:00Z', created_at: '2026-09-01T00:00:00Z', updated_at: '2026-09-01T00:00:00Z' }] }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    const [share] = await api.transferShares()
+    expect(share).not.toHaveProperty('capability')
   })
 })
