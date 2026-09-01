@@ -3,7 +3,7 @@ import { render, screen } from '@testing-library/react'
 import { ConfigProvider } from 'antd'
 import { describe, expect, it } from 'vitest'
 import '../i18n'
-import { OperationProgress } from './OperationProgress'
+import { DiagnosticPathTag, DiagnosticStatusTag, OperationProgress } from './OperationProgress'
 
 describe('OperationProgress', () => {
   it('makes running progress and path legible without relying on color', () => {
@@ -16,5 +16,13 @@ describe('OperationProgress', () => {
     const progress = screen.getByRole('progressbar', { name: 'Diagnostic progress: 42%' })
     expect(progress.className).toContain('ant-progress-status-normal')
     expect(progress.className).not.toMatch(/active|processing/)
+  })
+
+  it('keeps successful status, direct path, and compact labels on contrast-safe styling hooks', () => {
+    const { container } = render(<ConfigProvider><DiagnosticStatusTag status="succeeded" /><DiagnosticPathTag path="direct" /><OperationProgress compact run={{ id: 'run-2', client_id: 'client-1', kind: 'ping', status: 'succeeded', path: 'direct', latency_ms: 1, upload_bytes: 0, download_bytes: 0, upload_bps: 0, download_bps: 0, started_at: '2026-09-01T12:00:00Z', finished_at: '2026-09-01T12:00:01Z' }} /></ConfigProvider>)
+
+    expect(screen.getByText('Succeeded').className).toContain('diagnostic-status-succeeded')
+    expect(screen.getByText('Direct').className).toContain('diagnostic-path-direct')
+    expect(container.querySelector('.ant-descriptions-item-label')?.closest('.operation-progress')).not.toBeNull()
   })
 })

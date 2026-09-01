@@ -29,13 +29,12 @@ function formatRate(bitsPerSecond: number, locale: string) { return `${formatByt
 export function DiagnosticPathTag({ path }: { path?: DiagnosticPath }) {
   const { t } = useTranslation()
   if (!path) return <Tag>{t('common.unavailable')}</Tag>
-  return <Tag color={path === 'direct' ? 'success' : 'default'}>{t(pathKeys[path])}</Tag>
+  return <Tag className={`diagnostic-path-tag diagnostic-path-${path.replace('_', '-')}`}>{t(pathKeys[path])}</Tag>
 }
 
 export function DiagnosticStatusTag({ status }: { status: DiagnosticStatus }) {
   const { t } = useTranslation()
-  const color = status === 'succeeded' ? 'success' : status === 'failed' || status === 'interrupted' ? 'error' : status === 'canceled' ? 'default' : 'processing'
-  return <Tag color={color}>{t(statusKeys[status])}</Tag>
+  return <Tag className={`diagnostic-status-tag diagnostic-status-${status}`}>{t(statusKeys[status])}</Tag>
 }
 
 export function OperationProgress({ run, progress, compact = false }: { run: DiagnosticRun; progress?: number; compact?: boolean }) {

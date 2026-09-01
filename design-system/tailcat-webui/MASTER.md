@@ -57,6 +57,11 @@ Selected framework controls use `#DFECEB`/`#D2E4E2` in light mode and
 - Tablet: collapsed sidebar plus full-width content.
 - Mobile <768px: no sidebar; fixed bottom navigation with at most five items,
   compact header, cards instead of horizontally scrolling tables.
+- Keep the five primary destinations stable. Add related operational features
+  as internal Ant Tabs within their owning page, such as Diagnostics under
+  Clients and Transfers under Published routes.
+- At 768px and wider, use Ant Table where comparison matters. Below 768px, use
+  Ant List and cards with wrapping paths and no horizontal page scroll.
 - Every page answers where the user is, what is running and what can be done.
 
 ## Theme and locale
@@ -79,6 +84,8 @@ Motion is sparse and never blocks work.
 - Modal/drawer state: use Ant Design behavior, capped at 240ms. Entrances start
   at scale 0.97 or the correct edge, never scale 0.
 - Runtime status changes: 160ms opacity/color transition; no looping pulse.
+- Progress bars never use active stripes, looping animation or animated width.
+  Pair every progress value with status text and tabular byte/file counts.
 - Use only transform and opacity for custom motion. Name transition properties;
   `transition: all` is forbidden.
 - Under `prefers-reduced-motion: reduce`, remove position/scale movement and
@@ -98,6 +105,11 @@ Curves:
 - WCAG AA text contrast, visible focus and accessible names for icon buttons.
 - Native button semantics through Ant components; no clickable `div`.
 - Forms use visible labels, inline errors and focus the first invalid field.
+- Each operations page owns one visually hidden, polite live announcer. Shared
+  progress components do not create competing live regions.
+- One-time codes appear only after create or rotate, with explicit copy and
+  dismiss actions. Rotation replaces the prior value; history tables never
+  render capability material.
 - Test keyboard navigation and layouts at 390, 768, 1024 and 1440px.
 - README screenshots come from the running application in desktop light mode
   and mobile dark mode.

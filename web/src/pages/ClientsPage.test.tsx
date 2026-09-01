@@ -3,12 +3,13 @@ import { App, ConfigProvider } from 'antd'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
+import { useState, type Dispatch, type SetStateAction } from 'react'
 import { act, fireEvent, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import '../i18n'
 import type { DiagnosticRuntimeEvent } from '../hooks/useRuntimeEvents'
-import { api } from '../services/api'
-import ClientsPage from './ClientsPage'
+import { api, type DiagnosticRun } from '../services/api'
+import ClientsPage, { reduceDiagnosticLiveUpdates } from './ClientsPage'
 
 const { useAsyncResource, useDiagnosticEvents } = vi.hoisted(() => ({ useAsyncResource: vi.fn(), useDiagnosticEvents: vi.fn() }))
 vi.mock('../hooks/useAsyncResource', () => ({ useAsyncResource }))
@@ -30,12 +31,56 @@ describe('ClientsPage diagnostics', () => {
   })
   afterEach(() => vi.useRealTimers())
 
+  it('drops terminal payloads from the live-update map', () => {
+    const running: DiagnosticRuntimeEvent = { version: 1, type: 'diagnostic', resource_kind: 'diagnostic', resource_id: 'run-1', operation_id: 'run-1', phase: 'running', sequence: 1, at: '2026-08-31T12:00:00Z', payload: { client_id: 'client-1', kind: 'throughput', status: 'running', progress: 40 } }
+    const current = reduceDiagnosticLiveUpdates({}, running)
+    expect(current['run-1']?.progress).toBe(40)
+    const terminal: DiagnosticRuntimeEvent = { ...running, phase: 'ready', sequence: 2, payload: { ...running.payload, status: 'succeeded', progress: 100 } }
+    expect(reduceDiagnosticLiveUpdates(current, terminal)).toEqual({})
+  })
+
+  it('does not let a late start response overlay a terminal event', async () => {
+    let setDiagnosticData: Dispatch<SetStateAction<DiagnosticRun[]>> | undefined
+    useAsyncResource.mockImplementation((load: unknown) => {
+      const [data, setData] = useState<unknown>(load === api.clients ? [client] : [])
+      if (load === api.clients) return { data, loading: false, error: null, refresh: vi.fn(), setData }
+      setDiagnosticData = setData as unknown as Dispatch<SetStateAction<DiagnosticRun[]>>
+      return { data, loading: false, error: null, refresh: vi.fn(), setData }
+    })
+    const started: DiagnosticRun = { id: 'run-late', client_id: 'client-1', kind: 'ping', status: 'running', upload_bytes: 0, download_bytes: 0, upload_bps: 0, download_bps: 0, started_at: '2026-09-01T12:00:00Z' }
+    const completed: DiagnosticRun = { ...started, status: 'succeeded', path: 'derp', latency_ms: 1, finished_at: '2026-09-01T12:00:01Z' }
+    let resolveStart: ((value: DiagnosticRun) => void) | undefined
+    vi.spyOn(api, 'startDiagnostic').mockReturnValue(new Promise((resolve) => { resolveStart = resolve }))
+    const user = userEvent.setup()
+    renderPage()
+    await user.click(screen.getByRole('tab', { name: 'Diagnostics' }))
+    const startButton = screen.getAllByRole('button', { name: 'Start diagnostic' })[0]
+    if (!startButton) throw new Error('Start diagnostic button was not rendered')
+    await user.click(startButton)
+    await user.click(screen.getByRole('button', { name: 'Start' }))
+    await waitFor(() => expect(api.startDiagnostic).toHaveBeenCalledTimes(1))
+    const listener = useDiagnosticEvents.mock.calls[0]?.[0] as ((event: DiagnosticRuntimeEvent) => void) | undefined
+    const resolve = resolveStart
+    if (!listener || !resolve) throw new Error('diagnostic race harness was not initialized')
+    const runningEvent: DiagnosticRuntimeEvent = { version: 1, type: 'diagnostic', resource_kind: 'diagnostic', resource_id: started.id, operation_id: started.id, phase: 'running', sequence: 1, at: started.started_at, payload: { client_id: started.client_id, kind: started.kind, status: 'running', progress: 0 } }
+    act(() => {
+      listener(runningEvent)
+      listener({ ...runningEvent, phase: 'ready', sequence: 2, payload: { ...runningEvent.payload, status: 'succeeded', progress: 100, latency_ms: 1 } })
+    })
+    await act(async () => { resolve(started); await Promise.resolve() })
+    act(() => setDiagnosticData?.([completed]))
+
+    await waitFor(() => expect(screen.getByText('Succeeded')).not.toBeNull())
+    expect(screen.queryByRole('button', { name: 'Cancel diagnostic' })).toBeNull()
+  })
+
   it('exposes tabs, an accessible start drawer, status/path text and direct cancel action', async () => {
     const user = userEvent.setup()
     renderPage()
     await user.click(screen.getByRole('tab', { name: 'Diagnostics' }))
     expect(screen.getByText('Direct')).not.toBeNull()
     expect(screen.getByRole('button', { name: 'Cancel diagnostic' })).not.toBeNull()
+    expect(document.querySelector('.diagnostic-card h4')).toBeNull()
     await user.click(screen.getByRole('button', { name: 'Start diagnostic' }))
     expect(screen.getByText('Tests use the selected Tailcat client only, for at most five seconds.')).not.toBeNull()
     expect(screen.getByText('Client')).not.toBeNull()

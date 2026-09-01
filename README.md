@@ -14,8 +14,9 @@
 
 Tailcat WebUI turns [Tailcat](https://github.com/tailscale/tailcat) into a
 long-running, OIDC-authenticated application. Each user can operate multiple
-independent Tailcat servers and clients, then publish remote HTTP, SSE, or
-WebSocket resources below stable subroutes.
+independent Tailcat servers and clients. Every durable resource belongs to its
+OIDC owner. Remote HTTP, SSE, and WebSocket resources are published below
+stable subroutes on an isolated public origin.
 
 ## Screenshots
 
@@ -30,6 +31,24 @@ WebSocket resources below stable subroutes.
 </p>
 
 Both images are captured from the running embedded application, not mockups.
+
+### Diagnostics · desktop light theme
+
+<p align="center">
+  <img src="docs/screenshots/diagnostics-desktop-light.png" alt="Successful Tailcat peer diagnostics in the desktop light theme" width="960">
+</p>
+
+Source PNG: 1440 × 900.
+
+### Secure transfers · mobile dark theme in Simplified Chinese
+
+<p align="center">
+  <img src="docs/screenshots/transfers-mobile-dark-zh.png" alt="Completed verified Tailcat file transfer in the mobile dark theme and Simplified Chinese" width="390">
+</p>
+
+Source PNG: 390 × 844. The screenshots contain demo names and operation
+summaries only. Connection tokens and one-time share codes were dismissed
+before capture.
 
 ## Capabilities
 
@@ -47,6 +66,9 @@ Both images are captured from the running embedded application, not mockups.
 | DNS tokens | Resolves `tailcat=tc…` TXT records when creating clients |
 | Custom DERP | Region ID/code, custom host list, or alternate DERP map URL |
 | Multiple instances | Independent server/client runtimes in one process and per user |
+| Port-aware target policy | Deployment rules accept CIDR or exact domain targets with explicit port ranges |
+| Network diagnostics | Owner-scoped ping and bounded duplex throughput history over reserved TCP port `41640` |
+| Secure file transfer | Browser-staged, resumable BLAKE3-verified transfers over reserved TCP port `41641` |
 
 Additional product features:
 
@@ -58,6 +80,49 @@ Additional product features:
 - English and Simplified Chinese; light, dark, and system appearance.
 - Pure-Go SQLite through Ent and `github.com/lib-x/entsqlite`; no CGO.
 - One embedded binary plus Linux amd64/arm64 container images.
+
+## Stock Tailcat compatibility
+
+Standard Tailcat connection tokens remain compatible in both directions. A
+stock client can connect to a WebUI-managed server with
+`tailcat <token> <port>`. The stock `tailcat ping`, `tailcat socks`, and
+`tailcat ssh` behaviors, including the server allowlist key check, remain the
+upstream Tailcat behaviors. A WebUI-managed client can also use a token from a
+stock Tailcat server.
+
+The WebUI diagnostics-history protocol on TCP `41640` and staged BLAKE3
+transfer protocol on TCP `41641` require WebUI-aware peers. The stock CLI has
+its own ping command, but it cannot participate in either application
+protocol. Exit-node rules in this project are WebUI policy controls; this
+project does not claim compatibility with original CLI exit routing.
+
+## Operations and limits
+
+Diagnostics always target the selected Tailcat client. The peer service is
+fixed to TCP `41640`, so the API cannot choose an arbitrary speed-test host.
+Each run is limited to 5 seconds and 32 MiB in each direction. An owner may run
+two diagnostics at once, with at most one per client. The database keeps the
+newest 100 summaries for up to 30 days and does not store peer IP addresses or
+progress samples.
+
+Transfers use browser-selected files only. The sender stages bytes under its
+data directory, finalizes an immutable share, and receives a capability code
+that is shown once. Rotating the code revokes the previous value. The receiver
+saves an encrypted code only when a job needs restart or resume. TCP `41641`
+serves fixed manifest and range operations, not filesystem browsing.
+
+Compiled transfer ceilings are 512 MiB per file, 1 GiB per outgoing share or
+incoming job, 2 GiB of staged bytes per owner, and 1,000 files per share. A job
+uses exactly four range workers, with at most two active jobs per owner. Shares
+and jobs expire after 24 hours. BLAKE3 manifests use 8 MiB blocks, and every
+completed file receives a final whole-file hash check.
+
+Transfer storage uses owner/share/job rooted directories and random disk names.
+Virtual paths are normalized relative paths, never host filesystem paths.
+The storage layer rejects absolute paths, dot segments, controls, symlinks,
+Windows reparse escapes, unsafe hard links, and root replacement. Staged files
+are private, fsynced, atomically published, and removed through owner-scoped
+deletion. SQLite and Tailcat WebUI remain pure Go with `CGO_ENABLED=0`.
 
 ## Quick start
 
@@ -141,8 +206,25 @@ this isolates public scripts and private route cookies from other tenants.
 | `TAILCAT_WEBUI_ALLOWED_EXIT_TARGETS` | empty | Destination CIDRs an exit-node may reach |
 | `TAILCAT_WEBUI_TRUSTED_PROXIES` | empty | Proxy CIDRs trusted for `X-Forwarded-For` rate-limit identity |
 | `TAILCAT_WEBUI_ALLOWED_DERP_HOSTS` | empty | Extra HTTPS DERP map/relay hosts users may select |
+| `TAILCAT_WEBUI_TRANSFER_MAX_FILE_BYTES` | `512MiB` | Per-file staging limit; may only tighten the compiled ceiling |
+| `TAILCAT_WEBUI_TRANSFER_MAX_SHARE_BYTES` | `1GiB` | Total bytes in one outgoing share |
+| `TAILCAT_WEBUI_TRANSFER_MAX_JOB_BYTES` | `1GiB` | Total bytes in one incoming job |
+| `TAILCAT_WEBUI_TRANSFER_MAX_OWNER_BYTES` | `2GiB` | Total staged bytes for one owner |
+| `TAILCAT_WEBUI_TRANSFER_MAX_FILES_PER_SHARE` | `1000` | File count in one share/job; range `1..1000` |
+| `TAILCAT_WEBUI_TRANSFER_WORKERS` | `4` | Range workers; must be exactly `4` |
+| `TAILCAT_WEBUI_TRANSFER_MAX_JOBS_PER_OWNER` | `2` | Concurrent receive jobs; range `1..2` |
+| `TAILCAT_WEBUI_TRANSFER_EXPIRY` | `24h` | Share/job lifetime; range `1s..24h` |
+| `TAILCAT_WEBUI_TRANSFER_RETENTION` | `24h` | Compatibility lifetime name; must equal expiry |
+| `TAILCAT_WEBUI_TRANSFER_UPLOAD_TIMEOUT` | `30m` | Browser upload read deadline; range `1s..1h` |
 | `TAILCAT_WEBUI_DEMO_MODE` | `false` | Loopback-only development login |
 | `TAILCAT_WEBUI_DEMO_UNSAFE_SSH` | `false` | Enable Tailcat's in-process shell only in loopback demo mode |
+
+Target-rule values are comma-separated. Use `CIDR@port`,
+`CIDR@start-end`, or `domain@port`. A legacy bare CIDR allows every port;
+domains always require a port clause. The `@` separator keeps IPv6 CIDRs
+unambiguous. Mapping rules define the deployment maximum. Owner-scoped exit
+rules can only narrow `TAILCAT_WEBUI_ALLOWED_EXIT_TARGETS`, and an empty exit
+rule set denies all exit traffic.
 
 SQLite uses foreign keys, WAL, `synchronous=NORMAL`, a five-second busy
 timeout, mmap, and a bounded connection pool. Shared-cache mode is deliberately
@@ -168,8 +250,14 @@ because Tailcat does not promise API or wire-format stability.
 - Published resources use a separate origin so untrusted remote HTML cannot
   execute with the control-plane origin or register its service worker.
 - Every durable lookup includes the authenticated owner ID.
+- Diagnostics and transfer shares, files, jobs, and downloads are owner scoped.
 - Management cookies are stripped before requests reach published resources.
 - Saved node private keys never appear in API responses or logs.
+- Transfer capability hashes use constant-time comparison; resumable remote
+  codes are AES-256-GCM encrypted with owner/job associated data.
+- Uploads require an exact length and configured body/deadline limits;
+  completed downloads accept one bounded byte range and use private no-store
+  responses.
 - Local mappings resolve and pin DNS before dialing to prevent rebinding.
 - Exit-node destinations are checked against deployment CIDRs.
 - The upstream public Tailcat DERP service is rate-limited and has no SLA;

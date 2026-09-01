@@ -195,7 +195,7 @@ func TestServiceCloseDrainsActiveUpgradeBeforeReturning(t *testing.T) {
 	owner := db.User.Create().SetIssuer("test").SetSubject("owner").SaveX(t.Context())
 	client := db.TailClient.Create().SetUserID(owner.ID).SetName("client").SetServerTokenCipher([]byte("cipher")).SetTokenHint("tc…").SaveX(t.Context())
 	route := db.PublishedRoute.Create().SetUserID(owner.ID).SetClientID(client.ID).SetName("route").SetSlug("route-a").SetRemotePort(8080).SetAccess(publishedroute.AccessPublic).SaveX(t.Context())
-	dialer := &registryUpgradeDialer{upgraded: make(chan struct{}), exited: make(chan struct{})}
+	dialer := &registryUpgradeDialer{upgraded: make(chan struct{}), closed: make(chan struct{}), exited: make(chan struct{})}
 	service := newRegistryTestService(t, db, dialer)
 	proxyDone := make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
@@ -241,9 +241,14 @@ func TestServiceCloseDrainsActiveUpgradeBeforeReturning(t *testing.T) {
 		t.Fatal("Service.Close returned before active upgrade work exited")
 	}
 	select {
-	case <-dialer.exited:
+	case <-dialer.closed:
 	default:
-		t.Fatal("Service.Close returned before upstream upgrade exited")
+		t.Fatal("Service.Close returned before closing the upstream upgrade")
+	}
+	select {
+	case <-dialer.exited:
+	case <-time.After(time.Second):
+		t.Fatal("upstream upgrade did not observe the closed connection")
 	}
 	if _, _, ok := service.acquire(t.Context(), owner.ID, client.ID, route.ID, "192.0.2.11"); ok {
 		t.Fatal("closed service admitted new published work")
@@ -558,7 +563,19 @@ type registryDialKey struct {
 
 type registryUpgradeDialer struct {
 	upgraded chan struct{}
+	closed   chan struct{}
 	exited   chan struct{}
+}
+
+type closeObservedConn struct {
+	net.Conn
+	closed chan struct{}
+	once   sync.Once
+}
+
+func (c *closeObservedConn) Close() error {
+	c.once.Do(func() { close(c.closed) })
+	return c.Conn.Close()
 }
 
 func (d *registryUpgradeDialer) DialPort(context.Context, string, string, uint16) (net.Conn, error) {
@@ -578,7 +595,7 @@ func (d *registryUpgradeDialer) DialPort(context.Context, string, string, uint16
 		close(d.upgraded)
 		_, _ = io.Copy(io.Discard, server)
 	}()
-	return client, nil
+	return &closeObservedConn{Conn: client, closed: d.closed}, nil
 }
 
 func serveRegistryTestConnection(connection net.Conn) {

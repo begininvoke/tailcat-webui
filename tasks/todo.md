@@ -38,4 +38,7 @@
 - [x] Capability protocol, resume runner and reserved Tailcat service
 - [x] Share/transfer management API, quotas, cleanup and OpenAPI
 - [x] Transfer UI with multi-file upload, progress, retry and downloads
-- [ ] Browser QA, security review, release verification and documentation
+- [x] Browser QA, security review, release verification and documentation
+  - Status: all available local code, browser, workflow and security gates pass;
+    the host has no container engine, and Windows runtime/remote CI remain
+    release-controller checks.

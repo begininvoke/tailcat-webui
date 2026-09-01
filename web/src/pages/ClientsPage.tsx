@@ -39,6 +39,14 @@ function patchRun(run: DiagnosticRun, payload: DiagnosticEventPayload): Diagnost
   }
 }
 
+export function reduceDiagnosticLiveUpdates(current: Record<string, DiagnosticEventPayload>, event: DiagnosticRuntimeEvent) {
+  if (event.payload.status === 'running') return { ...current, [event.resource_id]: event.payload }
+  if (current[event.resource_id] === undefined) return current
+  const next = { ...current }
+  delete next[event.resource_id]
+  return next
+}
+
 export default function ClientsPage() {
   const { t, i18n } = useTranslation()
   const { message } = App.useApp()
@@ -140,7 +148,7 @@ export default function ClientsPage() {
     const previousSequence = diagnosticSequences.current.get(event.resource_id)
     if (previousSequence !== undefined && event.sequence <= previousSequence) return
     diagnosticSequences.current.set(event.resource_id, event.sequence)
-    setLiveUpdates((current) => ({ ...current, [event.resource_id]: event.payload }))
+    setLiveUpdates((current) => reduceDiagnosticLiveUpdates(current, event))
     setDiagnosticsData((current) => current?.map((run) => run.id === event.resource_id && run.client_id === event.payload.client_id ? patchRun(run, event.payload) : run) ?? current)
     queueDiagnosticRefresh()
   }, [queueDiagnosticRefresh, setDiagnosticsData])
@@ -154,7 +162,6 @@ export default function ClientsPage() {
     try {
       const run = await api.startDiagnostic(values.client_id, input)
       diagnostics.setData((current) => [run, ...(current ?? []).filter((item) => item.id !== run.id)])
-      setLiveUpdates((current) => ({ ...current, [run.id]: { client_id: run.client_id, kind: run.kind, status: run.status, progress: 0 } }))
       setDiagnosticOpen(false); diagnosticForm.resetFields()
     } catch (error) {
       const code = error instanceof APIError ? error.code : 'REQUEST_FAILED'
@@ -230,7 +237,7 @@ export default function ClientsPage() {
           key: 'diagnostics', label: t('diagnostics.tab'), children: <ResourceState loading={diagnostics.loading} error={diagnostics.error} empty={diagnosticRuns.length === 0} emptyTitle={t('diagnostics.empty')} emptyDescription={t('diagnostics.emptyDescription')} emptyAction={(resource.data?.length ?? 0) > 0 ? <Button type="primary" onClick={() => setDiagnosticOpen(true)}>{t('diagnostics.start')}</Button> : undefined} retry={() => void diagnostics.refresh()}>
             {screens.md ? <Table<DiagnosticRun> className="diagnostics-table" rowKey="id" size="small" pagination={false} dataSource={diagnosticRuns} columns={diagnosticColumns} /> : <List className="diagnostics-list" dataSource={diagnosticRuns} renderItem={(run) => (
               <List.Item className="diagnostic-card" actions={run.status === 'running' ? [<Button key="cancel" danger loading={diagnosticBusyID === run.id} onClick={() => void cancelDiagnostic(run.id)}>{t('diagnostics.cancel')}</Button>] : []}>
-                <List.Item.Meta title={<Flex gap={8} wrap="wrap" align="center">{clientLabel(run.client_id)}<Typography.Text type="secondary">{t(`diagnostics.${run.kind}`)}</Typography.Text></Flex>} description={<Flex vertical gap={8}><OperationProgress run={run} progress={liveUpdates[run.id]?.progress} /><Typography.Text className="tabular-figure" type="secondary">{t('diagnostics.started')}: {formatDate(run.started_at, locale)} · {t('diagnostics.finished')}: {formatDate(run.finished_at, locale)}</Typography.Text></Flex>} />
+                <List.Item.Meta description={<Flex vertical gap={8}><Flex gap={8} wrap="wrap" align="center">{clientLabel(run.client_id)}<Typography.Text type="secondary">{t(`diagnostics.${run.kind}`)}</Typography.Text></Flex><OperationProgress run={run} progress={liveUpdates[run.id]?.progress} /><Typography.Text className="tabular-figure" type="secondary">{t('diagnostics.started')}: {formatDate(run.started_at, locale)} · {t('diagnostics.finished')}: {formatDate(run.finished_at, locale)}</Typography.Text></Flex>} />
               </List.Item>
             )} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} /> }} />}
           </ResourceState>,

@@ -41,6 +41,8 @@ code, pre, .mono-value, .mono-input input, .mono-input textarea { font-family: u
 .skip-link:focus { transform: translateY(0); }
 
 .ant-btn { transition: transform 120ms var(--ease-out); }
+.ant-input-affix-wrapper:has(.ant-input-password-icon) { padding-block: 0; padding-inline-end: 0; }
+.ant-input-password-icon { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; }
 .brand-button { transition: transform 120ms var(--ease-out), color 150ms ease, background-color 150ms ease; }
 .ant-btn:active,
 .brand-button:active { transform: scale(0.98); }
@@ -148,8 +150,21 @@ code, pre, .mono-value, .mono-input input, .mono-input textarea { font-family: u
 .operation-progress .ant-progress { margin-bottom: 8px; }
 .operation-progress-bar .ant-progress-bg { transition: none !important; }
 .operation-progress .ant-descriptions { margin-top: 8px; }
+.operation-progress .ant-descriptions-item-label { color: var(--muted) !important; }
 .operation-progress-error { margin-top: 8px; }
 .operation-progress-limits { margin-top: 8px; }
+.diagnostic-status-tag,
+.diagnostic-path-tag { color: var(--muted); border-color: var(--line); background: transparent; }
+.diagnostic-status-running { color: #00555e; border-color: #4f8f95; background: #e5f0ef; }
+.diagnostic-status-succeeded,
+.diagnostic-path-direct { color: #176b47; border-color: #63a486; background: #e8f3ed; }
+.diagnostic-status-failed,
+.diagnostic-status-interrupted { color: #a72a2a; border-color: #c97777; background: #faecec; }
+:root[data-theme="dark"] .diagnostic-status-running { color: #91e4ea; border-color: #39777b; background: #17383a; }
+:root[data-theme="dark"] .diagnostic-status-succeeded,
+:root[data-theme="dark"] .diagnostic-path-direct { color: #83dfb1; border-color: #36785a; background: #17372a; }
+:root[data-theme="dark"] .diagnostic-status-failed,
+:root[data-theme="dark"] .diagnostic-status-interrupted { color: #ffaaaa; border-color: #8d4949; background: #3b2020; }
 .tabular-figure { font-variant-numeric: tabular-nums; }
 .diagnostic-client-select { display: flex; flex-wrap: wrap; gap: 8px; }
 .diagnostic-client-select .ant-radio-wrapper { min-height: 44px; margin-inline-end: 0; }

@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: ['**']
   pull_request:
   workflow_dispatch:
 
@@ -74,3 +74,54 @@ jobs:
           push: false
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  target-compile:
+    name: Compile ${{ matrix.platform }}
+    needs: verify
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: linux-amd64, goos: linux, goarch: amd64, binary: tailcat-webui-linux-amd64 }
+          - { platform: linux-arm64, goos: linux, goarch: arm64, binary: tailcat-webui-linux-arm64 }
+          - { platform: windows-amd64, goos: windows, goarch: amd64, binary: tailcat-webui-windows-amd64.exe }
+          - { platform: darwin-amd64, goos: darwin, goarch: amd64, binary: tailcat-webui-darwin-amd64 }
+          - { platform: darwin-arm64, goos: darwin, goarch: arm64, binary: tailcat-webui-darwin-arm64 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          check-latest: true
+          cache-dependency-path: go.sum
+      - name: Verify compile inputs
+        run: |
+          go mod verify
+          test -s webdist/dist/index.html
+      - name: Compile tracked embedded assets without publishing
+        env:
+          CGO_ENABLED: '0'
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/tailcat-compile"
+          go build -trimpath -o "$RUNNER_TEMP/tailcat-compile/${{ matrix.binary }}" ./cmd/tailcat-webui
+          test -s "$RUNNER_TEMP/tailcat-compile/${{ matrix.binary }}"
+
+  windows-transfer-runtime:
+    name: Transfer storage runtime (Windows)
+    runs-on: windows-latest
+    env:
+      CGO_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          check-latest: true
+          cache-dependency-path: go.sum
+      - name: Verify modules and Windows transfer storage behavior
+        run: |
+          go mod verify
+          go test -count=1 ./internal/transfer

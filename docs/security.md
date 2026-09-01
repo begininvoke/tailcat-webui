@@ -2,42 +2,131 @@
 
 ## Assets and trust boundaries
 
-Assets are OIDC identities, sessions, encrypted Tailcat private keys, remote
-connection tokens, host-network reachability and public-route policy. Trust
+Protected assets are OIDC identities, management sessions, encrypted Tailcat
+private keys, remote connection tokens, transfer capability material, staged
+file bytes, host-network reachability, and published-route policy. Trust
 boundaries exist at browser requests, OIDC redirects, Tailcat peers, proxied
-HTTP traffic, runtime target dials, SQLite and environment configuration.
+HTTP traffic, runtime target dials, SQLite, the transfer storage root, and
+environment configuration.
 
-Published content never shares the management origin. Each route receives an
-immutable-ID subdomain below the configured publish zone; private grants are
-HMAC-scoped to that route and continuously checked against the originating
-management session, so logout/revocation also revokes published access.
+The management application and published resources never share an origin.
+Each published route receives an immutable-ID subdomain below the configured
+publish zone and serves its stable `/r/{slug}/*` path there. Private grants are
+HMAC scoped to that route and checked against the originating management
+session. Logout, session expiry, and revocation therefore remove published
+access. Management cookies are stripped before proxying, and published
+responses cannot widen their service-worker scope into another route or the
+control plane.
 
-## Primary abuse cases
+## Identity, ownership, and target policy
 
-- A user guesses another user's object ID: every repository query includes the
-  authenticated owner ID and returns not-found for mismatches.
-- A public route is used as an open proxy: target client, port and base path are
-  stored server-side; requests cannot select a host or token.
-- Port/exit-node forwarding reaches metadata or another tenant: independent
-  deployment policies are evaluated before every dial. Explicit local mappings
-  default to loopback, while the exit-node destination allowlist defaults empty.
-- A database copy reveals private identities: saved key text is AES-GCM
-  ciphertext under a deployment master key not stored in the database.
-- An OIDC callback is forged or replayed: short-lived single-use state, nonce,
-  PKCE and issuer/audience verification are mandatory.
-- A session is stolen by script or cross-site request: opaque HttpOnly cookies,
-  SameSite=Lax, origin protection and short idle/absolute expiration.
-- Large or slow requests exhaust the process: body/header limits, server
-  timeouts, auth rate limits, bounded Tailcat operations, and published-route
-  concurrency ceilings at global, owner, route, source, and route/source
-  levels. Published upstream connections require activity within five minutes.
-- A cross-origin page uses the authenticated TCP tunnel for blind dials: the
-  WebSocket handshake and same-origin validation complete before any Tailcat
-  target connection is attempted.
+OIDC uses authorization code, PKCE, state, nonce, issuer, and audience checks.
+Sessions are opaque server-side records carried in HttpOnly, SameSite=Lax
+cookies. HTTPS deployments also use Secure cookies and HSTS. The application
+stores only the provider identity fields needed for account display and
+correlation.
 
-## Data minimization
+Every durable query for servers, clients, mappings, allowlist keys, exit rules,
+diagnostics, shares, files, jobs, and downloads includes the authenticated
+owner ID. A cross-owner identifier returns not-found instead of revealing
+whether the resource exists. Account deletion cascades owned configuration,
+sessions, transfer metadata, encrypted key material, and staged bytes.
 
-The application stores provider subject, issuer, display name, email and avatar
-only for account display and identity correlation. Audit records avoid tokens,
-private keys and request bodies. Account deletion cascades owned configuration,
-sessions and encrypted key material.
+Deployment target rules are the maximum authority. Mapping and exit targets
+support CIDR and exact IDNA domain rules with an optional exact port or port
+range. All DNS answers must satisfy policy, and the checked numeric address is
+pinned for the dial. Owner-scoped exit rules can only narrow the deployment
+rules. Empty deployment or owner exit rules deny exit traffic.
+
+## Network diagnostics
+
+The diagnostics service listens only on reserved Tailcat TCP port `41640`.
+Requests select a known owner-scoped client and never carry a host or port.
+The protocol limits work to 5 seconds and 32 MiB per direction. The service
+permits two active runs per owner and one per client. It retains at most 100
+summaries per owner for 30 days and does not store peer IP addresses or live
+progress samples.
+
+Protocol frames have fixed bounds and stable error codes. Cancellation closes
+the peer connection. Lifecycle transitions are audit logged, while high-rate
+progress events remain in memory and may be dropped.
+
+## Transfer capabilities and peer protocol
+
+The secure transfer service listens only on reserved Tailcat TCP port `41641`.
+It supports fixed manifest and range operations for an immutable share. It
+does not accept a filesystem path or an arbitrary network target.
+
+A share capability contains a UUIDv7 share ID and 32 random bytes. The plaintext
+code is returned only when the share is created or rotated. SQLite stores only
+the SHA-256 hash of the random secret, and authorization uses a constant-time
+comparison, including a dummy comparison for invalid identities. Rotation
+closes the old capability generation and active streams before returning the
+replacement.
+
+An incoming job keeps the remote capability only to support restart and resume.
+The existing AES-256-GCM secret box encrypts it with versioned associated data
+that binds the immutable owner ID and job ID. A ciphertext cannot be moved to
+another owner or job. Capability plaintext is cleared from mutable buffers when
+the operation ends and is excluded from API lists, logs, audit details, and
+error responses.
+
+Requests use an 8 KiB maximum JSON frame and bounded responses. Manifests bind
+file ID, virtual path, size, modification time, whole-file BLAKE3, 8 MiB block
+size, and every block hash. Four range workers verify blocks before recording
+progress. A final whole-file BLAKE3 check is required before an item or job can
+be completed.
+
+## Browser upload and download boundaries
+
+Only the exact authenticated upload route bypasses the general 1 MiB management
+body limit. Authentication, owner lookup, same-origin protection, mutation
+rate admission, and share eligibility run before the body is read. Uploads
+must use `application/octet-stream`, provide a non-negative `Content-Length`,
+and stay within the configured file, share, owner, file-count, and read-deadline
+limits. `http.MaxBytesReader` remains the final body ceiling. The UTF-8 virtual
+path header is capped at 1,024 bytes and validated as a relative path.
+
+Downloads are available only for completed owner-scoped items. Responses use
+`application/octet-stream`, a sanitized attachment filename,
+`X-Content-Type-Options: nosniff`, and `Cache-Control: private, no-store`.
+The handler accepts at most one syntactically valid byte range. Multiple,
+overflowing, malformed, or unsatisfiable ranges receive `416` without a body.
+
+## Rooted storage, retention, and deletion
+
+Staged bytes live below `<data-dir>/transfers` in owner and share/job roots.
+Higher layers pass canonical IDs and virtual paths only. Storage creates random
+basenames, private files, and private directories. It rejects absolute paths,
+dot segments, NUL and control characters, overlong or over-deep paths, Windows
+device names, symlinks, reparse escapes, unsafe hard links, non-regular files,
+and a root that changes during use.
+
+Uploads reserve quota before writing, stream into a `0600` temporary file,
+hash and fsync it, publish atomically, and sync the containing directory before
+metadata commit. Recovery validates file identity through opened handles and
+removes orphaned aliases or temporary files without leaving the owner root.
+Unix permission and link-count checks are enforced directly. Windows ACL,
+reparse-point, hard-link, and directory-sync behavior requires the dedicated
+`windows-latest` runtime test; a Linux cross-build cannot prove NTFS semantics.
+
+Shares and jobs expire after at most 24 hours. Expiry or explicit deletion
+revokes active streams, cancels jobs, removes staged bytes, and cascades the
+matching metadata. Configured lifetime and retention describe the same
+boundary. Audit records cover share create, rotate, finalize, delete, job start,
+cancel, retry, complete, fail, and delete. Audit data contains owner-scoped IDs,
+counts, outcome, and stable error codes, never capability text, private keys,
+file bodies, or whole virtual paths.
+
+## Resource and deployment controls
+
+Compiled transfer ceilings are 512 MiB per file, 1 GiB per share/job, 2 GiB per
+owner, 1,000 files per share, exactly four workers, and two active jobs per
+owner. Operators may tighten supported limits, but cannot raise these ceilings.
+Diagnostics and transfer reserved ports cannot be used for user mappings.
+
+The HTTP server applies header and body limits, timeouts, owner and source rate
+limits, and bounded published-route concurrency. The deployment master key is
+not stored in SQLite and must remain stable. SQLite uses the pure-Go driver,
+and release binaries build with `CGO_ENABLED=0` so filesystem and database
+behavior do not depend on a host C toolchain.

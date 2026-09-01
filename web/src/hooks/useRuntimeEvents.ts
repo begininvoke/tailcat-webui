@@ -28,13 +28,13 @@ const timestampPattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-
 const hasOnlyKeys = (value: Record<string, unknown>, keys: readonly string[]) => Object.keys(value).every((key) => keys.includes(key))
 
 export function parseDiagnosticEvent(value: unknown): DiagnosticRuntimeEvent | null {
-  if (!isRecord(value) || value.type !== 'diagnostic' || value.resource_kind !== 'diagnostic' || typeof value.resource_id !== 'string' || value.resource_id.length === 0 || typeof value.operation_id !== 'string' || value.operation_id !== value.resource_id || typeof value.version !== 'number' || !Number.isSafeInteger(value.version) || typeof value.phase !== 'string' || !isOneOf(value.phase, runtimePhases) || !isPositiveInteger(value.sequence) || typeof value.at !== 'string' || Number.isNaN(Date.parse(value.at)) || !isRecord(value.payload)) return null
+  if (!isRecord(value) || !hasOnlyKeys(value, ['version', 'type', 'resource_kind', 'resource_id', 'operation_id', 'phase', 'sequence', 'at', 'payload']) || value.version !== 1 || value.type !== 'diagnostic' || value.resource_kind !== 'diagnostic' || !isUUID(value.resource_id) || value.operation_id !== value.resource_id || typeof value.phase !== 'string' || !isOneOf(value.phase, runtimePhases) || !isPositiveInteger(value.sequence) || typeof value.at !== 'string' || !timestampPattern.test(value.at) || Number.isNaN(Date.parse(value.at)) || !isRecord(value.payload) || !hasOnlyKeys(value.payload, ['client_id', 'kind', 'status', 'progress', 'latency_ms', 'upload_bytes', 'download_bytes', 'upload_bps', 'download_bps', 'error_code'])) return null
   const payload = value.payload
   const clientID = payload.client_id
   const kind = payload.kind
   const status = payload.status
   const progress = payload.progress
-  if (typeof clientID !== 'string' || clientID.length === 0 || !isOneOf(kind, diagnosticKinds) || !isOneOf(status, diagnosticStatuses) || !isNonNegativeInteger(progress) || progress > 100) return null
+  if (!isUUID(clientID) || !isOneOf(kind, diagnosticKinds) || !isOneOf(status, diagnosticStatuses) || !isNonNegativeInteger(progress) || progress > 100) return null
   const measurements: Partial<Pick<DiagnosticEventPayload, 'latency_ms' | 'upload_bytes' | 'download_bytes' | 'upload_bps' | 'download_bps'>> = {}
   for (const key of ['latency_ms', 'upload_bytes', 'download_bytes', 'upload_bps', 'download_bps'] as const) {
     const measurement = payload[key]

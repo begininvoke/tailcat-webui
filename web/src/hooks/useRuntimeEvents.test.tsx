@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, render } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import { diagnosticEvent, parseTransferEvent, runtimeRefreshEvent, transferEvent, useRuntimeEvents } from './useRuntimeEvents'
+import { diagnosticEvent, parseDiagnosticEvent, parseTransferEvent, runtimeRefreshEvent, transferEvent, useRuntimeEvents } from './useRuntimeEvents'
 
 class EventSourceStub {
   static latest: EventSourceStub | null = null
@@ -26,9 +26,35 @@ describe('runtime events', () => {
     const source = EventSourceStub.latest
     if (!source) throw new Error('EventSource was not created')
 
-    act(() => source.emit('diagnostic', JSON.stringify({ version: 1, type: 'diagnostic', resource_kind: 'diagnostic', resource_id: 'run-1', operation_id: 'run-1', phase: 'running', sequence: 1, at: '2026-08-31T12:00:00Z', payload: { client_id: 'client-1', kind: 'throughput', status: 'running', progress: 42 } })))
+    const runID = '01994f1c-85ea-7a0d-bbde-ae5ab8a1da1d'
+    const clientID = '01994f1c-b7e5-759d-8b3d-a17ed9f03c9e'
+    const valid = { version: 1, type: 'diagnostic', resource_kind: 'diagnostic', resource_id: runID, operation_id: runID, phase: 'running', sequence: 1, at: '2026-08-31T12:00:00Z', payload: { client_id: clientID, kind: 'throughput', status: 'running', progress: 42 } }
+
+    act(() => source.emit('diagnostic', JSON.stringify(valid)))
     expect(diagnostic).toHaveBeenCalledTimes(1)
     expect(runtime).not.toHaveBeenCalled()
+
+    for (const invalid of [
+      { ...valid, version: 2 },
+      { ...valid, resource_kind: 'client' },
+      { ...valid, resource_id: 'not-a-uuid' },
+      { ...valid, operation_id: crypto.randomUUID() },
+      { ...valid, phase: 'unknown' },
+      { ...valid, sequence: 0 },
+      { ...valid, sequence: 1.5 },
+      { ...valid, at: '2026-08-31' },
+      { ...valid, payload: { ...valid.payload, client_id: 'not-a-uuid' } },
+      { ...valid, payload: { ...valid.payload, kind: 'trace' } },
+      { ...valid, payload: { ...valid.payload, status: 'unknown' } },
+      { ...valid, payload: { ...valid.payload, progress: 101 } },
+      { ...valid, payload: { ...valid.payload, progress: 1.5 } },
+      { ...valid, payload: { ...valid.payload, latency_ms: -1 } },
+      { ...valid, payload: { ...valid.payload, error_code: 'secret_server_error' } },
+      { ...valid, payload: { ...valid.payload, capability: 'tcs1.secret' } },
+      { ...valid, internal: 'not-public' },
+    ]) act(() => source.emit('diagnostic', JSON.stringify(invalid)))
+    expect(diagnostic).toHaveBeenCalledTimes(1)
+    expect(parseDiagnosticEvent(valid)?.payload.progress).toBe(42)
 
     act(() => source.emit('diagnostic', '{invalid'))
     expect(diagnostic).toHaveBeenCalledTimes(1)

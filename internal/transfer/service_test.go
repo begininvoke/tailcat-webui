@@ -1964,6 +1964,37 @@ func TestCloseCancelsAndJoinsBackoffResumeScheduler(t *testing.T) {
 	}
 }
 
+func TestNonretryableQueuedStartClearsProgressTimestamp(t *testing.T) {
+	db, storage, box, _, _, _ := newTransferServiceData(t)
+	service := newTransferServiceForTest(t, db, storage, box)
+	ownerID := newEntityID()
+	jobID := newEntityID()
+	service.mu.Lock()
+	service.progressPublished[jobID] = time.Now()
+	service.resumeQueue[ownerID] = []*queuedResume{{jobID: jobID}}
+	service.scheduleQueuedResumesLocked(ownerID)
+	service.mu.Unlock()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		service.mu.Lock()
+		_, queued := service.resumeQueue[ownerID]
+		_, scheduled := service.resumeScheduling[ownerID]
+		_, retained := service.progressPublished[jobID]
+		service.mu.Unlock()
+		if !queued && !scheduled {
+			if retained {
+				t.Fatal("nonretryable queued start retained a progress timestamp")
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("nonretryable queued start did not leave the resume queue")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 func TestRecoveryTransientStartFailureStaysQueuedAndRetriesAutomatically(t *testing.T) {
 	db, storage, box, owner, server, _ := newTransferServiceData(t)
 	client := db.TailClient.Create().SetUserID(owner.ID).SetName("queue-retry").SetServerTokenCipher([]byte("cipher")).SetTokenHint("hint").SaveX(t.Context())
