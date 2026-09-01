@@ -191,6 +191,7 @@ code, pre, .mono-value, .mono-input input, .mono-input textarea { font-family: u
 .transfer-history .ant-empty-description strong { color: var(--text); }
 .transfer-path { display: block; max-width: 100%; overflow-wrap: anywhere; word-break: break-word; }
 .capability-alert { margin-bottom: 16px; }
+.sender-operation-banner { margin-bottom: 16px; background: var(--surface-subtle); }
 .capability-alert .ant-alert-content,
 .capability-alert .ant-alert-description { min-width: 0; }
 .capability-alert .ant-alert-action { margin-inline-start: 16px; }

@@ -40,7 +40,6 @@ export function TransferProgress({ status, receivedBytes, totalBytes, completedF
   return <div className={compact ? 'transfer-progress transfer-progress-compact' : 'transfer-progress'} aria-busy={status === 'running'}>
     <Flex className="transfer-progress-summary" align="center" gap={8} wrap="wrap">
       <Tag className={`transfer-status-tag transfer-status-${status}`} icon={statusIcons[status]}>{t(statusKeys[status])}</Tag>
-      <span className="sr-only transfer-progress-announcement" role="status" aria-live="polite" aria-atomic="true">{t(statusKeys[status])}</span>
       <Typography.Text className="tabular-figure transfer-progress-amounts">
         {formatTransferBytes(safeReceived, locale)} / {formatTransferBytes(safeTotal, locale)} · {completedFiles === undefined || totalFiles === undefined ? t('transfers.fileProgressUnavailable') : `${Math.max(0, completedFiles)} / ${Math.max(0, totalFiles)} ${t('transfers.files')}`}
       </Typography.Text>

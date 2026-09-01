@@ -20,9 +20,12 @@ export interface TransferQueueState { items: QueuedFile[]; operation?: { id: num
 type QueueAction = { type: 'add'; files: QueuedFile[] } | { type: 'remove'; uid: string } | { type: 'status'; operationID: number; uid: string; status: QueueStatus; error?: string } | { type: 'reset' } | { type: 'begin'; operationID: number; uids: readonly string[] } | { type: 'finish'; operationID: number; clearSucceeded: boolean }
 type Route = Awaited<ReturnType<typeof api.routes>>[number]
 export interface OneTimeCode { shareID: string; value: string; generation: number }
+export interface TerminalFileSummary { completed: number; total: number }
 
 const transferRefreshDelayMS = 100
 const terminalTransferStatuses = new Set<TransferStatus>(['completed', 'failed', 'canceled', 'interrupted', 'expired', 'deleting'])
+const terminalEventStatuses = new Set<TransferEventPayload['status']>(['completed', 'failed', 'canceled', 'interrupted', 'expired', 'deleting', 'deleted'])
+const maxTerminalSummaries = 100
 
 export const initialTransferQueueState: TransferQueueState = { items: [] }
 
@@ -48,6 +51,11 @@ export function transferQueueReducer(state: TransferQueueState, action: QueueAct
 
 export function compareAndClearOneTimeCode(current: OneTimeCode | null, expected: OneTimeCode) {
   return current?.generation === expected.generation && current.shareID === expected.shareID && current.value === expected.value ? null : current
+}
+
+export function pruneTerminalSummaries(summaries: Record<string, TerminalFileSummary>, currentJobs: readonly TransferJob[], maximum = maxTerminalSummaries) {
+  const retained = new Set(currentJobs.slice(0, maximum).map((job) => job.id))
+  return Object.fromEntries(Object.entries(summaries).filter(([id]) => retained.has(id)))
 }
 
 function formatDate(value: string | undefined, locale: string) {
@@ -122,6 +130,7 @@ export default function RoutesPage() {
   const [existingFiles, setExistingFiles] = useState<TransferShareFile[]>([])
   const [resumeLoadingID, setResumeLoadingID] = useState('')
   const [resumeHistoryError, setResumeHistoryError] = useState<{ share: TransferShare; message: string } | null>(null)
+  const resumeRequestGeneration = useRef(0)
   const capabilityGeneration = useRef(0)
   const [oneTimeCode, setOneTimeCode] = useState<OneTimeCode | null>(null)
   const [queueState, dispatchQueue] = useReducer(transferQueueReducer, initialTransferQueueState)
@@ -140,6 +149,15 @@ export default function RoutesPage() {
   const [detailsError, setDetailsError] = useState('')
   const detailsRequestID = useRef(0)
   const [liveProgress, setLiveProgress] = useState<Record<string, TransferEventPayload>>({})
+  const liveProgressRef = useRef<Record<string, TransferEventPayload>>({})
+  const [liveAnnouncement, setLiveAnnouncement] = useState('')
+  const [terminalFileSummaries, setTerminalFileSummaries] = useState<Record<string, TerminalFileSummary>>({})
+  const terminalFileSummariesRef = useRef<Record<string, TerminalFileSummary>>({})
+  const terminalSummaryAttempts = useRef(new Set<string>())
+  const terminalSummaryRequests = useRef(new Map<string, number>())
+  const terminalSummaryGeneration = useRef(0)
+  const sharesDataRef = useRef<TransferShare[] | null>(null)
+  const jobsDataRef = useRef<TransferJob[] | null>(null)
   const transferSequences = useRef(new Map<string, number>())
   const transferRefreshTimer = useRef<number | null>(null)
   const transferRefreshKinds = useRef({ shares: false, jobs: false, items: false })
@@ -154,29 +172,74 @@ export default function RoutesPage() {
   const jobs = useAsyncResource(api.transferJobs, { refreshOnRuntime: false })
   const sharesRefresh = useRef(shares.refresh)
   const jobsRefresh = useRef(jobs.refresh)
+  useEffect(() => { sharesDataRef.current = shares.data }, [shares.data])
+  useEffect(() => { jobsDataRef.current = jobs.data }, [jobs.data])
   useEffect(() => { sharesRefresh.current = shares.refresh }, [shares.refresh])
   useEffect(() => { jobsRefresh.current = jobs.refresh }, [jobs.refresh])
   const clients = useMemo(() => clientResource.data ?? [], [clientResource.data])
   const servers = useMemo(() => serverResource.data ?? [], [serverResource.data])
   const selectedSenderServerID = senderServerID || servers[0]?.id || ''
+  const commitTerminalSummary = useCallback((jobID: string, summary: TerminalFileSummary) => {
+    const expanded = { ...terminalFileSummariesRef.current, [jobID]: summary }
+    const next = jobsDataRef.current ? pruneTerminalSummaries(expanded, jobsDataRef.current) : expanded
+    terminalFileSummariesRef.current = next
+    terminalSummaryAttempts.current.add(jobID)
+    setTerminalFileSummaries(next)
+  }, [])
   useEffect(() => () => {
+    resumeRequestGeneration.current += 1
     if (transferRefreshTimer.current !== null) window.clearTimeout(transferRefreshTimer.current)
     detailsRequestID.current += 1
+    terminalSummaryGeneration.current += 1
+    terminalSummaryRequests.current.clear()
   }, [])
+
+  useEffect(() => {
+    const currentJobs = jobs.data
+    if (!currentJobs) return
+    const retainedIDs = new Set(currentJobs.slice(0, maxTerminalSummaries).map((job) => job.id))
+    for (const id of terminalSummaryAttempts.current) if (!retainedIDs.has(id)) terminalSummaryAttempts.current.delete(id)
+    for (const id of terminalSummaryRequests.current.keys()) if (!retainedIDs.has(id)) terminalSummaryRequests.current.delete(id)
+    const pruned = pruneTerminalSummaries(terminalFileSummariesRef.current, currentJobs)
+    if (Object.keys(pruned).length !== Object.keys(terminalFileSummariesRef.current).length) {
+      terminalFileSummariesRef.current = pruned
+      Promise.resolve().then(() => { if (jobsDataRef.current === currentJobs) setTerminalFileSummaries(pruned) })
+    }
+    for (const job of currentJobs.slice(0, maxTerminalSummaries)) {
+      if (job.status !== 'completed' || terminalFileSummariesRef.current[job.id] || terminalSummaryAttempts.current.has(job.id)) continue
+      terminalSummaryAttempts.current.add(job.id)
+      const generation = ++terminalSummaryGeneration.current
+      terminalSummaryRequests.current.set(job.id, generation)
+      void api.transferJobItems(job.id).then((items) => {
+        const latest = jobsDataRef.current?.find((candidate) => candidate.id === job.id)
+        if (terminalSummaryRequests.current.get(job.id) !== generation || latest?.status !== 'completed' || terminalFileSummariesRef.current[job.id]) return
+        terminalSummaryRequests.current.delete(job.id)
+        commitTerminalSummary(job.id, { completed: items.filter((item) => item.status === 'completed').length, total: items.length })
+      }).catch(() => { if (terminalSummaryRequests.current.get(job.id) === generation) terminalSummaryRequests.current.delete(job.id) })
+    }
+  }, [commitTerminalSummary, jobs.data])
 
   useEffect(() => {
     if (!durableCleanup.current.shares || !shares.data) return
     durableCleanup.current.shares = false
     const retained = new Set(shares.data.filter((share) => !terminalTransferStatuses.has(share.status)).map((share) => share.id))
     for (const id of transferSequences.current.keys()) if (!retained.has(id) && !jobs.data?.some((job) => job.id === id)) transferSequences.current.delete(id)
-    setLiveProgress((current) => Object.fromEntries(Object.entries(current).filter(([id]) => retained.has(id) || jobs.data?.some((job) => job.id === id))))
+    setLiveProgress((current) => {
+      const next = Object.fromEntries(Object.entries(current).filter(([id]) => retained.has(id) || jobs.data?.some((job) => job.id === id)))
+      liveProgressRef.current = next
+      return next
+    })
   }, [jobs.data, shares.data])
   useEffect(() => {
     if (!durableCleanup.current.jobs || !jobs.data) return
     durableCleanup.current.jobs = false
     const retained = new Set(jobs.data.filter((job) => !terminalTransferStatuses.has(job.status)).map((job) => job.id))
     for (const id of transferSequences.current.keys()) if (!retained.has(id) && !shares.data?.some((share) => share.id === id)) transferSequences.current.delete(id)
-    setLiveProgress((current) => Object.fromEntries(Object.entries(current).filter(([id]) => retained.has(id) || shares.data?.some((share) => share.id === id))))
+    setLiveProgress((current) => {
+      const next = Object.fromEntries(Object.entries(current).filter(([id]) => retained.has(id) || shares.data?.some((share) => share.id === id)))
+      liveProgressRef.current = next
+      return next
+    })
   }, [jobs.data, shares.data])
 
   const loadJobItems = useCallback(async (jobID: string, silent = false) => {
@@ -185,13 +248,17 @@ export default function RoutesPage() {
     setDetailsError('')
     try {
       const items = await api.transferJobItems(jobID)
-      if (requestID === detailsRequestID.current) setDetailsItems(items)
+      if (requestID === detailsRequestID.current) {
+        setDetailsItems(items)
+        const status = liveProgressRef.current[jobID]?.status ?? jobsDataRef.current?.find((job) => job.id === jobID)?.status
+        if (status && terminalEventStatuses.has(status)) commitTerminalSummary(jobID, { completed: items.filter((item) => item.status === 'completed').length, total: items.length })
+      }
     } catch {
       if (requestID === detailsRequestID.current) setDetailsError(t('transfers.loadItemsFailed'))
     } finally {
       if (requestID === detailsRequestID.current) setDetailsLoading(false)
     }
-  }, [t])
+  }, [commitTerminalSummary, t])
 
   const queueTransferRefresh = useCallback((kind: 'shares' | 'jobs', refreshItems: boolean) => {
     transferRefreshKinds.current[kind] = true
@@ -211,13 +278,24 @@ export default function RoutesPage() {
     const previous = transferSequences.current.get(event.resource_id)
     if (previous !== undefined && event.sequence <= previous) return
     transferSequences.current.set(event.resource_id, event.sequence)
-    setLiveProgress((current) => ({ ...current, [event.resource_id]: event.payload }))
+    const previousStatus = liveProgressRef.current[event.resource_id]?.status ?? (event.payload.share_id ? sharesDataRef.current?.find((share) => share.id === event.resource_id)?.status : jobsDataRef.current?.find((job) => job.id === event.resource_id)?.status)
+    const nextLive = { ...liveProgressRef.current, [event.resource_id]: event.payload }
+    liveProgressRef.current = nextLive
+    setLiveProgress(nextLive)
+    if (previousStatus !== undefined && previousStatus !== event.payload.status) {
+      const status = t(`transfers.${event.payload.status}`)
+      setLiveAnnouncement(t(event.payload.share_id ? 'transfers.shareStatusAnnouncement' : 'transfers.jobStatusAnnouncement', { status }))
+    }
+    if (event.payload.job_id && terminalEventStatuses.has(event.payload.status) && event.payload.completed_files !== undefined && event.payload.total_files !== undefined) {
+      commitTerminalSummary(event.resource_id, { completed: event.payload.completed_files, total: event.payload.total_files })
+    }
     if (event.payload.share_id) {
+      if (event.payload.status === 'deleted') { resumeRequestGeneration.current += 1; setResumeLoadingID('') }
       queueTransferRefresh('shares', false)
     } else if (event.payload.job_id) {
       queueTransferRefresh('jobs', selectedJobIDRef.current === event.resource_id)
     }
-  }, [queueTransferRefresh])
+  }, [commitTerminalSummary, queueTransferRefresh, t])
   useTransferEvents(onTransfer)
 
   const localizedError = (error: unknown, fallback = t('transfers.genericFailure')) => {
@@ -229,6 +307,17 @@ export default function RoutesPage() {
     const code = { shareID, value, generation: ++capabilityGeneration.current }
     setOneTimeCode(code)
     return code
+  }
+
+  const invalidateResumeRequest = () => {
+    resumeRequestGeneration.current += 1
+    setResumeLoadingID('')
+  }
+
+  const openSender = () => {
+    invalidateResumeRequest()
+    setResumeHistoryError(null)
+    setSenderOpen(true)
   }
 
   const closeCreate = () => {
@@ -306,7 +395,7 @@ export default function RoutesPage() {
       finalized = true
       void message.success(t('transfers.finalized'))
       shares.refresh({ silent: true })
-      setActiveShareID(''); setExistingFiles([]); setSenderOpen(false)
+      invalidateResumeRequest(); setActiveShareID(''); setExistingFiles([]); setSenderOpen(false)
     } catch (error) { setSenderError(localizedError(error)) } finally {
       dispatchQueue({ type: 'finish', operationID, clearSucceeded: finalized })
       senderOperationRef.current = null
@@ -325,18 +414,25 @@ export default function RoutesPage() {
     catch (error) { void message.error(localizedError(error)) } finally { setBusyID('') }
   }
   const deleteShare = async (share: TransferShare) => {
+    invalidateResumeRequest()
+    setResumeHistoryError((current) => current?.share.id === share.id ? null : current)
     setBusyID(share.id)
     try { await api.deleteTransferShare(share.id); shares.setData((current) => current?.filter((item) => item.id !== share.id) ?? current); void message.success(t('feedback.deleted')) }
     catch (error) { void message.error(localizedError(error)) } finally { setBusyID('') }
   }
   const resumeShare = async (share: TransferShare) => {
+    const generation = ++resumeRequestGeneration.current
     setResumeLoadingID(share.id); setResumeHistoryError(null)
     try {
       const files = await api.transferShareFiles(share.id)
+      const latest = sharesDataRef.current?.find((candidate) => candidate.id === share.id)
+      const liveStatus = liveProgressRef.current[share.id]?.status
+      if (resumeRequestGeneration.current !== generation) return
+      if (!latest || latest.status !== 'staging' || (liveStatus !== undefined && liveStatus !== 'staging')) { setResumeHistoryError({ share, message: t('transfers.resumeUnavailable') }); return }
       setActiveShareID(share.id); setSenderServerID(share.server_id); setExistingFiles(files)
       dispatchQueue({ type: 'reset' }); setSenderError(''); setSelectionError(''); setSenderOpen(true)
-    } catch { setResumeHistoryError({ share, message: t('transfers.resumeLoadFailed') }) }
-    finally { setResumeLoadingID('') }
+    } catch { if (resumeRequestGeneration.current === generation) setResumeHistoryError({ share, message: t('transfers.resumeLoadFailed') }) }
+    finally { if (resumeRequestGeneration.current === generation) setResumeLoadingID('') }
   }
 
   const createJob = async (values: ReceiveFormValues) => {
@@ -369,6 +465,7 @@ export default function RoutesPage() {
   const fileProgress = (jobID: string) => {
     const live = liveProgress[jobID]
     if (live?.completed_files !== undefined && live.total_files !== undefined) return { completed: live.completed_files, total: live.total_files }
+    if (terminalFileSummaries[jobID]) return terminalFileSummaries[jobID]
     if (selectedJobID === jobID && !detailsError && !detailsLoading) return { completed: detailsItems.filter((item) => item.status === 'completed').length, total: detailsItems.length }
     return null
   }
@@ -406,7 +503,7 @@ export default function RoutesPage() {
   const transferPanel = <div className="transfers-console">
     <TransferLimits limits={config.transfers} />
     <Row className="transfer-workflows" gutter={[16, 16]}>
-      <Col xs={24} lg={10}><Card className="transfer-workflow-card" title={<Space><SendOutlined aria-hidden />{t('transfers.sender')}</Space>}><Typography.Paragraph type="secondary">{t('transfers.senderHint')}</Typography.Paragraph>{serverResource.error ? <Alert type="warning" showIcon message={t('transfers.loadServersFailed')} action={<Button onClick={() => serverResource.refresh()}>{t('common.retry')}</Button>} /> : serverResource.loading ? <Typography.Text type="secondary">{t('common.loading')}</Typography.Text> : servers.length === 0 ? <Alert type="warning" showIcon message={t('transfers.noServers')} /> : <Button type="primary" icon={<SendOutlined aria-hidden />} onClick={() => setSenderOpen(true)}>{t('transfers.sendFiles')}</Button>}</Card></Col>
+      <Col xs={24} lg={10}><Card className="transfer-workflow-card" title={<Space><SendOutlined aria-hidden />{t('transfers.sender')}</Space>}><Typography.Paragraph type="secondary">{t('transfers.senderHint')}</Typography.Paragraph>{serverResource.error ? <Alert type="warning" showIcon message={t('transfers.loadServersFailed')} action={<Button onClick={() => serverResource.refresh()}>{t('common.retry')}</Button>} /> : serverResource.loading ? <Typography.Text type="secondary">{t('common.loading')}</Typography.Text> : servers.length === 0 ? <Alert type="warning" showIcon message={t('transfers.noServers')} /> : <Button type="primary" icon={<SendOutlined aria-hidden />} onClick={openSender}>{t('transfers.sendFiles')}</Button>}</Card></Col>
       <Col xs={24} lg={14}><Card className="transfer-workflow-card" title={<Space><CloudDownloadOutlined aria-hidden />{t('transfers.receiver')}</Space>}><Typography.Paragraph type="secondary">{t('transfers.receiverHint')}</Typography.Paragraph>{clientResource.error ? <Alert type="warning" showIcon message={t('transfers.loadClientsFailed')} action={<Button onClick={() => clientResource.refresh()}>{t('common.retry')}</Button>} /> : clientResource.loading ? <Typography.Text type="secondary">{t('common.loading')}</Typography.Text> : clients.length === 0 ? <Alert type="warning" showIcon message={t('transfers.noClients')} /> : <Form form={receiveForm} layout="vertical" onFinish={(values) => void createJob(values)}>
         {receiveError && <Alert className="drawer-alert" type="error" showIcon message={receiveError} />}
         <Row gutter={[12, 0]}><Col xs={24} md={8}><Form.Item name="client_id" initialValue={clients[0]?.id} label={t('transfers.client')} rules={[{ required: true, message: t('validation.required') }]}><Select options={clients.map((client) => ({ value: client.id, label: client.name }))} /></Form.Item></Col><Col xs={24} md={10}><Form.Item name="capability" label={t('transfers.capability')} rules={[{ required: true, message: t('validation.required') }]}><Input.Password autoComplete="off" className="mono-input" /></Form.Item></Col><Col xs={24} md={6} className="receive-submit"><Button block type="primary" htmlType="submit" loading={receiveBusy}>{t('transfers.createJob')}</Button></Col></Row>
@@ -414,7 +511,7 @@ export default function RoutesPage() {
     </Row>
     {resumeHistoryError && <Alert className="inline-callout" type="error" showIcon message={resumeHistoryError.message} action={<Button onClick={() => void resumeShare(resumeHistoryError.share)}>{t('transfers.retryStagedHistory')}</Button>} />}
     <Card className="transfer-history" title={t('transfers.outgoing')}>
-      <ResourceState loading={shares.loading} error={shares.error} empty={displayShares.length === 0} emptyTitle={t('transfers.emptyShares')} emptyDescription={t('transfers.emptySharesDescription')} emptyAction={servers.length > 0 ? <Button type="primary" onClick={() => setSenderOpen(true)}>{t('transfers.sendFiles')}</Button> : undefined} retry={() => shares.refresh()}>
+      <ResourceState loading={shares.loading} error={shares.error} empty={displayShares.length === 0} emptyTitle={t('transfers.emptyShares')} emptyDescription={t('transfers.emptySharesDescription')} emptyAction={servers.length > 0 ? <Button type="primary" onClick={openSender}>{t('transfers.sendFiles')}</Button> : undefined} retry={() => shares.refresh()}>
         {screens.md ? <Table<TransferShare> className="transfer-table" rowKey="id" size="small" pagination={false} dataSource={displayShares} columns={shareColumns} /> : <List className="transfer-list" dataSource={displayShares} renderItem={(share) => <List.Item><Card size="small" className="transfer-mobile-card" title={serverNames.get(share.server_id) ?? share.server_id}><TransferProgress status={share.status} receivedBytes={share.total_bytes} totalBytes={share.total_bytes} completedFiles={share.file_count} totalFiles={share.file_count} /><Typography.Text type="secondary" className="tabular-figure">{t('transfers.expires')}: {formatDate(share.expires_at, locale)}</Typography.Text><Divider />{shareActions(share)}</Card></List.Item>} />}
       </ResourceState>
     </Card>
@@ -426,14 +523,17 @@ export default function RoutesPage() {
   </div>
 
   const changeTab = (key: string) => {
+    invalidateResumeRequest()
     setActiveTab(key)
     if (key === 'transfers') params.set('tab', key); else params.delete('tab')
     setParams(params, { replace: true })
   }
 
   return <div className="page routes-page">
-    <PageHeader title={activeTab === 'routes' ? t('routes.title') : t('transfers.title')} subtitle={activeTab === 'routes' ? t('routes.subtitle') : t('transfers.subtitle')} actions={activeTab === 'routes' ? <Button type="primary" icon={<PlusOutlined />} disabled={clients.length === 0 || clientResource.loading || Boolean(clientResource.error)} onClick={() => setCreateOpen(true)}>{t('routes.new')}</Button> : servers.length > 0 && !serverResource.error ? <Button type="primary" icon={<SendOutlined aria-hidden />} onClick={() => setSenderOpen(true)}>{t('transfers.sendFiles')}</Button> : undefined} />
+    <span className="sr-only transfer-live-announcement" role="status" aria-live="polite" aria-atomic="true">{liveAnnouncement}</span>
+    <PageHeader title={activeTab === 'routes' ? t('routes.title') : t('transfers.title')} subtitle={activeTab === 'routes' ? t('routes.subtitle') : t('transfers.subtitle')} actions={activeTab === 'routes' ? <Button type="primary" icon={<PlusOutlined />} disabled={clients.length === 0 || clientResource.loading || Boolean(clientResource.error)} onClick={() => setCreateOpen(true)}>{t('routes.new')}</Button> : servers.length > 0 && !serverResource.error ? <Button type="primary" icon={<SendOutlined aria-hidden />} onClick={openSender}>{t('transfers.sendFiles')}</Button> : undefined} />
     {oneTimeCode && <Alert className="capability-alert" type="success" showIcon message={t('transfers.capabilityTitle')} description={<Flex vertical gap={8}><Typography.Text>{t('transfers.capabilityDescription')}</Typography.Text><code className="capability-code" tabIndex={0}>{oneTimeCode.value}</code></Flex>} action={<Flex gap={8} wrap="wrap"><CopyButton value={oneTimeCode.value} /><Button type="primary" onClick={() => setOneTimeCode((current) => compareAndClearOneTimeCode(current, oneTimeCode))}>{t('transfers.confirmSaved')}</Button></Flex>} />}
+    {senderBusy && <Card className="sender-operation-banner" size="small" title={t('transfers.uploadInProgress')} extra={<Button onClick={() => setSenderOpen(true)}>{t('transfers.viewUpload')}</Button>}><TransferProgress status="running" receivedBytes={uploadTotals.received} totalBytes={uploadTotals.total} completedFiles={uploadTotals.files} totalFiles={uploadTotals.totalFiles} /></Card>}
     <Tabs className="routes-tabs" activeKey={activeTab} onChange={changeTab} items={[
       { key: 'routes', label: t('nav.routes'), children: <RoutePanel routes={routes.data ?? []} clients={clients} routesLoading={routes.loading} routesError={routes.error} clientsLoading={clientResource.loading} clientsError={clientResource.error} refreshRoutes={() => routes.refresh()} refreshClients={() => clientResource.refresh()} openCreate={() => setCreateOpen(true)} remove={(id) => void removeRoute(id)} busyID={busyID} /> },
       { key: 'transfers', label: t('transfers.tab'), children: transferPanel },
@@ -451,7 +551,7 @@ export default function RoutesPage() {
       </Form>
     </Drawer>
 
-    <Drawer title={activeShareID ? t('transfers.retryUpload') : t('transfers.sendFiles')} width={600} placement={screens.md ? 'right' : 'bottom'} height={screens.md ? undefined : '92dvh'} open={senderOpen} closable={!senderBusy} maskClosable={!senderBusy} keyboard={!senderBusy} onClose={() => { if (!senderOperationRef.current) setSenderOpen(false) }} extra={<Button type="primary" disabled={(queue.length === 0 && existingFiles.length === 0) || !selectedSenderServerID || senderBusy} loading={senderBusy} onClick={() => void startSending()}>{queue.some((item) => item.status === 'failed') ? t('transfers.retryUpload') : queue.length === 0 ? t('transfers.finalize') : t('transfers.uploadAndFinalize')}</Button>}>
+    <Drawer title={activeShareID ? t('transfers.retryUpload') : t('transfers.sendFiles')} width={600} placement={screens.md ? 'right' : 'bottom'} height={screens.md ? undefined : '92dvh'} open={senderOpen} maskClosable keyboard onClose={() => { invalidateResumeRequest(); setSenderOpen(false) }} extra={<Button type="primary" disabled={(queue.length === 0 && existingFiles.length === 0) || !selectedSenderServerID || senderBusy} loading={senderBusy} onClick={() => void startSending()}>{queue.some((item) => item.status === 'failed') ? t('transfers.retryUpload') : queue.length === 0 ? t('transfers.finalize') : t('transfers.uploadAndFinalize')}</Button>}>
       <TransferLimits limits={config.transfers} />
       {senderError && <Alert className="drawer-alert" type="error" showIcon message={senderError} action={<Button onClick={() => void startSending()}>{t('common.retry')}</Button>} />}
       {selectionError && <Alert className="drawer-alert" type="warning" showIcon message={selectionError} />}

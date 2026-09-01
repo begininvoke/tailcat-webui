@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import '../i18n'
 import { transferEvent } from '../hooks/useRuntimeEvents'
 import { APIError, api } from '../services/api'
-import RoutesPage, { compareAndClearOneTimeCode, initialTransferQueueState, transferQueueReducer, type QueuedFile } from './RoutesPage'
+import RoutesPage, { compareAndClearOneTimeCode, initialTransferQueueState, pruneTerminalSummaries, transferQueueReducer, type QueuedFile } from './RoutesPage'
 
 const { config } = vi.hoisted(() => ({ config: { auth_mode: 'demo' as const, unsafe_ssh: false, version: 'test', transfers: { max_file_bytes: 4, max_share_bytes: 8, max_job_bytes: 8, max_owner_bytes: 16, max_files_per_share: 2, workers: 4 as const, max_jobs_per_owner: 2, expiry_seconds: 86400, retention_seconds: 86400, upload_timeout_seconds: 1800 } } }))
 vi.mock('../app/auth', () => ({ useAuth: () => ({ config, user: { id: 'user-1' }, logout: vi.fn() }) }))
@@ -152,7 +152,7 @@ describe('RoutesPage transfers', () => {
   it('shows completed item downloads only from the authenticated same-origin endpoint', async () => {
     renderPage()
     await screen.findByRole('tab', { name: 'Transfers', selected: true })
-    expect(document.body.textContent).toContain('File progress unavailable')
+    await waitFor(() => expect(document.body.textContent).toContain('1 / 1 files'))
     const details = await screen.findAllByText('File details')
     const user = userEvent.setup()
     await user.click(details.at(-1)!)
@@ -306,8 +306,15 @@ describe('RoutesPage transfers', () => {
     await waitFor(() => expect(upload).toHaveBeenCalledTimes(1))
     await waitFor(() => expect((document.querySelector('input[type="file"]') as HTMLInputElement | null)?.disabled).toBe(true))
     expect((screen.getByRole('combobox', { name: 'Tailcat server' }) as HTMLInputElement).disabled).toBe(true)
-    expect(screen.queryByRole('button', { name: 'Close' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Close' })).not.toBeNull()
     expect((screen.getByLabelText('Delete first.txt') as HTMLButtonElement).disabled).toBe(true)
+    await user.keyboard('{Escape}')
+    await waitFor(() => expect(document.querySelector('.ant-drawer-open')).toBeNull())
+    expect(screen.getByText('Upload in progress')).not.toBeNull()
+    expect(screen.getByText('View upload')).not.toBeNull()
+    expect(document.body.textContent).toContain('tcs1.locked-code')
+    await user.click(screen.getByText('View upload'))
+    expect(await screen.findByLabelText('Delete first.txt')).not.toBeNull()
     const late = new File(['3'], 'late.txt')
     fireEvent.change(fileInput, { target: { files: [late] } })
     firstUpload.resolve({ id: 'file-first', virtual_path: 'first.txt', size: 1, mtime: timestamp, created_at: timestamp })
@@ -354,6 +361,52 @@ describe('RoutesPage transfers', () => {
     expect(document.body.textContent).toContain('3 B / 3 B · 1 / 1 files')
   })
 
+  it('ignores stale A/B resume results and commits only the newest staging history', async () => {
+    const shareB = { ...stagingShare, id: '7f4c51fa-8d36-4c39-b9e4-4af06fe6189c' }
+    vi.mocked(api.transferShares).mockResolvedValue([stagingShare, shareB])
+    const historyA = deferred<Array<{ id: string; virtual_path: string; size: number; mtime: string; created_at: string }>>()
+    const historyB = deferred<Array<{ id: string; virtual_path: string; size: number; mtime: string; created_at: string }>>()
+    vi.spyOn(api, 'transferShareFiles').mockImplementation((id) => id === stagingShare.id ? historyA.promise : historyB.promise)
+    renderPage()
+    const user = userEvent.setup()
+    const resumeButtons = await screen.findAllByText('Try again')
+    await user.click(resumeButtons[0]!)
+    await user.click(resumeButtons[1]!)
+    historyB.resolve([{ id: 'b', virtual_path: 'b.txt', size: 2, mtime: timestamp, created_at: timestamp }])
+    expect(await screen.findByText(/2 B \/ 2 B · 1 \/ 1 files/)).not.toBeNull()
+    historyA.resolve([{ id: 'a', virtual_path: 'a.txt', size: 1, mtime: timestamp, created_at: timestamp }])
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    expect(document.querySelector('.ant-drawer')?.textContent).toContain('2 B / 2 B · 1 / 1 files')
+    expect(document.querySelector('.ant-drawer')?.textContent).not.toContain('1 B / 1 B')
+  })
+
+  it('invalidates a pending resume when its share is deleted or the page unmounts', async () => {
+    vi.mocked(api.transferShares).mockResolvedValue([stagingShare])
+    const history = deferred<Array<{ id: string; virtual_path: string; size: number; mtime: string; created_at: string }>>()
+    vi.spyOn(api, 'transferShareFiles').mockReturnValue(history.promise)
+    vi.spyOn(api, 'deleteTransferShare').mockResolvedValue(undefined)
+    const view = renderPage()
+    const user = userEvent.setup()
+    await user.click(await screen.findByText('Try again'))
+    const deleteButton = document.querySelector('.transfer-history button.ant-btn-dangerous')
+    if (!(deleteButton instanceof HTMLButtonElement)) throw new Error('Delete button missing')
+    fireEvent.click(deleteButton)
+    const popup = await waitFor(() => Array.from(document.querySelectorAll('.ant-popconfirm')).find((node) => node.textContent?.includes('Delete this share?')))
+    await user.click(within(popup as HTMLElement).getByText('Delete'))
+    history.resolve([{ id: 'late', virtual_path: 'late.txt', size: 1, mtime: timestamp, created_at: timestamp }])
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    expect(document.querySelector('.ant-drawer-open')).toBeNull()
+    view.unmount()
+    vi.mocked(api.transferShares).mockResolvedValue([stagingShare])
+    const afterUnmount = deferred<Array<{ id: string; virtual_path: string; size: number; mtime: string; created_at: string }>>()
+    vi.mocked(api.transferShareFiles).mockReturnValue(afterUnmount.promise)
+    const secondView = renderPage()
+    await user.click(await screen.findByText('Try again'))
+    secondView.unmount()
+    afterUnmount.resolve([])
+    await Promise.resolve()
+  })
+
   it('finalizes a reconciled staging share with existing files and no new queue', async () => {
     vi.mocked(api.transferShares).mockResolvedValue([{ ...stagingShare, total_bytes: 3, file_count: 1 }])
     vi.spyOn(api, 'transferShareFiles').mockResolvedValue([{ id: 'existing-1', virtual_path: 'existing.txt', size: 3, mtime: timestamp, created_at: timestamp }])
@@ -374,13 +427,37 @@ describe('RoutesPage transfers', () => {
     await screen.findByRole('tab', { name: 'Transfers', selected: true })
     const items = vi.mocked(api.transferJobItems)
     await waitFor(() => expect(vi.mocked(api.transferJobs)).toHaveBeenCalledTimes(1))
-    expect(items).toHaveBeenCalledTimes(0)
+    await waitFor(() => expect(items).toHaveBeenCalledWith(completedJob.id))
+    items.mockClear()
     vi.useFakeTimers()
     const ids = [readyJob.id, runningJob.id, failedJob.id, completedJob.id]
     act(() => ids.forEach((id, index) => window.dispatchEvent(new CustomEvent(transferEvent, { detail: { version: 1, type: 'transfer', resource_kind: 'transfer', resource_id: id, operation_id: id, phase: 'running', sequence: index + 1, at: timestamp, payload: { job_id: id, status: 'running', received_bytes: index, total_bytes: 4, completed_files: 0, total_files: 1 } } }))))
     await act(async () => { vi.advanceTimersByTime(100); await Promise.resolve(); await Promise.resolve() })
     expect(vi.mocked(api.transferJobs)).toHaveBeenCalledTimes(2)
     expect(items).toHaveBeenCalledTimes(0)
+  })
+
+  it('loads and caches an initial completed job summary once, then prunes deleted IDs', async () => {
+    renderPage()
+    await waitFor(() => expect(api.transferJobItems).toHaveBeenCalledWith(completedJob.id))
+    await waitFor(() => expect(document.body.textContent).toContain('1 / 1 files'))
+    vi.mocked(api.transferJobItems).mockClear()
+    vi.useFakeTimers()
+    act(() => window.dispatchEvent(new CustomEvent(transferEvent, { detail: { version: 1, type: 'transfer', resource_kind: 'transfer', resource_id: runningJob.id, operation_id: runningJob.id, phase: 'running', sequence: 1, at: timestamp, payload: { job_id: runningJob.id, status: 'running', received_bytes: 2, total_bytes: 4 } } })))
+    await act(async () => { vi.advanceTimersByTime(100); await Promise.resolve(); await Promise.resolve() })
+    expect(api.transferJobItems).not.toHaveBeenCalled()
+    expect(pruneTerminalSummaries({ [completedJob.id]: { completed: 1, total: 1 }, gone: { completed: 2, total: 2 } }, [completedJob])).toEqual({ [completedJob.id]: { completed: 1, total: 1 } })
+  })
+
+  it('preserves terminal event file totals after durable live-patch cleanup', async () => {
+    vi.mocked(api.transferJobs).mockResolvedValueOnce([runningJob]).mockResolvedValue([{ ...runningJob, status: 'completed', received_bytes: 4, finished_at: timestamp }])
+    renderPage()
+    await screen.findByText('Running')
+    vi.useFakeTimers()
+    act(() => window.dispatchEvent(new CustomEvent(transferEvent, { detail: { version: 1, type: 'transfer', resource_kind: 'transfer', resource_id: runningJob.id, operation_id: runningJob.id, phase: 'ready', sequence: 1, at: timestamp, payload: { job_id: runningJob.id, status: 'completed', received_bytes: 4, total_bytes: 4, completed_files: 1, total_files: 2 } } })))
+    expect(document.body.textContent).toContain('1 / 2 files')
+    await act(async () => { vi.advanceTimersByTime(100); await Promise.resolve(); await Promise.resolve(); await Promise.resolve() })
+    expect(document.body.textContent).toContain('1 / 2 files')
   })
 
   it('refreshes only the selected Drawer item list once for an event burst', async () => {
@@ -419,7 +496,11 @@ describe('RoutesPage transfers', () => {
   })
 
   it('keeps selected item load failures explicit until retry succeeds', async () => {
-    vi.mocked(api.transferJobItems).mockRejectedValueOnce(new Error('offline')).mockResolvedValue([{ id: 'item-1', job_id: readyJob.id, virtual_path: 'retry.txt', size: 4, status: 'ready', received_bytes: 0, completed_blocks: 0, mtime: timestamp, created_at: timestamp, updated_at: timestamp }])
+    let readyAttempts = 0
+    vi.mocked(api.transferJobItems).mockImplementation(async (jobID) => {
+      if (jobID === readyJob.id && readyAttempts++ === 0) throw new Error('offline')
+      return [{ id: 'item-1', job_id: jobID, virtual_path: 'retry.txt', size: 4, status: jobID === completedJob.id ? 'completed' : 'ready', received_bytes: jobID === completedJob.id ? 4 : 0, completed_blocks: jobID === completedJob.id ? 1 : 0, mtime: timestamp, created_at: timestamp, updated_at: timestamp }]
+    })
     renderPage()
     const user = userEvent.setup()
     await user.click((await screen.findAllByText('File details'))[0]!)
@@ -470,5 +551,22 @@ describe('RoutesPage transfers', () => {
     expect(compareAndClearOneTimeCode(current, current)).toBeNull()
     await user.click(screen.getByText('I saved the code'))
     expect(screen.queryByText('tcs1.new-code')).toBeNull()
+  })
+
+  it('owns exactly one initially empty live region and announces only accepted status transitions', async () => {
+    renderPage()
+    await screen.findByRole('tab', { name: 'Transfers', selected: true })
+    const regions = document.querySelectorAll('.transfer-live-announcement[aria-live="polite"]')
+    expect(regions.length).toBe(1)
+    expect(regions[0]?.textContent).toBe('')
+    const emit = (sequence: number, status: 'running' | 'completed', received: number) => window.dispatchEvent(new CustomEvent(transferEvent, { detail: { version: 1, type: 'transfer', resource_kind: 'transfer', resource_id: readyJob.id, operation_id: readyJob.id, phase: status === 'running' ? 'running' : 'ready', sequence, at: timestamp, payload: { job_id: readyJob.id, status, received_bytes: received, total_bytes: 4 } } }))
+    act(() => emit(1, 'running', 1))
+    expect(regions[0]?.textContent).toBe('Receive job: Running')
+    act(() => emit(2, 'running', 2))
+    expect(regions[0]?.textContent).toBe('Receive job: Running')
+    act(() => emit(2, 'completed', 4))
+    expect(regions[0]?.textContent).toBe('Receive job: Running')
+    act(() => emit(3, 'completed', 4))
+    expect(regions[0]?.textContent).toBe('Receive job: Completed')
   })
 })
