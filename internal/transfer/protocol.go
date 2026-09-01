@@ -188,7 +188,7 @@ func (request *wireRequest) clear() {
 }
 
 func (request wireRequest) validate() error {
-	if request.Version != protocolVersion || request.ShareID == "" || len(request.Capability) == 0 {
+	if request.Version != protocolVersion || validateEntityID(request.ShareID) != nil || len(request.Capability) == 0 {
 		return protocolError(CodeProtocolInvalid, errors.New("invalid request envelope"))
 	}
 	switch request.Operation {
@@ -197,7 +197,7 @@ func (request wireRequest) validate() error {
 			return protocolError(CodeProtocolInvalid, errors.New("manifest request includes range fields"))
 		}
 	case operationRange:
-		if request.FileID == "" || request.Offset < 0 || request.Length <= 0 || request.Length > BlockSize || request.Offset > int64(^uint64(0)>>1)-request.Length {
+		if validateEntityID(request.FileID) != nil || request.Offset < 0 || request.Offset%BlockSize != 0 || request.Length <= 0 || request.Length > BlockSize || request.Offset > int64(^uint64(0)>>1)-request.Length {
 			return protocolError(CodeProtocolInvalid, errors.New("invalid range request"))
 		}
 	default:
@@ -289,9 +289,6 @@ func writeRequest(ctx context.Context, conn net.Conn, request wireRequest) error
 }
 
 func writeRequestWithHooks(ctx context.Context, conn net.Conn, request wireRequest, hooks requestWriteHooks) error {
-	if err := request.validate(); err != nil {
-		return err
-	}
 	body, err := encodeRequestBodyWithHooks(request, hooks)
 	if err != nil {
 		if protocolCode(err) == CodeLimitExceeded {
@@ -308,8 +305,15 @@ func encodeRequestBody(request wireRequest) ([]byte, error) {
 }
 
 func encodeRequestBodyWithHooks(request wireRequest, hooks requestWriteHooks) ([]byte, error) {
+	if err := request.validate(); err != nil {
+		return nil, err
+	}
 	parsed, err := parseCapabilityBytes(request.Capability)
 	if err != nil {
+		return nil, protocolError(CodeInvalidCapability, ErrInvalidCapability)
+	}
+	if parsed.shareID != request.ShareID {
+		parsed.clear()
 		return nil, protocolError(CodeInvalidCapability, ErrInvalidCapability)
 	}
 	parsed.clear()

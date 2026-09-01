@@ -67,7 +67,8 @@ func TestCapabilityCanonicalEncodingAndHash(t *testing.T) {
 }
 
 func TestRequestFrameIsStrictBoundedJSONV2(t *testing.T) {
-	valid := []byte(`{"version":2,"share_id":"share","capability":"cap","operation":"manifest","file_id":"","offset":0,"length":0}`)
+	shareID := uuid.NewV7().String()
+	valid := []byte(`{"version":2,"share_id":"` + shareID + `","capability":"cap","operation":"manifest","file_id":"","offset":0,"length":0}`)
 	request, err := decodeRequestFrame(valid)
 	if err != nil {
 		t.Fatalf("decodeRequestFrame: %v", err)
@@ -265,14 +266,14 @@ func TestWriteRequestUsesOneClearedBodyBackingAndPreflightsLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fileID := strings.Repeat(`"`, 512)
+	fileID := uuid.NewV7().String()
 	request := wireRequest{
 		Version: protocolVersion, ShareID: shareID, Capability: capabilityText(code),
 		Operation: operationRange, FileID: fileID, Length: 1,
 	}
 	defer request.clear()
 	expected := []byte(`{"version":2,"share_id":"` + shareID + `","capability":"` + code +
-		`","operation":"range","file_id":"` + strings.Repeat(`\"`, 512) + `","offset":0,"length":1}`)
+		`","operation":"range","file_id":"` + fileID + `","offset":0,"length":1}`)
 	defer clearSecret(expected)
 
 	var originalBacking []byte
@@ -312,11 +313,130 @@ func TestWriteRequestUsesOneClearedBodyBackingAndPreflightsLimit(t *testing.T) {
 			capabilityCopied = true
 		},
 	})
-	if protocolCode(err) != CodeLimitExceeded {
-		t.Fatalf("oversized write error = %v, want %s", err, CodeLimitExceeded)
+	if protocolCode(err) != CodeProtocolInvalid {
+		t.Fatalf("invalid write error = %v, want %s", err, CodeProtocolInvalid)
 	}
 	if capabilityCopied || len(connection.writes) != 0 {
-		t.Fatal("oversized request copied the capability or reached the connection")
+		t.Fatal("invalid request copied the capability or reached the connection")
+	}
+}
+
+func TestWriteRequestRejectsInvalidEnvelopeBeforeSecretCopyOrWrite(t *testing.T) {
+	shareID := uuid.NewV7().String()
+	fileID := uuid.NewV7().String()
+	code, _, err := newTestCapability(shareID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherShareID := uuid.NewV7().String()
+	otherCode, _, err := newTestCapability(otherShareID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := wireRequest{
+		Version: protocolVersion, ShareID: shareID, Capability: capabilityText(code),
+		Operation: operationRange, FileID: fileID, Length: 1,
+	}
+	defer base.clear()
+
+	for _, test := range []struct {
+		name   string
+		mutate func(*wireRequest)
+	}{
+		{name: "share control character", mutate: func(request *wireRequest) { request.ShareID = "share\x01" }},
+		{name: "share backslash and quote", mutate: func(request *wireRequest) { request.ShareID = `share\"\\id` }},
+		{name: "share non-v7", mutate: func(request *wireRequest) { request.ShareID = uuid.NewV4().String() }},
+		{name: "share uppercase", mutate: func(request *wireRequest) { request.ShareID = strings.ToUpper(shareID) }},
+		{name: "share padded", mutate: func(request *wireRequest) { request.ShareID = " " + shareID + " " }},
+		{name: "share overlong", mutate: func(request *wireRequest) { request.ShareID = strings.Repeat("a", maxBoundaryBytes+1) }},
+		{name: "file control character", mutate: func(request *wireRequest) { request.FileID = "file\x01" }},
+		{name: "file backslash and quote", mutate: func(request *wireRequest) { request.FileID = `file\"\\id` }},
+		{name: "file non-v7", mutate: func(request *wireRequest) { request.FileID = uuid.NewV4().String() }},
+		{name: "file uppercase", mutate: func(request *wireRequest) { request.FileID = strings.ToUpper(fileID) }},
+		{name: "file padded", mutate: func(request *wireRequest) { request.FileID = " " + fileID + " " }},
+		{name: "file overlong", mutate: func(request *wireRequest) { request.FileID = strings.Repeat("a", maxBoundaryBytes+1) }},
+		{name: "manifest file ID", mutate: func(request *wireRequest) {
+			request.Operation, request.Length = operationManifest, 0
+		}},
+		{name: "range empty file ID", mutate: func(request *wireRequest) { request.FileID = "" }},
+		{name: "manifest offset", mutate: func(request *wireRequest) {
+			request.Operation, request.FileID, request.Offset, request.Length = operationManifest, "", 1, 0
+		}},
+		{name: "manifest length", mutate: func(request *wireRequest) {
+			request.Operation, request.FileID, request.Length = operationManifest, "", 1
+		}},
+		{name: "range negative offset", mutate: func(request *wireRequest) { request.Offset = -1 }},
+		{name: "range unaligned offset", mutate: func(request *wireRequest) { request.Offset = 1 }},
+		{name: "range zero length", mutate: func(request *wireRequest) { request.Length = 0 }},
+		{name: "range excessive length", mutate: func(request *wireRequest) { request.Length = BlockSize + 1 }},
+		{name: "range overflow", mutate: func(request *wireRequest) {
+			maxInt64 := int64(^uint64(0) >> 1)
+			request.Offset, request.Length = maxInt64-maxInt64%BlockSize, BlockSize
+		}},
+		{name: "empty capability", mutate: func(request *wireRequest) { request.Capability.clear() }},
+		{name: "malformed capability", mutate: func(request *wireRequest) {
+			request.Capability.clear()
+			request.Capability = capabilityText("not-a-capability")
+		}},
+		{name: "capability for another share", mutate: func(request *wireRequest) {
+			request.Capability.clear()
+			request.Capability = capabilityText(otherCode)
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := base
+			request.Capability = bytes.Clone(base.Capability)
+			defer request.clear()
+			test.mutate(&request)
+			capabilityCopied := false
+			connection := new(retainingConn)
+			err := writeRequestWithHooks(t.Context(), connection, request, requestWriteHooks{
+				afterCapabilityCopy: func([]byte) { capabilityCopied = true },
+			})
+			if protocolCode(err) != CodeProtocolInvalid {
+				t.Fatalf("writeRequestWithHooks error = %v, want %s", err, CodeProtocolInvalid)
+			}
+			if capabilityCopied || len(connection.writes) != 0 {
+				t.Fatal("invalid request copied the capability or reached the connection")
+			}
+		})
+	}
+}
+
+func TestRequestEncodeStrictReadRoundTrip(t *testing.T) {
+	shareID := uuid.NewV7().String()
+	fileID := uuid.NewV7().String()
+	code, _, err := newTestCapability(shareID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, request := range []wireRequest{
+		{Version: protocolVersion, ShareID: shareID, Capability: capabilityText(code), Operation: operationManifest},
+		{Version: protocolVersion, ShareID: shareID, Capability: capabilityText(code), Operation: operationRange, FileID: fileID, Offset: BlockSize, Length: 1},
+	} {
+		t.Run(request.Operation, func(t *testing.T) {
+			defer request.clear()
+			client, server := net.Pipe()
+			writeErr := make(chan error, 1)
+			go func() {
+				defer client.Close()
+				writeErr <- writeRequest(t.Context(), client, request)
+			}()
+			decoded, err := readRequest(t.Context(), server)
+			server.Close()
+			defer decoded.clear()
+			if err != nil {
+				t.Fatalf("readRequest: %v", err)
+			}
+			if err := <-writeErr; err != nil {
+				t.Fatalf("writeRequest: %v", err)
+			}
+			if decoded.Version != request.Version || decoded.ShareID != request.ShareID ||
+				!bytes.Equal(decoded.Capability, request.Capability) || decoded.Operation != request.Operation ||
+				decoded.FileID != request.FileID || decoded.Offset != request.Offset || decoded.Length != request.Length {
+				t.Fatal("decoded request differs after strict round trip")
+			}
+		})
 	}
 }
 
