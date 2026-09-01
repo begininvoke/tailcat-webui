@@ -34,13 +34,14 @@ import (
 const ReservedTransferPort uint16 = 41641
 
 var (
-	ErrNotFound        = errors.New("tailnet resource not found")
-	ErrAlreadyRunning  = errors.New("Tailcat server is already running")
-	ErrNotRunning      = errors.New("Tailcat server is not running")
-	ErrConflict        = errors.New("tailnet resource conflicts with an existing resource")
-	ErrInvalid         = errors.New("invalid tailnet input")
-	ErrCapacity        = errors.New("tailnet capacity reached")
-	ErrRestartRequired = errors.New("Tailcat server must be stopped before changing this resource")
+	ErrNotFound           = errors.New("tailnet resource not found")
+	ErrAlreadyRunning     = errors.New("Tailcat server is already running")
+	ErrNotRunning         = errors.New("Tailcat server is not running")
+	ErrConflict           = errors.New("tailnet resource conflicts with an existing resource")
+	ErrInvalid            = errors.New("invalid tailnet input")
+	ErrCapacity           = errors.New("tailnet capacity reached")
+	ErrRestartRequired    = errors.New("Tailcat server must be stopped before changing this resource")
+	ErrRegistrationClosed = errors.New("Tailcat reserved handler registration is closed")
 )
 
 type RuntimePhase = events.RuntimePhase
@@ -201,6 +202,9 @@ type Manager struct {
 	eventsMu         sync.Mutex
 	userEvents       map[string]*events.Broker[events.Envelope]
 	eventSequences   map[string]uint64
+	reservedMu       sync.Mutex
+	reservedSealed   bool
+	reservedHandlers map[uint16]ReservedTCPHandlerFactory
 	mu               sync.RWMutex
 	quotaMu          sync.Mutex
 	opMu             sync.Mutex
@@ -228,7 +232,7 @@ func NewManager(db *ent.Client, box *secrets.Box, mappingPolicy, exitPolicy *Tar
 			allowedHosts[host] = struct{}{}
 		}
 	}
-	return &Manager{
+	manager := &Manager{
 		db: db, box: box, mappingPolicy: mappingPolicy, exitPolicy: exitPolicy, logger: logger,
 		allowedDERPHosts: allowedHosts,
 		unsafeSSH:        unsafeSSH,
@@ -236,8 +240,66 @@ func NewManager(db *ent.Client, box *secrets.Box, mappingPolicy, exitPolicy *Tar
 		recordEvent:      recorder,
 		userEvents:       make(map[string]*events.Broker[events.Envelope]),
 		eventSequences:   make(map[string]uint64),
+		reservedHandlers: make(map[uint16]ReservedTCPHandlerFactory),
 		servers:          make(map[string]*runningServer), clients: make(map[string]*runningClient), serverOps: make(map[string]*operationLock), clientOps: make(map[string]*operationLock), starting: make(map[string]string),
-	}, nil
+	}
+	diagnosticHandler := diagnostics.Handler{}
+	if err := manager.RegisterReservedTCPHandler(diagnostics.ReservedPort, func(serverID string) TCPHandler {
+		return func(runtimeCtx context.Context, connection net.Conn) {
+			defer connection.Close()
+			if err := diagnosticHandler.Serve(runtimeCtx, connection); err != nil {
+				manager.logger.DebugContext(runtimeCtx, "Tailcat diagnostic request ended", "server_id", serverID, "error", err)
+			}
+		}
+	}); err != nil {
+		return nil, err
+	}
+	return manager, nil
+}
+
+// RegisterReservedTCPHandler installs a per-server reserved service factory.
+// Registration is thread-safe and must finish before Restore or any server
+// start seals the runtime configuration.
+func (m *Manager) RegisterReservedTCPHandler(port uint16, factory ReservedTCPHandlerFactory) error {
+	if m == nil || port == 0 || factory == nil {
+		return ErrInvalid
+	}
+	m.reservedMu.Lock()
+	defer m.reservedMu.Unlock()
+	if m.reservedSealed {
+		return ErrRegistrationClosed
+	}
+	if m.reservedHandlers[port] != nil {
+		return ErrConflict
+	}
+	m.reservedHandlers[port] = factory
+	return nil
+}
+
+func (m *Manager) sealReservedHandlers() {
+	m.reservedMu.Lock()
+	m.reservedSealed = true
+	m.reservedMu.Unlock()
+}
+
+func (m *Manager) reservedHandlersForServer(serverID string) (map[uint16]TCPHandler, error) {
+	m.reservedMu.Lock()
+	m.reservedSealed = true
+	factories := make(map[uint16]ReservedTCPHandlerFactory, len(m.reservedHandlers))
+	for port, factory := range m.reservedHandlers {
+		factories[port] = factory
+	}
+	m.reservedMu.Unlock()
+
+	handlers := make(map[uint16]TCPHandler, len(factories))
+	for port, factory := range factories {
+		handler := factory(serverID)
+		if handler == nil {
+			return nil, fmt.Errorf("%w: nil handler for reserved Tailcat TCP port %d", ErrInvalid, port)
+		}
+		handlers[port] = handler
+	}
+	return handlers, nil
 }
 
 func (m *Manager) Events(userID string) *events.Broker[events.Envelope] {
@@ -263,6 +325,7 @@ func (m *Manager) ReleaseEvents(userID string) {
 }
 
 func (m *Manager) Restore(ctx context.Context) error {
+	m.sealReservedHandlers()
 	rows, err := m.db.TailServer.Query().Where(tailserver.DesiredRunning(true)).All(ctx)
 	if err != nil {
 		return fmt.Errorf("list desired Tailcat servers: %w", err)
@@ -298,6 +361,7 @@ func (m *Manager) Restore(ctx context.Context) error {
 }
 
 func (m *Manager) Close() error {
+	m.sealReservedHandlers()
 	m.mu.Lock()
 	servers := m.servers
 	clients := m.clients
@@ -404,6 +468,7 @@ func (m *Manager) CreateServer(ctx context.Context, userID string, in CreateServ
 }
 
 func (m *Manager) StartServer(ctx context.Context, userID, id string) (ServerView, error) {
+	m.sealReservedHandlers()
 	unlock := m.lockServerOperation(id)
 	defer unlock()
 	m.mu.Lock()
@@ -625,7 +690,7 @@ func (m *Manager) CreateMapping(ctx context.Context, userID, serverID string, in
 	if m.isServerRunning(serverID) {
 		return PortMappingView{}, ErrRestartRequired
 	}
-	if in.ListenPort == 0 || reservedTailcatPort(in.ListenPort) || len(strings.TrimSpace(in.Name)) == 0 || len(in.Name) > 80 || len(in.TargetHost) > 253 || (in.Kind != "tcp" && in.Kind != "no_auth_ssh") || (in.Kind == "no_auth_ssh" && !m.unsafeSSH) {
+	if in.ListenPort == 0 || m.isReservedTailcatPort(in.ListenPort) || len(strings.TrimSpace(in.Name)) == 0 || len(in.Name) > 80 || len(in.TargetHost) > 253 || (in.Kind != "tcp" && in.Kind != "no_auth_ssh") || (in.Kind == "no_auth_ssh" && !m.unsafeSSH) {
 		return PortMappingView{}, ErrInvalid
 	}
 	if in.Kind == "no_auth_ssh" && (!serverRow.AllowlistEnabled || len(serverRow.Edges.AllowedClients) == 0) {
@@ -1080,18 +1145,15 @@ func (m *Manager) buildServer(ctx context.Context, row *ent.TailServer) (ServerR
 		return nil, err
 	}
 	spec := ServerSpec{
-		DERPMapURL:          row.DerpMapURL,
-		TCPHandlers:         make(map[uint16]TCPHandler),
-		ReservedTCPHandlers: make(map[uint16]TCPHandler),
-		NoAuthSSHPorts:      make(map[uint16]struct{}),
+		DERPMapURL:     row.DerpMapURL,
+		TCPHandlers:    make(map[uint16]TCPHandler),
+		NoAuthSSHPorts: make(map[uint16]struct{}),
 	}
-	diagnosticHandler := diagnostics.Handler{}
-	spec.ReservedTCPHandlers[diagnostics.ReservedPort] = func(runtimeCtx context.Context, connection net.Conn) {
-		defer connection.Close()
-		if err := diagnosticHandler.Serve(runtimeCtx, connection); err != nil {
-			m.logger.DebugContext(runtimeCtx, "Tailcat diagnostic request ended", "server_id", row.ID, "error", err)
-		}
+	reservedHandlers, err := m.reservedHandlersForServer(row.ID)
+	if err != nil {
+		return nil, err
 	}
+	spec.ReservedTCPHandlers = reservedHandlers
 	if row.KeyMode == tailserver.KeyModeSaved {
 		plaintext, err := m.box.Open(row.KeyCipher, secretAD(row.UserID, row.ID))
 		if err != nil {
@@ -1124,7 +1186,7 @@ func (m *Manager) buildServer(ctx context.Context, row *ent.TailServer) (ServerR
 		spec.AllowedClients = append(spec.AllowedClients, key.NewNode().Public())
 	}
 	for _, mapping := range row.Edges.Mappings {
-		if reservedTailcatPort(mapping.ListenPort) {
+		if m.isReservedTailcatPort(mapping.ListenPort) {
 			return nil, fmt.Errorf("%w: Tailcat TCP port %d is reserved", ErrInvalid, mapping.ListenPort)
 		}
 		if mapping.Kind == portmapping.KindNoAuthSSH && (!m.unsafeSSH || !row.AllowlistEnabled || len(row.Edges.AllowedClients) == 0) {
@@ -1440,6 +1502,15 @@ func reservedTailcatPort(port uint16) bool {
 	return port == diagnostics.ReservedPort || port == ReservedTransferPort
 }
 
+func (m *Manager) isReservedTailcatPort(port uint16) bool {
+	if reservedTailcatPort(port) {
+		return true
+	}
+	m.reservedMu.Lock()
+	defer m.reservedMu.Unlock()
+	return m.reservedHandlers[port] != nil
+}
+
 func exitRuleView(row *ent.ExitRule) ExitRuleView {
 	return ExitRuleView{ID: row.ID, ServerID: row.ServerID, Prefix: row.Prefix, StartPort: row.StartPort, EndPort: row.EndPort, Enabled: row.Enabled, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt}
 }
@@ -1458,10 +1529,19 @@ func (m *Manager) publish(userID, kind, id string, phase RuntimePhase, message s
 }
 
 func (m *Manager) PublishDiagnostic(userID, runID string, phase events.RuntimePhase, payload diagnostics.EventPayload) {
-	m.publishEnvelope(userID, events.Envelope{
+	m.PublishEvent(userID, events.Envelope{
 		Version: 1, Type: "diagnostic", ResourceKind: "diagnostic", ResourceID: runID,
 		OperationID: runID, Phase: phase, Payload: payload,
 	})
+}
+
+// PublishEvent publishes a typed owner-scoped operation through the same
+// non-blocking broker and monotonic per-owner sequence as runtime events.
+func (m *Manager) PublishEvent(userID string, event events.Envelope) {
+	if event.Version == 0 {
+		event.Version = 1
+	}
+	m.publishEnvelope(userID, event)
 }
 
 func (m *Manager) publishEnvelope(userID string, event events.Envelope) {

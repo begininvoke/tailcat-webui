@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,6 +27,7 @@ import (
 )
 
 var errFakeRuntime = errors.New("fake runtime failure")
+var runtimeTestDatabaseSequence atomic.Uint64
 
 type fakeRuntimeFactory struct {
 	server      ServerRuntime
@@ -276,6 +278,68 @@ func TestManagerRegistersBoundedDiagnosticHandlerOnEveryServer(t *testing.T) {
 	}
 }
 
+func TestManagerRegistersReservedHandlerFactoriesBeforeStartAndBindsServerID(t *testing.T) {
+	factory := &fakeRuntimeFactory{}
+	manager, db, ownerID := newRuntimeFactoryTestManager(t, factory)
+	bound := make(chan string, 2)
+	if err := manager.RegisterReservedTCPHandler(ReservedTransferPort, func(serverID string) TCPHandler {
+		return func(_ context.Context, connection net.Conn) {
+			defer connection.Close()
+			bound <- serverID
+		}
+	}); err != nil {
+		t.Fatalf("RegisterReservedTCPHandler: %v", err)
+	}
+	servers := []*ent.TailServer{
+		db.TailServer.Create().SetUserID(ownerID).SetName("first").SetRegion("tailcat.dev").SaveX(t.Context()),
+		db.TailServer.Create().SetUserID(ownerID).SetName("second").SetRegion("tailcat.dev").SaveX(t.Context()),
+	}
+	for _, server := range servers {
+		factory.server = &fakeServerRuntime{token: "fake-token", public: "nodekey:fake-server"}
+		if _, err := manager.StartServer(t.Context(), ownerID, server.ID); err != nil {
+			t.Fatalf("StartServer %s: %v", server.ID, err)
+		}
+	}
+	if len(factory.serverSpecs) != 2 {
+		t.Fatalf("server specs = %d, want 2", len(factory.serverSpecs))
+	}
+	for index, spec := range factory.serverSpecs {
+		if spec.ReservedTCPHandlers[diagnostics.ReservedPort] == nil || spec.ReservedTCPHandlers[ReservedTransferPort] == nil {
+			t.Fatalf("reserved handlers = %+v", spec.ReservedTCPHandlers)
+		}
+		client, peer := net.Pipe()
+		go spec.ReservedTCPHandlers[ReservedTransferPort](t.Context(), peer)
+		_ = client.Close()
+		if got := <-bound; got != servers[index].ID {
+			t.Fatalf("bound server ID = %q, want %q", got, servers[index].ID)
+		}
+	}
+}
+
+func TestManagerRejectsNilCollidingAndLateReservedRegistration(t *testing.T) {
+	manager, _, _ := newRuntimeFactoryTestManager(t, &fakeRuntimeFactory{server: &fakeServerRuntime{}})
+	if err := manager.RegisterReservedTCPHandler(ReservedTransferPort, nil); err == nil {
+		t.Fatal("nil reserved handler factory was accepted")
+	}
+	factory := func(string) TCPHandler { return func(context.Context, net.Conn) {} }
+	if err := manager.RegisterReservedTCPHandler(diagnostics.ReservedPort, factory); err == nil {
+		t.Fatal("diagnostic handler collision was accepted")
+	}
+	if err := manager.RegisterReservedTCPHandler(ReservedTransferPort, factory); err != nil {
+		t.Fatalf("initial transfer registration: %v", err)
+	}
+	if err := manager.RegisterReservedTCPHandler(ReservedTransferPort, factory); err == nil {
+		t.Fatal("transfer handler collision was accepted")
+	}
+
+	if err := manager.Restore(t.Context()); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	if err := manager.RegisterReservedTCPHandler(ReservedTransferPort, factory); !errors.Is(err, ErrRegistrationClosed) {
+		t.Fatal("post-Restore reserved registration was accepted")
+	}
+}
+
 func TestManagerRejectsReservedPortMappingsAtCreateAndRuntime(t *testing.T) {
 	for _, port := range []uint16{diagnostics.ReservedPort, ReservedTransferPort} {
 		t.Run(fmt.Sprintf("port-%d", port), func(t *testing.T) {
@@ -516,7 +580,7 @@ func TestManagerClientCloseUsesRuntimeFactory(t *testing.T) {
 
 func newRuntimeFactoryTestManager(t *testing.T, factory RuntimeFactory) (*Manager, *ent.Client, string) {
 	t.Helper()
-	db := enttest.Open(t, "sqlite3", "file:"+t.Name()+"?mode=memory&cache=shared&_pragma=foreign_keys(1)")
+	db := enttest.Open(t, "sqlite3", fmt.Sprintf("file:%s-%d?mode=memory&cache=shared&_pragma=foreign_keys(1)", t.Name(), runtimeTestDatabaseSequence.Add(1)))
 	owner := db.User.Create().SetIssuer("test").SetSubject(t.Name()).SaveX(t.Context())
 	box, err := secrets.NewBox(bytes.Repeat([]byte{7}, 32))
 	if err != nil {

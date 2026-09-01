@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"testing"
 )
 
@@ -55,6 +56,24 @@ func TestDiagnosticCloseFailureIsSurfacedAfterTailcatClose(t *testing.T) {
 	}
 }
 
+func TestTransferServiceAndStorageCloseBeforeTailcatRuntime(t *testing.T) {
+	order := make([]string, 0, 5)
+	err := closeTransferServicesBeforeTailnet(
+		closeFunc(func() { order = append(order, "publish") }),
+		closeErrorFunc(func() error { order = append(order, "transfer"); return nil }),
+		closeErrorFunc(func() error { order = append(order, "storage"); return nil }),
+		closeErrorFunc(func() error { order = append(order, "diagnostics"); return nil }),
+		closeErrorFunc(func() error { order = append(order, "tailnet"); return nil }),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"publish", "transfer", "storage", "diagnostics", "tailnet"}
+	if !slices.Equal(order, want) {
+		t.Fatalf("close order = %v, want %v", order, want)
+	}
+}
+
 type closeFunc func()
 
 func (f closeFunc) Close() { f() }
@@ -76,7 +95,7 @@ func TestDataDirectoryAllowsOnlyOneProcess(t *testing.T) {
 	}
 	defer first.Close()
 	if runtime.GOOS != "windows" {
-		for _, path := range []string{dataDir, filepath.Join(dataDir, "tailcat-webui.db"), filepath.Join(dataDir, "tailcat-webui.lock")} {
+		for _, path := range []string{dataDir, filepath.Join(dataDir, "tailcat-webui.db"), filepath.Join(dataDir, "tailcat-webui.lock"), filepath.Join(dataDir, "transfers")} {
 			info, statErr := os.Stat(path)
 			if statErr != nil {
 				t.Fatal(statErr)
@@ -92,5 +111,31 @@ func TestDataDirectoryAllowsOnlyOneProcess(t *testing.T) {
 	}
 	if _, err := New(t.Context(), logger); err == nil {
 		t.Fatal("second process acquired the same data-directory lock")
+	}
+}
+
+func TestDemoSecretKeyIsPrivateAndStableAcrossRestart(t *testing.T) {
+	directory := t.TempDir()
+	first, err := loadOrCreateDemoSecretKey(directory)
+	if err != nil {
+		t.Fatalf("create demo key: %v", err)
+	}
+	second, err := loadOrCreateDemoSecretKey(directory)
+	if err != nil {
+		t.Fatalf("reload demo key: %v", err)
+	}
+	if !slices.Equal(first, second) || len(first) != 32 {
+		t.Fatal("demo key did not remain stable")
+	}
+	clear(first)
+	clear(second)
+	if runtime.GOOS != "windows" {
+		info, err := os.Lstat(filepath.Join(directory, ".tailcat-webui-demo-key"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0o600 {
+			t.Fatalf("demo key permissions = %o, want 600", info.Mode().Perm())
+		}
 	}
 }

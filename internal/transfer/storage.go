@@ -94,6 +94,14 @@ type QuotaUsage struct {
 	ShareFiles int
 }
 
+// StoredIdentity identifies one metadata-retained file without exposing a host
+// path. ScopeID is an outgoing share ID or incoming job ID.
+type StoredIdentity struct {
+	OwnerID     string
+	ScopeID     string
+	StorageName string
+}
+
 type storageHooks struct {
 	syncFile                      func(*os.File) error
 	syncDir                       func(*os.File) error
@@ -918,6 +926,136 @@ func (s *Storage) CleanupTemps(ctx context.Context, ownerID, shareID string) (re
 		}
 		removed++
 		directoryDirty = true
+	}
+	return removed, nil
+}
+
+// CleanupAllTemps safely scans validated owner/scope directories and removes
+// orphan temporary aliases, including scopes whose metadata transaction never
+// committed. It never exposes a host path to callers.
+func (s *Storage) CleanupAllTemps(ctx context.Context) (int, error) {
+	operationCtx, end, err := s.beginOperation(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer end()
+	owners, err := readRootDirectory(s.root)
+	if err != nil {
+		return 0, fmt.Errorf("scan temporary-file owners: %w", err)
+	}
+	type scope struct{ ownerID, scopeID string }
+	scopes := make([]scope, 0)
+	for _, owner := range owners {
+		if err := contextError(operationCtx); err != nil {
+			return 0, err
+		}
+		if err := validateEntityID(owner.Name()); err != nil {
+			return 0, fmt.Errorf("scan temporary-file owner: %w", err)
+		}
+		ownerRoot, err := openChildDirectory(s.root, owner.Name(), false)
+		if err != nil {
+			return 0, err
+		}
+		entries, readErr := readRootDirectory(ownerRoot)
+		closeErr := ownerRoot.Close()
+		if readErr != nil || closeErr != nil {
+			return 0, errors.Join(readErr, closeErr)
+		}
+		for _, entry := range entries {
+			if err := validateEntityID(entry.Name()); err != nil {
+				return 0, fmt.Errorf("scan temporary-file scope: %w", err)
+			}
+			scopes = append(scopes, scope{ownerID: owner.Name(), scopeID: entry.Name()})
+		}
+	}
+	removed := 0
+	for _, scope := range scopes {
+		count, err := s.CleanupTemps(operationCtx, scope.ownerID, scope.scopeID)
+		removed += count
+		if err != nil {
+			return removed, err
+		}
+	}
+	return removed, nil
+}
+
+// CleanupOrphans removes committed random-name files absent from the supplied
+// authoritative metadata identities. It is intended for startup, before new
+// upload or receive transactions can be admitted.
+func (s *Storage) CleanupOrphans(ctx context.Context, retained []StoredIdentity) (int, error) {
+	if _, err := s.CleanupAllTemps(ctx); err != nil {
+		return 0, err
+	}
+	keep := make(map[quotaKey]struct{}, len(retained))
+	for _, identity := range retained {
+		if validateEntityID(identity.OwnerID) != nil || validateEntityID(identity.ScopeID) != nil || validateStorageName(identity.StorageName) != nil {
+			return 0, ErrInvalidPath
+		}
+		keep[quotaKey{ownerID: identity.OwnerID, shareID: identity.ScopeID, storageName: identity.StorageName}] = struct{}{}
+	}
+	operationCtx, end, err := s.beginOperation(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer end()
+	owners, err := readRootDirectory(s.root)
+	if err != nil {
+		return 0, err
+	}
+	type orphan struct{ ownerID, scopeID, storageName string }
+	orphans := make([]orphan, 0)
+	for _, owner := range owners {
+		if err := contextError(operationCtx); err != nil {
+			return 0, err
+		}
+		if validateEntityID(owner.Name()) != nil {
+			return 0, ErrInvalidPath
+		}
+		ownerRoot, err := openChildDirectory(s.root, owner.Name(), false)
+		if err != nil {
+			return 0, err
+		}
+		scopes, readErr := readRootDirectory(ownerRoot)
+		closeErr := ownerRoot.Close()
+		if readErr != nil || closeErr != nil {
+			return 0, errors.Join(readErr, closeErr)
+		}
+		for _, scope := range scopes {
+			if err := contextError(operationCtx); err != nil {
+				return 0, err
+			}
+			if validateEntityID(scope.Name()) != nil {
+				return 0, ErrInvalidPath
+			}
+			scopeRoot, err := s.openShare(owner.Name(), scope.Name(), false)
+			if err != nil {
+				return 0, err
+			}
+			entries, readErr := readRootDirectory(scopeRoot)
+			closeErr := scopeRoot.Close()
+			if readErr != nil || closeErr != nil {
+				return 0, errors.Join(readErr, closeErr)
+			}
+			for _, entry := range entries {
+				if isTempName(entry.Name()) {
+					continue
+				}
+				if validateStorageName(entry.Name()) != nil {
+					return 0, ErrInvalidPath
+				}
+				key := quotaKey{ownerID: owner.Name(), shareID: scope.Name(), storageName: entry.Name()}
+				if _, retained := keep[key]; !retained {
+					orphans = append(orphans, orphan{ownerID: owner.Name(), scopeID: scope.Name(), storageName: entry.Name()})
+				}
+			}
+		}
+	}
+	removed := 0
+	for _, orphan := range orphans {
+		if err := s.Remove(operationCtx, orphan.ownerID, orphan.scopeID, orphan.storageName); err != nil {
+			return removed, err
+		}
+		removed++
 	}
 	return removed, nil
 }

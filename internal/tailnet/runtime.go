@@ -33,6 +33,10 @@ type ClientRuntime interface {
 
 type TCPHandler func(context.Context, net.Conn)
 
+// ReservedTCPHandlerFactory binds one pre-registered reserved service to the
+// immutable ID of each server runtime built by Manager.
+type ReservedTCPHandlerFactory func(serverID string) TCPHandler
+
 type ServerSpec struct {
 	Key                 key.NodePrivate
 	Region              *tailcfg.DERPRegion

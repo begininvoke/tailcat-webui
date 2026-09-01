@@ -35,18 +35,23 @@ func TestDiagnosticEventsShareOwnerRuntimeSequence(t *testing.T) {
 		userEvents:     make(map[string]*events.Broker[events.Envelope]),
 		eventSequences: make(map[string]uint64),
 	}
-	stream, unsubscribe := manager.Events("owner-1").Subscribe(2)
+	stream, unsubscribe := manager.Events("owner-1").Subscribe(3)
 	defer unsubscribe()
 	manager.publish("owner-1", "client", "client-1", RuntimePhaseReady, "")
 	payload := diagnostics.EventPayload{ClientID: "client-1", Kind: diagnostics.RunKindPing, Status: diagnostics.RunStatusRunning, Progress: 40}
 	manager.PublishDiagnostic("owner-1", "run-1", RuntimePhaseRunning, payload)
+	transferPayload := map[string]any{"job_id": "job-1", "status": "running"}
+	manager.PublishEvent("owner-1", events.Envelope{Type: "transfer", ResourceKind: "transfer", ResourceID: "job-1", OperationID: "job-1", Phase: RuntimePhaseRunning, Payload: transferPayload})
 
-	first, second := <-stream, <-stream
-	if first.Sequence != 1 || second.Sequence != 2 {
-		t.Fatalf("event sequences = %d, %d", first.Sequence, second.Sequence)
+	first, second, third := <-stream, <-stream, <-stream
+	if first.Sequence != 1 || second.Sequence != 2 || third.Sequence != 3 {
+		t.Fatalf("event sequences = %d, %d, %d", first.Sequence, second.Sequence, third.Sequence)
 	}
 	if second.Type != "diagnostic" || second.ResourceKind != "diagnostic" || second.ResourceID != "run-1" || second.OperationID != "run-1" || second.Phase != RuntimePhaseRunning || !reflect.DeepEqual(second.Payload, payload) {
 		t.Fatalf("diagnostic event = %+v", second)
+	}
+	if third.Version != 1 || third.Type != "transfer" || third.ResourceID != "job-1" || !reflect.DeepEqual(third.Payload, transferPayload) {
+		t.Fatalf("transfer event = %+v", third)
 	}
 }
 
