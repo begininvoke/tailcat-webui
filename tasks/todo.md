@@ -36,6 +36,6 @@
 - [x] Transfer share/job/file/item schemas and migrations
 - [x] Rooted staging storage and BLAKE3 block manifests
 - [x] Capability protocol, resume runner and reserved Tailcat service
-- [ ] Share/transfer management API, quotas, cleanup and OpenAPI
+- [x] Share/transfer management API, quotas, cleanup and OpenAPI
 - [ ] Transfer UI with multi-file upload, progress, retry and downloads
 - [ ] Browser QA, security review, release verification and documentation
