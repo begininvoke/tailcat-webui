@@ -125,14 +125,22 @@ func New(ctx context.Context, logger *slog.Logger) (*App, error) {
 		db.Close()
 		return nil, err
 	}
-	transferStorage, err := transfer.NewStorage(filepath.Join(cfg.DataDir, "transfers"))
+	transferConfig := cfg.EffectiveTransfer()
+	transferStorage, err := transfer.NewStorageWithLimits(filepath.Join(cfg.DataDir, "transfers"), transfer.StorageLimits{
+		MaxFileBytes: transferConfig.MaxFileBytes, MaxScopeBytes: max(transferConfig.MaxShareBytes, transferConfig.MaxJobBytes),
+		MaxOwnerBytes: transferConfig.MaxOwnerBytes, MaxFilesPerScope: transferConfig.MaxFilesPerShare,
+	})
 	if err != nil {
 		diagnosticService.Close()
 		manager.Close()
 		db.Close()
 		return nil, err
 	}
-	transferService, err := transfer.NewService(ctx, db, transferStorage, box, manager, auditService, manager, logger)
+	transferService, err := transfer.NewServiceWithLimits(ctx, db, transferStorage, box, manager, auditService, manager, logger, transfer.ServiceLimits{
+		MaxFileBytes: transferConfig.MaxFileBytes, MaxShareBytes: transferConfig.MaxShareBytes,
+		MaxJobBytes: transferConfig.MaxJobBytes, MaxFilesPerShare: transferConfig.MaxFilesPerShare,
+		Workers: transferConfig.Workers, MaxJobsPerOwner: transferConfig.MaxJobsPerOwner, Expiry: transferConfig.Expiry,
+	})
 	if err != nil {
 		transferStorage.Close()
 		diagnosticService.Close()
@@ -169,7 +177,7 @@ func New(ctx context.Context, logger *slog.Logger) (*App, error) {
 		db.Close()
 		return nil, fmt.Errorf("open embedded web assets: %w", err)
 	}
-	api, err := httpapi.New(db, authService, auditService, diagnosticService, manager, publisher, cfg, logger, web)
+	api, err := httpapi.New(db, authService, auditService, diagnosticService, manager, publisher, transferService, cfg, logger, web)
 	if err != nil {
 		publisher.Close()
 		transferService.Close()

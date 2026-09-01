@@ -58,13 +58,16 @@ type CreateShareInput struct {
 }
 
 type ShareView struct {
-	ID         string    `json:"id"`
-	ServerID   string    `json:"server_id"`
-	Status     string    `json:"status"`
-	TotalBytes int64     `json:"total_bytes"`
-	FileCount  int       `json:"file_count"`
-	ExpiresAt  time.Time `json:"expires_at"`
-	Capability string    `json:"capability,omitempty"`
+	ID         string     `json:"id"`
+	ServerID   string     `json:"server_id"`
+	Status     string     `json:"status"`
+	TotalBytes int64      `json:"total_bytes"`
+	FileCount  int        `json:"file_count"`
+	ExpiresAt  time.Time  `json:"expires_at"`
+	Capability string     `json:"capability,omitempty"`
+	ReadyAt    *time.Time `json:"ready_at,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
 }
 
 type StageFileInput struct {
@@ -78,6 +81,32 @@ type FileView struct {
 	VirtualPath string    `json:"virtual_path"`
 	Size        int64     `json:"size"`
 	MTime       time.Time `json:"mtime"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+type ServiceLimits struct {
+	MaxFileBytes     int64
+	MaxShareBytes    int64
+	MaxJobBytes      int64
+	MaxFilesPerShare int
+	Workers          int
+	MaxJobsPerOwner  int
+	Expiry           time.Duration
+}
+
+func DefaultServiceLimits() ServiceLimits {
+	return ServiceLimits{
+		MaxFileBytes: MaxFileBytes, MaxShareBytes: MaxShareBytes, MaxJobBytes: MaxShareBytes,
+		MaxFilesPerShare: MaxFilesPerShare, Workers: 4, MaxJobsPerOwner: 2,
+		Expiry: defaultTransferExpiry,
+	}
+}
+
+func (s *Service) maxJobsPerOwner() int {
+	if s.limits.MaxJobsPerOwner == 0 {
+		return maxActiveJobsPerOwner
+	}
+	return s.limits.MaxJobsPerOwner
 }
 
 type generatedCapability struct {
@@ -105,6 +134,20 @@ func (s *Service) ListShares(ctx context.Context, ownerID string) ([]ShareView, 
 	return views, nil
 }
 
+func (s *Service) Share(ctx context.Context, ownerID, shareID string) (ShareView, error) {
+	if err := s.ensureOpen(); err != nil {
+		return ShareView{}, err
+	}
+	row, err := s.db.TransferShare.Query().Where(transfershare.IDEQ(shareID), transfershare.UserIDEQ(ownerID)).Only(ctx)
+	if ent.IsNotFound(err) {
+		return ShareView{}, ErrNotFound
+	}
+	if err != nil {
+		return ShareView{}, fmt.Errorf("load transfer share: %w", err)
+	}
+	return shareView(row), nil
+}
+
 func (s *Service) ListShareFiles(ctx context.Context, ownerID, shareID string) ([]FileView, error) {
 	if err := s.ensureOpen(); err != nil {
 		return nil, err
@@ -120,7 +163,7 @@ func (s *Service) ListShareFiles(ctx context.Context, ownerID, shareID string) (
 	}
 	views := make([]FileView, len(rows))
 	for index, row := range rows {
-		views[index] = FileView{ID: row.ID, VirtualPath: row.VirtualPath, Size: row.SizeBytes, MTime: row.Mtime.UTC()}
+		views[index] = fileView(row)
 	}
 	return views, nil
 }
@@ -210,6 +253,7 @@ type Service struct {
 	auditor   AuditRecorder
 	publisher EventPublisher
 	logger    *slog.Logger
+	limits    ServiceLimits
 
 	compareCapability func([]byte, []byte) int
 	progressNow       func() time.Time
@@ -241,15 +285,22 @@ type Service struct {
 }
 
 func NewService(ctx context.Context, db *ent.Client, storage *Storage, box *secrets.Box, dialer ClientDialer, auditor AuditRecorder, publisher EventPublisher, logger *slog.Logger) (*Service, error) {
+	return NewServiceWithLimits(ctx, db, storage, box, dialer, auditor, publisher, logger, DefaultServiceLimits())
+}
+
+func NewServiceWithLimits(ctx context.Context, db *ent.Client, storage *Storage, box *secrets.Box, dialer ClientDialer, auditor AuditRecorder, publisher EventPublisher, logger *slog.Logger, limits ServiceLimits) (*Service, error) {
 	if db == nil || storage == nil || box == nil || dialer == nil || auditor == nil || publisher == nil || logger == nil {
 		return nil, errors.New("transfer service: nil dependency")
+	}
+	if limits.MaxFileBytes <= 0 || limits.MaxFileBytes > MaxFileBytes || limits.MaxShareBytes < limits.MaxFileBytes || limits.MaxShareBytes > MaxShareBytes || limits.MaxJobBytes < limits.MaxFileBytes || limits.MaxJobBytes > MaxShareBytes || limits.MaxFilesPerShare <= 0 || limits.MaxFilesPerShare > MaxFilesPerShare || limits.Workers <= 0 || limits.Workers > 4 || limits.MaxJobsPerOwner <= 0 || limits.MaxJobsPerOwner > 2 || limits.Expiry <= 0 || limits.Expiry > defaultTransferExpiry {
+		return nil, errors.New("transfer service: invalid limits")
 	}
 	if !box.Available() {
 		return nil, secrets.ErrUnavailable
 	}
 	queueCtx, cancelQueue := context.WithCancelCause(context.Background())
 	service := &Service{
-		db: db, storage: storage, box: box, dialer: dialer, auditor: auditor, publisher: publisher, logger: logger,
+		db: db, storage: storage, box: box, dialer: dialer, auditor: auditor, publisher: publisher, logger: logger, limits: limits,
 		compareCapability: subtle.ConstantTimeCompare,
 		progressNow:       time.Now,
 		activeJobs:        make(map[string]*activeJob), ownerJobs: make(map[string]int), shareGates: make(map[string]*shareGate), shareOps: make(map[string]*shareOperationLock),
@@ -283,9 +334,9 @@ func (s *Service) CreateShare(ctx context.Context, ownerID string, input CreateS
 	now := time.Now()
 	expiresAt := input.ExpiresAt
 	if expiresAt.IsZero() {
-		expiresAt = now.Add(defaultTransferExpiry)
+		expiresAt = now.Add(s.limits.Expiry)
 	}
-	if !expiresAt.After(now) || expiresAt.After(now.Add(defaultTransferExpiry)) {
+	if !expiresAt.After(now) || expiresAt.After(now.Add(s.limits.Expiry)) {
 		return ShareView{}, fmt.Errorf("%w: share expiry", ErrInvalidState)
 	}
 	shareID := newEntityID()
@@ -332,7 +383,7 @@ func (s *Service) StageFile(ctx context.Context, ownerID, shareID string, input 
 	if err := s.ensureOpen(); err != nil {
 		return FileView{}, err
 	}
-	if input.Body == nil || input.Size < 0 || input.Size > MaxFileBytes || validateVirtualPath(input.VirtualPath) != nil {
+	if input.Body == nil || input.Size < 0 || input.Size > s.limits.MaxFileBytes || validateVirtualPath(input.VirtualPath) != nil {
 		if input.Body != nil {
 			_ = input.Body.Close()
 		}
@@ -351,7 +402,7 @@ func (s *Service) StageFile(ctx context.Context, ownerID, shareID string, input 
 		_ = input.Body.Close()
 		return FileView{}, ErrInvalidState
 	}
-	if !share.ExpiresAt.After(time.Now()) || share.FileCount >= MaxFilesPerShare || input.Size > MaxShareBytes-share.TotalBytes {
+	if !share.ExpiresAt.After(time.Now()) || share.FileCount >= s.limits.MaxFilesPerShare || input.Size > s.limits.MaxShareBytes-share.TotalBytes {
 		_ = input.Body.Close()
 		return FileView{}, fmt.Errorf("%w: share limit or expiry", ErrInvalidState)
 	}
@@ -401,7 +452,7 @@ func (s *Service) StageFile(ctx context.Context, ownerID, shareID string, input 
 	if err != nil {
 		return FileView{}, fmt.Errorf("recheck staging transfer share: %w", err)
 	}
-	if !current.ExpiresAt.After(time.Now()) || current.FileCount >= MaxFilesPerShare || manifest.Size() > MaxShareBytes-current.TotalBytes {
+	if !current.ExpiresAt.After(time.Now()) || current.FileCount >= s.limits.MaxFilesPerShare || manifest.Size() > s.limits.MaxShareBytes-current.TotalBytes {
 		return FileView{}, fmt.Errorf("%w: share limit or expiry", ErrInvalidState)
 	}
 	row, err := tx.ShareFile.Create().
@@ -431,7 +482,7 @@ func (s *Service) StageFile(ctx context.Context, ownerID, shareID string, input 
 	}
 	committed = true
 	cleanup = false
-	return FileView{ID: row.ID, VirtualPath: row.VirtualPath, Size: row.SizeBytes, MTime: row.Mtime.UTC()}, nil
+	return fileView(row), nil
 }
 
 func (s *Service) FinalizeShare(ctx context.Context, ownerID, shareID string) (ShareView, error) {
@@ -655,10 +706,19 @@ func jobCapabilityAAD(ownerID, jobID string) string {
 }
 
 func shareView(row *ent.TransferShare) ShareView {
+	var readyAt *time.Time
+	if row.ReadyAt != nil {
+		readyAt = new(row.ReadyAt.UTC())
+	}
 	return ShareView{
 		ID: row.ID, ServerID: row.ServerID, Status: string(row.Status), TotalBytes: row.TotalBytes,
-		FileCount: row.FileCount, ExpiresAt: row.ExpiresAt.UTC(),
+		FileCount: row.FileCount, ExpiresAt: row.ExpiresAt.UTC(), ReadyAt: readyAt,
+		CreatedAt: row.CreatedAt.UTC(), UpdatedAt: row.UpdatedAt.UTC(),
 	}
+}
+
+func fileView(row *ent.ShareFile) FileView {
+	return FileView{ID: row.ID, VirtualPath: row.VirtualPath, Size: row.SizeBytes, MTime: row.Mtime.UTC(), CreatedAt: row.CreatedAt.UTC()}
 }
 
 func (s *Service) recordLifecycle(ctx context.Context, ownerID, action, resourceKind, resourceID, outcome string) error {

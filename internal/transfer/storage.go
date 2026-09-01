@@ -94,6 +94,17 @@ type QuotaUsage struct {
 	ShareFiles int
 }
 
+type StorageLimits struct {
+	MaxFileBytes     int64
+	MaxScopeBytes    int64
+	MaxOwnerBytes    int64
+	MaxFilesPerScope int
+}
+
+func DefaultStorageLimits() StorageLimits {
+	return StorageLimits{MaxFileBytes: MaxFileBytes, MaxScopeBytes: MaxShareBytes, MaxOwnerBytes: MaxOwnerBytes, MaxFilesPerScope: MaxFilesPerShare}
+}
+
 // StoredIdentity identifies one metadata-retained file without exposing a host
 // path. ScopeID is an outgoing share ID or incoming job ID.
 type StoredIdentity struct {
@@ -125,7 +136,8 @@ type constructorHooks struct {
 // Storage owns all filesystem path construction for staged transfer bytes.
 // Callers provide only canonical entity IDs and Storage-generated basenames.
 type Storage struct {
-	root *os.Root
+	root   *os.Root
+	limits StorageLimits
 
 	quota       *quotaLedger
 	sharedQuota *sharedQuotaLedger
@@ -204,9 +216,20 @@ func NewStorage(rootPath string) (*Storage, error) {
 	return newStorage(rootPath, constructorHooks{})
 }
 
+func NewStorageWithLimits(rootPath string, limits StorageLimits) (*Storage, error) {
+	return newStorageWithLimits(rootPath, constructorHooks{}, limits)
+}
+
 func newStorage(rootPath string, constructorHooks constructorHooks) (*Storage, error) {
+	return newStorageWithLimits(rootPath, constructorHooks, DefaultStorageLimits())
+}
+
+func newStorageWithLimits(rootPath string, constructorHooks constructorHooks, limits StorageLimits) (*Storage, error) {
 	if rootPath == "" || strings.ContainsRune(rootPath, 0) {
 		return nil, fmt.Errorf("%w: staging root is required", ErrInvalidPath)
+	}
+	if limits.MaxFileBytes <= 0 || limits.MaxFileBytes > MaxFileBytes || limits.MaxScopeBytes < limits.MaxFileBytes || limits.MaxScopeBytes > MaxShareBytes || limits.MaxOwnerBytes < limits.MaxScopeBytes || limits.MaxOwnerBytes > MaxOwnerBytes || limits.MaxFilesPerScope <= 0 || limits.MaxFilesPerScope > MaxFilesPerShare {
+		return nil, fmt.Errorf("%w: invalid storage limits", ErrInvalidPath)
 	}
 	info, err := os.Lstat(rootPath)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -247,6 +270,7 @@ func newStorage(rootPath string, constructorHooks constructorHooks) (*Storage, e
 	lifecycleCtx, cancelLifecycle := context.WithCancelCause(context.Background())
 	storage := &Storage{
 		root:            root,
+		limits:          limits,
 		random:          rand.Reader,
 		quota:           &sharedQuota.quota,
 		sharedQuota:     sharedQuota,
@@ -489,7 +513,7 @@ func (s *Storage) reserve(ctx context.Context, ownerID, shareID string, size int
 	if size < 0 {
 		return nil, fmt.Errorf("%w: negative file size", ErrInvalidPath)
 	}
-	if size > MaxFileBytes {
+	if size > s.limits.MaxFileBytes {
 		return nil, ErrFileTooLarge
 	}
 	shareRoot, err := s.openShare(ownerID, shareID, true)
@@ -512,7 +536,7 @@ func (s *Storage) reserve(ctx context.Context, ownerID, shareID string, size int
 		share = &shareUsage{}
 		owner.shares[shareID] = share
 	}
-	if size > MaxOwnerBytes-owner.bytes || size > MaxShareBytes-share.bytes || share.files >= MaxFilesPerShare {
+	if size > s.limits.MaxOwnerBytes-owner.bytes || size > s.limits.MaxScopeBytes-share.bytes || share.files >= s.limits.MaxFilesPerScope {
 		return nil, ErrQuotaExceeded
 	}
 	owner.bytes += size
@@ -1405,10 +1429,10 @@ func (s *Storage) rebuildShareQuota(ownerID, shareID string, shareRoot *os.Root)
 		if err != nil {
 			return err
 		}
-		if info.Size() < 0 || info.Size() > MaxFileBytes {
+		if info.Size() < 0 || info.Size() > s.limits.MaxFileBytes {
 			return ErrFileTooLarge
 		}
-		if err := s.quota.addCommitted(ownerID, shareID, name, info.Size()); err != nil {
+		if err := s.quota.addCommitted(ownerID, shareID, name, info.Size(), s.limits); err != nil {
 			return fmt.Errorf("rebuild storage quota: %w", err)
 		}
 	}
@@ -1765,7 +1789,7 @@ func (q *quotaLedger) release(ownerID, shareID string, size int64) {
 	q.releaseLocked(ownerID, shareID, size)
 }
 
-func (q *quotaLedger) addCommitted(ownerID, shareID, storageName string, size int64) error {
+func (q *quotaLedger) addCommitted(ownerID, shareID, storageName string, size int64, limits StorageLimits) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	owner := q.owners[ownerID]
@@ -1778,7 +1802,7 @@ func (q *quotaLedger) addCommitted(ownerID, shareID, storageName string, size in
 		share = &shareUsage{}
 		owner.shares[shareID] = share
 	}
-	if size > MaxOwnerBytes-owner.bytes || size > MaxShareBytes-share.bytes || share.files >= MaxFilesPerShare {
+	if size > limits.MaxOwnerBytes-owner.bytes || size > limits.MaxScopeBytes-share.bytes || share.files >= limits.MaxFilesPerScope {
 		return ErrQuotaExceeded
 	}
 	owner.bytes += size

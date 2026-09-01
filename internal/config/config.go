@@ -26,6 +26,45 @@ type OIDC struct {
 
 func (o OIDC) Enabled() bool { return o.Issuer != "" }
 
+const (
+	maxTransferFileBytes     int64 = 512 << 20
+	maxTransferShareBytes    int64 = 1 << 30
+	maxTransferJobBytes      int64 = 1 << 30
+	maxTransferOwnerBytes    int64 = 2 << 30
+	maxTransferFilesPerShare       = 1000
+	maxTransferWorkers             = 4
+	maxTransferJobsPerOwner        = 2
+	maxTransferExpiry              = 24 * time.Hour
+	maxTransferUploadTimeout       = time.Hour
+)
+
+// Transfer is the deployment-configurable subset of the compiled transfer
+// safety limits. Every value must be positive and may only tighten the hard
+// limits enforced by internal/transfer.
+type Transfer struct {
+	MaxFileBytes     int64
+	MaxShareBytes    int64
+	MaxJobBytes      int64
+	MaxOwnerBytes    int64
+	MaxFilesPerShare int
+	Workers          int
+	MaxJobsPerOwner  int
+	Expiry           time.Duration
+	Retention        time.Duration
+	UploadTimeout    time.Duration
+}
+
+// DefaultTransfer returns the compiled secure-transfer defaults.
+func DefaultTransfer() Transfer {
+	return Transfer{
+		MaxFileBytes: maxTransferFileBytes, MaxShareBytes: maxTransferShareBytes,
+		MaxJobBytes: maxTransferJobBytes, MaxOwnerBytes: maxTransferOwnerBytes,
+		MaxFilesPerShare: maxTransferFilesPerShare, Workers: maxTransferWorkers,
+		MaxJobsPerOwner: maxTransferJobsPerOwner, Expiry: maxTransferExpiry,
+		Retention: maxTransferExpiry, UploadTimeout: 30 * time.Minute,
+	}
+}
+
 type Config struct {
 	Addr             string
 	DataDir          string
@@ -43,6 +82,7 @@ type Config struct {
 	AllowedDERPHosts []string
 	SessionIdle      time.Duration
 	SessionMax       time.Duration
+	Transfer         Transfer
 }
 
 func Load() (Config, error) {
@@ -78,6 +118,10 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	transferConfig, err := loadTransfer()
+	if err != nil {
+		return Config{}, err
+	}
 	cfg := Config{
 		Addr:        env("TAILCAT_WEBUI_ADDR", "127.0.0.1:8080"),
 		DataDir:     dataDir,
@@ -100,6 +144,7 @@ func Load() (Config, error) {
 		AllowedDERPHosts: splitCSV(strings.ToLower(os.Getenv("TAILCAT_WEBUI_ALLOWED_DERP_HOSTS"))),
 		SessionIdle:      24 * time.Hour,
 		SessionMax:       7 * 24 * time.Hour,
+		Transfer:         transferConfig,
 	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
@@ -108,6 +153,9 @@ func Load() (Config, error) {
 }
 
 func (c Config) Validate() error {
+	if err := c.EffectiveTransfer().validate(); err != nil {
+		return err
+	}
 	if c.BaseURL == nil || c.BaseURL.Host == "" {
 		return errors.New("TAILCAT_WEBUI_BASE_URL must be an absolute URL")
 	}
@@ -145,6 +193,158 @@ func (c Config) Validate() error {
 		return errors.New("TAILCAT_WEBUI_MASTER_KEY is required outside demo mode")
 	}
 	return nil
+}
+
+func (c Config) EffectiveTransfer() Transfer {
+	if c.Transfer == (Transfer{}) {
+		return DefaultTransfer()
+	}
+	return c.Transfer
+}
+
+func (transfer Transfer) validate() error {
+	if transfer.MaxFileBytes <= 0 || transfer.MaxFileBytes > maxTransferFileBytes {
+		return errors.New("TAILCAT_WEBUI_TRANSFER_MAX_FILE_BYTES must be within 1B..512MiB")
+	}
+	if transfer.MaxShareBytes < transfer.MaxFileBytes || transfer.MaxShareBytes > maxTransferShareBytes {
+		return errors.New("TAILCAT_WEBUI_TRANSFER_MAX_SHARE_BYTES must be at least the file limit and at most 1GiB")
+	}
+	if transfer.MaxJobBytes < transfer.MaxFileBytes || transfer.MaxJobBytes > maxTransferJobBytes {
+		return errors.New("TAILCAT_WEBUI_TRANSFER_MAX_JOB_BYTES must be at least the file limit and at most 1GiB")
+	}
+	if transfer.MaxOwnerBytes < max(transfer.MaxShareBytes, transfer.MaxJobBytes) || transfer.MaxOwnerBytes > maxTransferOwnerBytes {
+		return errors.New("TAILCAT_WEBUI_TRANSFER_MAX_OWNER_BYTES must cover one share/job and be at most 2GiB")
+	}
+	if transfer.MaxFilesPerShare <= 0 || transfer.MaxFilesPerShare > maxTransferFilesPerShare {
+		return errors.New("TAILCAT_WEBUI_TRANSFER_MAX_FILES_PER_SHARE must be within 1..1000")
+	}
+	if transfer.Workers <= 0 || transfer.Workers > maxTransferWorkers {
+		return errors.New("TAILCAT_WEBUI_TRANSFER_WORKERS must be within 1..4")
+	}
+	if transfer.MaxJobsPerOwner <= 0 || transfer.MaxJobsPerOwner > maxTransferJobsPerOwner {
+		return errors.New("TAILCAT_WEBUI_TRANSFER_MAX_JOBS_PER_OWNER must be within 1..2")
+	}
+	if transfer.Expiry < time.Second || transfer.Expiry > maxTransferExpiry {
+		return errors.New("TAILCAT_WEBUI_TRANSFER_EXPIRY must be within 1s..24h")
+	}
+	if transfer.Retention != transfer.Expiry {
+		return errors.New("TAILCAT_WEBUI_TRANSFER_RETENTION and TAILCAT_WEBUI_TRANSFER_EXPIRY must describe the same lifetime")
+	}
+	if transfer.UploadTimeout < time.Second || transfer.UploadTimeout > maxTransferUploadTimeout {
+		return errors.New("TAILCAT_WEBUI_TRANSFER_UPLOAD_TIMEOUT must be within 1s..1h")
+	}
+	return nil
+}
+
+func loadTransfer() (Transfer, error) {
+	defaults := DefaultTransfer()
+	var err error
+	result := defaults
+	for _, setting := range []struct {
+		key    string
+		target *int64
+	}{
+		{"TAILCAT_WEBUI_TRANSFER_MAX_FILE_BYTES", &result.MaxFileBytes},
+		{"TAILCAT_WEBUI_TRANSFER_MAX_SHARE_BYTES", &result.MaxShareBytes},
+		{"TAILCAT_WEBUI_TRANSFER_MAX_JOB_BYTES", &result.MaxJobBytes},
+		{"TAILCAT_WEBUI_TRANSFER_MAX_OWNER_BYTES", &result.MaxOwnerBytes},
+	} {
+		if raw := strings.TrimSpace(os.Getenv(setting.key)); raw != "" {
+			*setting.target, err = parseIECBytes(raw)
+			if err != nil {
+				return Transfer{}, fmt.Errorf("parse %s: %w", setting.key, err)
+			}
+		}
+	}
+	for _, setting := range []struct {
+		key    string
+		target *int
+	}{
+		{"TAILCAT_WEBUI_TRANSFER_MAX_FILES_PER_SHARE", &result.MaxFilesPerShare},
+		{"TAILCAT_WEBUI_TRANSFER_WORKERS", &result.Workers},
+		{"TAILCAT_WEBUI_TRANSFER_MAX_JOBS_PER_OWNER", &result.MaxJobsPerOwner},
+	} {
+		if raw := strings.TrimSpace(os.Getenv(setting.key)); raw != "" {
+			*setting.target, err = strconv.Atoi(raw)
+			if err != nil {
+				return Transfer{}, fmt.Errorf("parse %s: %w", setting.key, err)
+			}
+		}
+	}
+	expiryConfigured := false
+	retentionConfigured := false
+	for _, setting := range []struct {
+		key        string
+		target     *time.Duration
+		configured *bool
+	}{
+		{"TAILCAT_WEBUI_TRANSFER_EXPIRY", &result.Expiry, &expiryConfigured},
+		{"TAILCAT_WEBUI_TRANSFER_RETENTION", &result.Retention, &retentionConfigured},
+		{"TAILCAT_WEBUI_TRANSFER_UPLOAD_TIMEOUT", &result.UploadTimeout, nil},
+	} {
+		if raw := strings.TrimSpace(os.Getenv(setting.key)); raw != "" {
+			if setting.configured != nil {
+				*setting.configured = true
+			}
+			*setting.target, err = time.ParseDuration(raw)
+			if err != nil {
+				return Transfer{}, fmt.Errorf("parse %s: %w", setting.key, err)
+			}
+		}
+	}
+	if retentionConfigured && expiryConfigured && result.Retention != result.Expiry {
+		return Transfer{}, errors.New("TAILCAT_WEBUI_TRANSFER_RETENTION and TAILCAT_WEBUI_TRANSFER_EXPIRY must match when both are set")
+	}
+	if retentionConfigured && !expiryConfigured {
+		// Retention was the original name for the expiring transfer lifetime.
+		// Keep it as a compatibility alias when expiry is not set explicitly.
+		result.Expiry = result.Retention
+	} else if expiryConfigured && !retentionConfigured {
+		result.Retention = result.Expiry
+	}
+	if err := result.validate(); err != nil {
+		return Transfer{}, err
+	}
+	return result, nil
+}
+
+func parseIECBytes(raw string) (int64, error) {
+	raw = strings.TrimSpace(raw)
+	digits := 0
+	for digits < len(raw) && raw[digits] >= '0' && raw[digits] <= '9' {
+		digits++
+	}
+	if digits == 0 {
+		return 0, errors.New("IEC byte size must start with a positive integer")
+	}
+	value, err := strconv.ParseInt(raw[:digits], 10, 64)
+	if err != nil || value <= 0 {
+		return 0, errors.New("IEC byte size must contain a positive integer")
+	}
+	unit := strings.ToLower(strings.TrimSpace(raw[digits:]))
+	multiplier := int64(0)
+	switch unit {
+	case "b":
+		multiplier = 1
+	case "kib":
+		multiplier = 1 << 10
+	case "mib":
+		multiplier = 1 << 20
+	case "gib":
+		multiplier = 1 << 30
+	case "tib":
+		multiplier = 1 << 40
+	default:
+		return 0, errors.New("IEC byte size unit must be B, KiB, MiB, GiB, or TiB")
+	}
+	return checkedIECBytes(value, multiplier)
+}
+
+func checkedIECBytes(value, multiplier int64) (int64, error) {
+	if value <= 0 || multiplier <= 0 || value > int64(^uint64(0)>>1)/multiplier {
+		return 0, errors.New("IEC byte size overflows int64")
+	}
+	return value * multiplier, nil
 }
 
 func (c Config) SecureCookies() bool { return c.BaseURL.Scheme == "https" }

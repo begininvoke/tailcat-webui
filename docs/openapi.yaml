@@ -23,13 +23,7 @@ paths:
           description: Public deployment configuration
           content:
             application/json:
-              schema:
-                type: object
-                required: [auth_mode, unsafe_ssh, version]
-                properties:
-                  auth_mode: { type: string, enum: [oidc, demo] }
-                  unsafe_ssh: { type: boolean }
-                  version: { type: string }
+              schema: { $ref: '#/components/schemas/PublicConfig' }
   /auth/login:
     get:
       security: []
@@ -363,6 +357,270 @@ paths:
       responses:
         '303': { description: Redirect to the published route with a one-minute grant }
         '404': { $ref: '#/components/responses/Error' }
+  /transfers/shares:
+    get:
+      operationId: listTransferShares
+      description: List outgoing shares owned by the authenticated principal. Capability material is never returned.
+      responses:
+        '200': { description: Owner-scoped outgoing shares, content: { application/json: { schema: { $ref: '#/components/schemas/TransferShareList' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+    post:
+      operationId: createTransferShare
+      description: Create a staging share with the configured expiry (24 hours by default). The capability is returned once in this response.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [server_id]
+              properties:
+                server_id: { type: string, format: uuid, description: Existing TailServer owned by the principal }
+      responses:
+        '201': { description: Staging share and one-time capability, content: { application/json: { schema: { $ref: '#/components/schemas/TransferShareCreated' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/Error' }
+  /transfers/shares/{id}:
+    get:
+      operationId: getTransferShare
+      description: Get one owner-scoped outgoing share without capability material.
+      parameters: [{ $ref: '#/components/parameters/ID' }]
+      responses:
+        '200': { description: Outgoing share, content: { application/json: { schema: { $ref: '#/components/schemas/TransferShare' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: deleteTransferShare
+      description: Revoke streams and delete an owner-scoped share and staged bytes.
+      parameters: [{ $ref: '#/components/parameters/ID' }]
+      responses:
+        '204': { description: Share deleted }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/Error' }
+  /transfers/shares/{id}/files:
+    get:
+      operationId: listTransferShareFiles
+      description: List browser-visible metadata for files staged in an owner-scoped share. Storage names and hashes are omitted.
+      parameters: [{ $ref: '#/components/parameters/ID' }]
+      responses:
+        '200': { description: Share files, content: { application/json: { schema: { $ref: '#/components/schemas/TransferShareFileList' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+    post:
+      operationId: uploadTransferShareFile
+      description: >-
+        Stream one raw browser-selected file into a staging share. This is the only
+        management route exempt from the global 1 MiB body limit; authentication,
+        origin/CSRF, mutation rate/admission, configured MaxBytesReader and upload
+        deadline controls still apply. The default maximum is 512 MiB/file, with
+        1 GiB/share, 2 GiB/owner, 1,000 files/share and a 30-minute timeout.
+      parameters:
+        - { $ref: '#/components/parameters/ID' }
+        - in: header
+          name: X-Tailcat-Virtual-Path
+          required: true
+          description: Canonical relative slash path; UTF-8, at most 1024 bytes and 32 segments; no host path, control character, absolute path, dot segment, backslash, colon, or Windows device name.
+          schema: { type: string, minLength: 1, maxLength: 1024 }
+        - in: header
+          name: Content-Length
+          required: true
+          description: Exact non-negative byte length. Zero-byte files are valid.
+          schema: { type: integer, format: int64, minimum: 0, maximum: 536870912 }
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: { type: string, format: binary, maxLength: 536870912 }
+      responses:
+        '201': { description: Staged file metadata, content: { application/json: { schema: { $ref: '#/components/schemas/TransferShareFile' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '413': { $ref: '#/components/responses/Error' }
+        '415': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/Error' }
+  /transfers/shares/{id}/finalize:
+    post:
+      operationId: finalizeTransferShare
+      description: Explicitly make a non-empty staging share immutable and ready for receivers.
+      parameters: [{ $ref: '#/components/parameters/ID' }]
+      responses:
+        '200': { description: Ready share, content: { application/json: { schema: { $ref: '#/components/schemas/TransferShare' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/Error' }
+  /transfers/shares/{id}/rotate:
+    post:
+      operationId: rotateTransferShareCapability
+      description: Revoke the prior capability and return the replacement exactly once.
+      parameters: [{ $ref: '#/components/parameters/ID' }]
+      responses:
+        '200': { description: One-time replacement capability, content: { application/json: { schema: { $ref: '#/components/schemas/TransferCapabilityRotated' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/Error' }
+  /transfers/jobs:
+    get:
+      operationId: listTransferJobs
+      description: List incoming jobs owned by the authenticated principal. Capability ciphertext and hashes are omitted.
+      responses:
+        '200': { description: Owner-scoped incoming jobs, content: { application/json: { schema: { $ref: '#/components/schemas/TransferJobList' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+    post:
+      operationId: createTransferJob
+      description: Resolve a capability through one selected existing TailClient and create a ready incoming job. Start it with the explicit start operation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [client_id, capability]
+              properties:
+                client_id: { type: string, format: uuid, description: Existing TailClient owned by the principal }
+                capability: { type: string, pattern: '^tcs1\.[A-Za-z0-9_-]{64}$', description: One-time-sensitive share capability; never returned by job endpoints }
+      responses:
+        '201': { description: Ready incoming job, content: { application/json: { schema: { $ref: '#/components/schemas/TransferJob' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '413': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/Error' }
+  /transfers/jobs/{id}:
+    get:
+      operationId: getTransferJob
+      parameters: [{ $ref: '#/components/parameters/ID' }]
+      responses:
+        '200': { description: Incoming job, content: { application/json: { schema: { $ref: '#/components/schemas/TransferJob' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: deleteTransferJob
+      description: Cancel if active and delete the owner-scoped job and received bytes.
+      parameters: [{ $ref: '#/components/parameters/ID' }]
+      responses:
+        '204': { description: Job deleted }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/Error' }
+  /transfers/jobs/{id}/start:
+    post:
+      operationId: startTransferJob
+      description: Start a ready incoming job using the configured 1..4 workers and 1..2 active-job owner limit (defaults 4 and 2).
+      parameters: [{ $ref: '#/components/parameters/ID' }]
+      responses:
+        '200': { description: Running job, content: { application/json: { schema: { $ref: '#/components/schemas/TransferJob' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/Error' }
+  /transfers/jobs/{id}/cancel:
+    post:
+      operationId: cancelTransferJob
+      parameters: [{ $ref: '#/components/parameters/ID' }]
+      responses:
+        '204': { description: Cancellation requested and active I/O interrupted }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/Error' }
+  /transfers/jobs/{id}/retry:
+    post:
+      operationId: retryTransferJob
+      description: Resume a failed, canceled, or interrupted job using verified completed blocks.
+      parameters: [{ $ref: '#/components/parameters/ID' }]
+      responses:
+        '200': { description: Running retried job, content: { application/json: { schema: { $ref: '#/components/schemas/TransferJob' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/Error' }
+  /transfers/jobs/{id}/items:
+    get:
+      operationId: listTransferJobItems
+      parameters: [{ $ref: '#/components/parameters/ID' }]
+      responses:
+        '200': { description: Owner-scoped job items, content: { application/json: { schema: { $ref: '#/components/schemas/TransferItemList' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+  /transfers/jobs/{id}/items/{item_id}:
+    get:
+      operationId: getTransferJobItem
+      parameters:
+        - { $ref: '#/components/parameters/ID' }
+        - { $ref: '#/components/parameters/ItemID' }
+      responses:
+        '200': { description: Owner-scoped job item, content: { application/json: { schema: { $ref: '#/components/schemas/TransferItem' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+  /transfers/jobs/{id}/items/{item_id}/download:
+    get:
+      operationId: downloadTransferJobItem
+      description: Stream only a completed item from a completed owner-scoped job. Missing, incomplete and foreign resources all return 404. Range reads remain bounded to the opened item.
+      parameters:
+        - { $ref: '#/components/parameters/ID' }
+        - { $ref: '#/components/parameters/ItemID' }
+        - in: header
+          name: Range
+          required: false
+          description: Optional single RFC 7233 byte range handled by http.ServeContent.
+          schema: { type: string, pattern: '^bytes=' }
+      responses:
+        '200':
+          description: Complete received file
+          headers:
+            Content-Length: { schema: { type: integer, format: int64, minimum: 0 }, description: Exact item length }
+            Content-Disposition: { schema: { type: string }, description: Safe RFC 6266/5987 attachment filename derived from the virtual basename }
+            X-Content-Type-Options: { schema: { type: string, const: nosniff } }
+            Cache-Control: { schema: { type: string, const: 'private, no-store' } }
+          content:
+            application/octet-stream: { schema: { type: string, format: binary } }
+        '206':
+          description: Bounded byte range of the completed file
+          headers:
+            Content-Range: { schema: { type: string } }
+            Content-Length: { schema: { type: integer, format: int64, minimum: 0 } }
+          content:
+            application/octet-stream: { schema: { type: string, format: binary } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '416': { description: Invalid or unsatisfiable range rejected by http.ServeContent }
   /events:
     get:
       operationId: runtimeEvents
@@ -383,6 +641,11 @@ components:
       name: id
       required: true
       schema: { type: string, format: uuid }
+    ItemID:
+      in: path
+      name: item_id
+      required: true
+      schema: { type: string, format: uuid }
   requestBodies:
     Token:
       required: true
@@ -401,6 +664,149 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
   schemas:
+    PublicConfig:
+      type: object
+      additionalProperties: false
+      required: [auth_mode, unsafe_ssh, version, transfers]
+      properties:
+        auth_mode: { type: string, enum: [oidc, demo] }
+        unsafe_ssh: { type: boolean }
+        version: { type: string }
+        transfers: { $ref: '#/components/schemas/PublicTransferConfig' }
+    PublicTransferConfig:
+      type: object
+      additionalProperties: false
+      description: >-
+        Lower deployment values may tighten these defaults. Values above the
+        compiled hard maxima are rejected at startup. Byte values use exact IEC
+        units in environment configuration (B, KiB, MiB, GiB or TiB; positive
+        integers only, surrounding whitespace and unit case are accepted).
+      required: [max_file_bytes, max_share_bytes, max_job_bytes, max_owner_bytes, max_files_per_share, workers, max_jobs_per_owner, expiry_seconds, retention_seconds, upload_timeout_seconds]
+      properties:
+        max_file_bytes: { type: integer, format: int64, minimum: 1, maximum: 536870912, default: 536870912, description: TAILCAT_WEBUI_TRANSFER_MAX_FILE_BYTES }
+        max_share_bytes: { type: integer, format: int64, minimum: 1, maximum: 1073741824, default: 1073741824, description: TAILCAT_WEBUI_TRANSFER_MAX_SHARE_BYTES }
+        max_job_bytes: { type: integer, format: int64, minimum: 1, maximum: 1073741824, default: 1073741824, description: TAILCAT_WEBUI_TRANSFER_MAX_JOB_BYTES }
+        max_owner_bytes: { type: integer, format: int64, minimum: 1, maximum: 2147483648, default: 2147483648, description: TAILCAT_WEBUI_TRANSFER_MAX_OWNER_BYTES }
+        max_files_per_share: { type: integer, minimum: 1, maximum: 1000, default: 1000, description: TAILCAT_WEBUI_TRANSFER_MAX_FILES_PER_SHARE }
+        workers: { type: integer, minimum: 1, maximum: 4, default: 4, description: TAILCAT_WEBUI_TRANSFER_WORKERS }
+        max_jobs_per_owner: { type: integer, minimum: 1, maximum: 2, default: 2, description: TAILCAT_WEBUI_TRANSFER_MAX_JOBS_PER_OWNER }
+        expiry_seconds: { type: integer, format: int64, minimum: 1, maximum: 86400, default: 86400, description: TAILCAT_WEBUI_TRANSFER_EXPIRY, parsed with Go duration syntax and capped at 24h }
+        retention_seconds: { type: integer, format: int64, minimum: 1, maximum: 86400, default: 86400, description: Compatibility alias TAILCAT_WEBUI_TRANSFER_RETENTION; it must match expiry when both environment variables are set }
+        upload_timeout_seconds: { type: integer, format: int64, minimum: 1, maximum: 3600, default: 1800, description: TAILCAT_WEBUI_TRANSFER_UPLOAD_TIMEOUT, capped at 1h }
+    TransferStatus:
+      type: string
+      enum: [staging, ready, running, completed, failed, canceled, interrupted, expired, deleting]
+    TransferErrorCode:
+      type: string
+      enum: [transfer_canceled, transfer_expired, transfer_remote_unavailable, transfer_invalid_capability, transfer_share_not_found, transfer_protocol_invalid, transfer_integrity_mismatch, transfer_storage_failed, transfer_limit_exceeded]
+    TransferEventStatus:
+      type: string
+      enum: [staging, ready, running, completed, failed, canceled, interrupted, expired, deleting, deleted]
+    TransferShare:
+      type: object
+      additionalProperties: false
+      required: [id, server_id, status, total_bytes, file_count, expires_at, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        server_id: { type: string, format: uuid }
+        status: { $ref: '#/components/schemas/TransferStatus' }
+        total_bytes: { type: integer, format: int64, minimum: 0, maximum: 1073741824 }
+        file_count: { type: integer, minimum: 0, maximum: 1000 }
+        expires_at: { type: string, format: date-time }
+        ready_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    TransferShareCreated:
+      type: object
+      additionalProperties: false
+      required: [share, capability]
+      properties:
+        share: { $ref: '#/components/schemas/TransferShare' }
+        capability: { type: string, pattern: '^tcs1\.[A-Za-z0-9_-]{64}$', description: Returned exactly once; never persisted in plaintext or returned by list/get }
+    TransferCapabilityRotated:
+      type: object
+      additionalProperties: false
+      required: [capability]
+      properties:
+        capability: { type: string, pattern: '^tcs1\.[A-Za-z0-9_-]{64}$', description: Returned exactly once; replaces and revokes the previous code }
+    TransferShareFile:
+      type: object
+      additionalProperties: false
+      required: [id, virtual_path, size, mtime, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        virtual_path: { type: string, minLength: 1, maxLength: 1024 }
+        size: { type: integer, format: int64, minimum: 0, maximum: 536870912 }
+        mtime: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+    TransferJob:
+      type: object
+      additionalProperties: false
+      required: [id, client_id, remote_share_id, status, total_bytes, received_bytes, expires_at, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        client_id: { type: string, format: uuid }
+        remote_share_id: { type: string, format: uuid }
+        status: { $ref: '#/components/schemas/TransferStatus' }
+        total_bytes: { type: integer, format: int64, minimum: 0, maximum: 1073741824 }
+        received_bytes: { type: integer, format: int64, minimum: 0, maximum: 1073741824 }
+        expires_at: { type: string, format: date-time }
+        error_code: { $ref: '#/components/schemas/TransferErrorCode' }
+        started_at: { type: string, format: date-time }
+        finished_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    TransferItem:
+      type: object
+      additionalProperties: false
+      required: [id, job_id, virtual_path, size, status, received_bytes, completed_blocks, mtime, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        job_id: { type: string, format: uuid }
+        virtual_path: { type: string, minLength: 1, maxLength: 1024 }
+        size: { type: integer, format: int64, minimum: 0, maximum: 536870912 }
+        status: { $ref: '#/components/schemas/TransferStatus' }
+        received_bytes: { type: integer, format: int64, minimum: 0, maximum: 536870912 }
+        completed_blocks: { type: integer, minimum: 0, maximum: 64 }
+        mtime: { type: string, format: date-time }
+        started_at: { type: string, format: date-time }
+        finished_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    TransferShareList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties: { items: { type: array, items: { $ref: '#/components/schemas/TransferShare' } } }
+    TransferShareFileList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties: { items: { type: array, maxItems: 1000, items: { $ref: '#/components/schemas/TransferShareFile' } } }
+    TransferJobList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties: { items: { type: array, items: { $ref: '#/components/schemas/TransferJob' } } }
+    TransferItemList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties: { items: { type: array, maxItems: 1000, items: { $ref: '#/components/schemas/TransferItem' } } }
+    TransferEventPayload:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        share_id: { type: string, format: uuid }
+        job_id: { type: string, format: uuid }
+        item_id: { type: string, format: uuid }
+        status: { $ref: '#/components/schemas/TransferEventStatus' }
+        received_bytes: { type: integer, format: int64, minimum: 0 }
+        total_bytes: { type: integer, format: int64, minimum: 0 }
+        completed_files: { type: integer, minimum: 0 }
+        total_files: { type: integer, minimum: 0, maximum: 1000 }
+        error_code: { $ref: '#/components/schemas/TransferErrorCode' }
     User:
       type: object
       required: [id]
@@ -532,14 +938,17 @@ components:
       required: [version, type, resource_kind, resource_id, phase, sequence, at]
       properties:
         version: { type: integer }
-        type: { type: string, enum: [runtime, diagnostic] }
+        type: { type: string, enum: [runtime, diagnostic, transfer] }
         resource_kind: { type: string }
         resource_id: { type: string, format: uuid }
         operation_id: { type: string, format: uuid }
         phase: { $ref: '#/components/schemas/RuntimePhase' }
         sequence: { type: integer, minimum: 1 }
         at: { type: string, format: date-time }
-        payload: { $ref: '#/components/schemas/DiagnosticEventPayload' }
+        payload:
+          oneOf:
+            - { $ref: '#/components/schemas/DiagnosticEventPayload' }
+            - { $ref: '#/components/schemas/TransferEventPayload' }
     Error:
       type: object
       required: [error]

@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"slices"
 	"sync"
@@ -26,25 +27,38 @@ type CreateIncomingJobInput struct {
 }
 
 type JobView struct {
-	ID            string    `json:"id"`
-	ClientID      string    `json:"client_id"`
-	RemoteShareID string    `json:"remote_share_id"`
-	Status        string    `json:"status"`
-	TotalBytes    int64     `json:"total_bytes"`
-	ReceivedBytes int64     `json:"received_bytes"`
-	ExpiresAt     time.Time `json:"expires_at"`
-	ErrorCode     ErrorCode `json:"error_code,omitempty"`
+	ID            string     `json:"id"`
+	ClientID      string     `json:"client_id"`
+	RemoteShareID string     `json:"remote_share_id"`
+	Status        string     `json:"status"`
+	TotalBytes    int64      `json:"total_bytes"`
+	ReceivedBytes int64      `json:"received_bytes"`
+	ExpiresAt     time.Time  `json:"expires_at"`
+	ErrorCode     ErrorCode  `json:"error_code,omitempty"`
+	StartedAt     *time.Time `json:"started_at,omitempty"`
+	FinishedAt    *time.Time `json:"finished_at,omitempty"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
 }
 
 type ItemView struct {
-	ID              string    `json:"id"`
-	JobID           string    `json:"job_id"`
-	VirtualPath     string    `json:"virtual_path"`
-	Size            int64     `json:"size"`
-	Status          string    `json:"status"`
-	ReceivedBytes   int64     `json:"received_bytes"`
-	CompletedBlocks int       `json:"completed_blocks"`
-	MTime           time.Time `json:"mtime"`
+	ID              string     `json:"id"`
+	JobID           string     `json:"job_id"`
+	VirtualPath     string     `json:"virtual_path"`
+	Size            int64      `json:"size"`
+	Status          string     `json:"status"`
+	ReceivedBytes   int64      `json:"received_bytes"`
+	CompletedBlocks int        `json:"completed_blocks"`
+	MTime           time.Time  `json:"mtime"`
+	StartedAt       *time.Time `json:"started_at,omitempty"`
+	FinishedAt      *time.Time `json:"finished_at,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
+}
+
+type CompletedItemRead struct {
+	Item   ItemView
+	Handle *ReadHandle
 }
 
 type preparedIncomingItem struct {
@@ -86,9 +100,12 @@ func (s *Service) CreateIncomingJob(ctx context.Context, ownerID string, input C
 		return JobView{}, err
 	}
 	files := manifest.Files()
+	if len(files) > s.limits.MaxFilesPerShare {
+		return JobView{}, protocolError(CodeLimitExceeded, errors.New("incoming manifest exceeds file-count limit"))
+	}
 	var totalBytes int64
 	for _, file := range files {
-		if totalBytes > MaxShareBytes-file.Size() {
+		if file.Size() > s.limits.MaxFileBytes || totalBytes > s.limits.MaxJobBytes-file.Size() {
 			return JobView{}, protocolError(CodeLimitExceeded, errors.New("incoming manifest exceeds job limit"))
 		}
 		totalBytes += file.Size()
@@ -96,9 +113,9 @@ func (s *Service) CreateIncomingJob(ctx context.Context, ownerID string, input C
 	now := time.Now().UTC()
 	expiresAt := input.ExpiresAt.UTC()
 	if input.ExpiresAt.IsZero() {
-		expiresAt = now.Add(defaultTransferExpiry)
+		expiresAt = now.Add(s.limits.Expiry)
 	}
-	if !expiresAt.After(now) || expiresAt.After(now.Add(defaultTransferExpiry)) {
+	if !expiresAt.After(now) || expiresAt.After(now.Add(s.limits.Expiry)) {
 		return JobView{}, ErrInvalidState
 	}
 
@@ -250,12 +267,56 @@ func (s *Service) ListJobItems(ctx context.Context, ownerID, jobID string) ([]It
 	}
 	views := make([]ItemView, len(rows))
 	for index, row := range rows {
-		views[index] = ItemView{
-			ID: row.ID, JobID: row.JobID, VirtualPath: row.VirtualPath, Size: row.SizeBytes,
-			Status: string(row.Status), ReceivedBytes: row.ReceivedBytes, CompletedBlocks: len(row.CompletedBlocks), MTime: row.Mtime.UTC(),
-		}
+		views[index] = itemView(row)
 	}
 	return views, nil
+}
+
+func (s *Service) JobItem(ctx context.Context, ownerID, jobID, itemID string) (ItemView, error) {
+	if err := s.ensureOpen(); err != nil {
+		return ItemView{}, err
+	}
+	if exists, err := s.db.TransferJob.Query().Where(transferjob.IDEQ(jobID), transferjob.UserIDEQ(ownerID)).Exist(ctx); err != nil {
+		return ItemView{}, fmt.Errorf("validate transfer job ownership: %w", err)
+	} else if !exists {
+		return ItemView{}, ErrNotFound
+	}
+	row, err := s.db.TransferItem.Query().Where(transferitem.IDEQ(itemID), transferitem.JobIDEQ(jobID), transferitem.UserIDEQ(ownerID)).Only(ctx)
+	if ent.IsNotFound(err) {
+		return ItemView{}, ErrNotFound
+	}
+	if err != nil {
+		return ItemView{}, fmt.Errorf("load transfer item: %w", err)
+	}
+	return itemView(row), nil
+}
+
+func (s *Service) OpenCompletedItem(ctx context.Context, ownerID, jobID, itemID string) (CompletedItemRead, error) {
+	if err := s.ensureOpen(); err != nil {
+		return CompletedItemRead{}, err
+	}
+	if exists, err := s.db.TransferJob.Query().Where(transferjob.IDEQ(jobID), transferjob.UserIDEQ(ownerID), transferjob.StatusEQ(transferjob.StatusCompleted)).Exist(ctx); err != nil {
+		return CompletedItemRead{}, fmt.Errorf("validate completed transfer job: %w", err)
+	} else if !exists {
+		return CompletedItemRead{}, ErrNotFound
+	}
+	row, err := s.db.TransferItem.Query().Where(
+		transferitem.IDEQ(itemID), transferitem.JobIDEQ(jobID), transferitem.UserIDEQ(ownerID), transferitem.StatusEQ(transferitem.StatusCompleted),
+	).Only(ctx)
+	if ent.IsNotFound(err) {
+		return CompletedItemRead{}, ErrNotFound
+	}
+	if err != nil {
+		return CompletedItemRead{}, fmt.Errorf("load completed transfer item: %w", err)
+	}
+	handle, err := s.storage.Open(ctx, ownerID, jobID, row.StorageName)
+	if errors.Is(err, fs.ErrNotExist) {
+		return CompletedItemRead{}, ErrNotFound
+	}
+	if err != nil {
+		return CompletedItemRead{}, fmt.Errorf("open completed transfer item: %w", err)
+	}
+	return CompletedItemRead{Item: itemView(row), Handle: handle}, nil
 }
 
 func (s *Service) StartJob(ctx context.Context, ownerID, jobID string) (JobView, error) {
@@ -306,7 +367,7 @@ func (s *Service) startJob(ctx context.Context, ownerID, jobID string, resumeMan
 		stopExpiry()
 		return JobView{}, ErrAlreadyActive
 	}
-	if s.ownerJobs[ownerID] >= maxActiveJobsPerOwner {
+	if s.ownerJobs[ownerID] >= s.maxJobsPerOwner() {
 		s.mu.Unlock()
 		cancel(errCanceledByOwner)
 		stopExpiry()
@@ -492,7 +553,7 @@ func (s *Service) executeJob(ctx context.Context, jobID string) {
 	close(taskQueue)
 	completions := make(chan blockCompletion, max(1, len(tasks)))
 	var workers sync.WaitGroup
-	for range 4 {
+	for range s.limits.Workers {
 		workers.Go(func() {
 			if s.runnerHooks.workerStarted != nil {
 				s.runnerHooks.workerStarted()
@@ -917,7 +978,7 @@ func (s *Service) enqueueResume(ownerID, jobID string) {
 }
 
 func (s *Service) scheduleQueuedResumesLocked(ownerID string) {
-	if s.closed || s.resumeScheduling[ownerID] || len(s.resumeQueue[ownerID]) == 0 || s.ownerJobs[ownerID] >= maxActiveJobsPerOwner {
+	if s.closed || s.resumeScheduling[ownerID] || len(s.resumeQueue[ownerID]) == 0 || s.ownerJobs[ownerID] >= s.maxJobsPerOwner() {
 		return
 	}
 	s.resumeScheduling[ownerID] = true
@@ -927,7 +988,7 @@ func (s *Service) scheduleQueuedResumesLocked(ownerID string) {
 func (s *Service) runQueuedResumes(ownerID string) {
 	for {
 		s.mu.Lock()
-		if s.closed || context.Cause(s.queueCtx) != nil || len(s.resumeQueue[ownerID]) == 0 || s.ownerJobs[ownerID] >= maxActiveJobsPerOwner {
+		if s.closed || context.Cause(s.queueCtx) != nil || len(s.resumeQueue[ownerID]) == 0 || s.ownerJobs[ownerID] >= s.maxJobsPerOwner() {
 			delete(s.resumeScheduling, ownerID)
 			s.mu.Unlock()
 			return
@@ -991,7 +1052,7 @@ func (s *Service) finishResumeSchedulerForCapacity(ownerID string) bool {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.closed && context.Cause(s.queueCtx) == nil && len(s.resumeQueue[ownerID]) > 0 && s.ownerJobs[ownerID] < maxActiveJobsPerOwner {
+	if !s.closed && context.Cause(s.queueCtx) == nil && len(s.resumeQueue[ownerID]) > 0 && s.ownerJobs[ownerID] < s.maxJobsPerOwner() {
 		return true
 	}
 	delete(s.resumeScheduling, ownerID)
@@ -1064,8 +1125,31 @@ func (s *Service) wakeResumeQueue() {
 }
 
 func jobView(row *ent.TransferJob) JobView {
+	var startedAt, finishedAt *time.Time
+	if row.StartedAt != nil {
+		startedAt = new(row.StartedAt.UTC())
+	}
+	if row.FinishedAt != nil {
+		finishedAt = new(row.FinishedAt.UTC())
+	}
 	return JobView{
 		ID: row.ID, ClientID: row.ClientID, RemoteShareID: row.RemoteShareID, Status: string(row.Status),
 		TotalBytes: row.TotalBytes, ReceivedBytes: row.ReceivedBytes, ExpiresAt: row.ExpiresAt.UTC(), ErrorCode: ErrorCode(row.ErrorCode),
+		StartedAt: startedAt, FinishedAt: finishedAt, CreatedAt: row.CreatedAt.UTC(), UpdatedAt: row.UpdatedAt.UTC(),
+	}
+}
+
+func itemView(row *ent.TransferItem) ItemView {
+	var startedAt, finishedAt *time.Time
+	if row.StartedAt != nil {
+		startedAt = new(row.StartedAt.UTC())
+	}
+	if row.FinishedAt != nil {
+		finishedAt = new(row.FinishedAt.UTC())
+	}
+	return ItemView{
+		ID: row.ID, JobID: row.JobID, VirtualPath: row.VirtualPath, Size: row.SizeBytes,
+		Status: string(row.Status), ReceivedBytes: row.ReceivedBytes, CompletedBlocks: len(row.CompletedBlocks), MTime: row.Mtime.UTC(),
+		StartedAt: startedAt, FinishedAt: finishedAt, CreatedAt: row.CreatedAt.UTC(), UpdatedAt: row.UpdatedAt.UTC(),
 	}
 }

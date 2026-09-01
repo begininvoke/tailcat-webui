@@ -8,6 +8,7 @@ import (
 	"github.com/ca-x/tailcat-webui/internal/diagnostics"
 	"github.com/ca-x/tailcat-webui/internal/secrets"
 	"github.com/ca-x/tailcat-webui/internal/tailnet"
+	"github.com/ca-x/tailcat-webui/internal/transfer"
 
 	"github.com/labstack/echo/v5"
 )
@@ -50,6 +51,33 @@ func errorHandler(c *echo.Context, err error) {
 		status, code, message, fields = apiErr.Status, apiErr.Code, apiErr.Message, apiErr.Fields
 	} else if errors.Is(err, auth.ErrUnauthorized) {
 		status, code, message = http.StatusUnauthorized, "UNAUTHORIZED", "Authentication is required"
+	} else if _, ok := errors.AsType[*http.MaxBytesError](err); ok || errors.Is(err, transfer.ErrFileTooLarge) {
+		status, code, message = http.StatusRequestEntityTooLarge, "TRANSFER_FILE_TOO_LARGE", "The transfer file exceeds the configured size limit"
+	} else if errors.Is(err, transfer.ErrNotFound) {
+		status, code, message = http.StatusNotFound, "TRANSFER_NOT_FOUND", "The transfer resource was not found"
+	} else if errors.Is(err, transfer.ErrQuotaExceeded) {
+		status, code, message = http.StatusConflict, "TRANSFER_QUOTA_EXCEEDED", "The transfer storage quota has been reached"
+	} else if errors.Is(err, transfer.ErrSizeMismatch) {
+		status, code, message = http.StatusUnprocessableEntity, "TRANSFER_SIZE_MISMATCH", "The request body does not match Content-Length"
+	} else if errors.Is(err, transfer.ErrInvalidPath) {
+		status, code, message = http.StatusUnprocessableEntity, "TRANSFER_VALIDATION_ERROR", "The transfer request fields are invalid"
+	} else if errors.Is(err, transfer.ErrOwnerCapacity) {
+		status, code, message = http.StatusTooManyRequests, "TRANSFER_OWNER_LIMIT", "This workspace has reached its active transfer-job limit"
+	} else if errors.Is(err, transfer.ErrAlreadyActive) || errors.Is(err, transfer.ErrInvalidState) {
+		status, code, message = http.StatusConflict, "TRANSFER_INVALID_STATE", "The transfer is not eligible for this action"
+	} else if errors.Is(err, transfer.ErrServiceClosed) || errors.Is(err, transfer.ErrClosed) {
+		status, code, message = http.StatusServiceUnavailable, "TRANSFERS_UNAVAILABLE", "Transfers are unavailable"
+	} else if protocolErr, ok := errors.AsType[*transfer.ProtocolError](err); ok {
+		switch protocolErr.Code {
+		case transfer.CodeLimitExceeded:
+			status, code, message = http.StatusRequestEntityTooLarge, "TRANSFER_LIMIT_EXCEEDED", "The transfer exceeds a configured limit"
+		case transfer.CodeInvalidCapability, transfer.CodeProtocolInvalid:
+			status, code, message = http.StatusUnprocessableEntity, string(protocolErr.Code), "The transfer capability or remote manifest is invalid"
+		case transfer.CodeShareNotFound:
+			status, code, message = http.StatusNotFound, "TRANSFER_NOT_FOUND", "The transfer resource was not found"
+		default:
+			status, code, message = http.StatusConflict, string(protocolErr.Code), "The transfer could not be completed in its current state"
+		}
 	} else if errors.Is(err, diagnostics.ErrNotFound) {
 		status, code, message = http.StatusNotFound, "DIAGNOSTIC_NOT_FOUND", "The diagnostic resource was not found"
 	} else if errors.Is(err, diagnostics.ErrInvalidKind) {

@@ -295,7 +295,7 @@ func manifestBlockCount(size int64) int {
 }
 
 func validateVirtualPath(virtualPath string) error {
-	if virtualPath == "" || len(virtualPath) > maxBoundaryBytes || !utf8.ValidString(virtualPath) || strings.ContainsRune(virtualPath, 0) || strings.HasPrefix(virtualPath, "/") || strings.ContainsAny(virtualPath, "\\:") {
+	if virtualPath == "" || len(virtualPath) > maxBoundaryBytes || !utf8.ValidString(virtualPath) || strings.IndexFunc(virtualPath, func(character rune) bool { return character < 0x20 || character == 0x7f }) >= 0 || strings.HasPrefix(virtualPath, "/") || strings.ContainsAny(virtualPath, "\\:") {
 		return fmt.Errorf("%w: virtual path must be canonical and relative", ErrInvalidPath)
 	}
 	segments := strings.Split(virtualPath, "/")
@@ -309,6 +309,12 @@ func validateVirtualPath(virtualPath string) error {
 		}
 	}
 	return nil
+}
+
+// ValidateVirtualPath applies the canonical browser-visible path boundary used
+// by manifests and staged files. It never resolves a host filesystem path.
+func ValidateVirtualPath(virtualPath string) error {
+	return validateVirtualPath(virtualPath)
 }
 
 func cloneFileManifest(file FileManifest) FileManifest {

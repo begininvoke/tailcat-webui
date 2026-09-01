@@ -22,6 +22,7 @@ import (
 	"github.com/ca-x/tailcat-webui/internal/diagnostics"
 	"github.com/ca-x/tailcat-webui/internal/publish"
 	"github.com/ca-x/tailcat-webui/internal/tailnet"
+	"github.com/ca-x/tailcat-webui/internal/transfer"
 	"github.com/ca-x/tailcat-webui/internal/version"
 
 	"github.com/coder/websocket"
@@ -39,6 +40,7 @@ type API struct {
 	diagnostics    *diagnostics.Service
 	tailnet        *tailnet.Manager
 	publish        *publish.Service
+	transfer       *transfer.Service
 	cfg            config.Config
 	logger         *slog.Logger
 	web            fs.FS
@@ -54,11 +56,11 @@ type API struct {
 	tunnelDial     func(context.Context, string, string, string) (net.Conn, error)
 }
 
-func New(db *ent.Client, authService *auth.Service, auditService *audit.Service, diagnosticService *diagnostics.Service, manager *tailnet.Manager, publisher *publish.Service, cfg config.Config, logger *slog.Logger, web fs.FS) (*API, error) {
-	if db == nil || authService == nil || auditService == nil || diagnosticService == nil || manager == nil || publisher == nil || logger == nil || web == nil {
+func New(db *ent.Client, authService *auth.Service, auditService *audit.Service, diagnosticService *diagnostics.Service, manager *tailnet.Manager, publisher *publish.Service, transferService *transfer.Service, cfg config.Config, logger *slog.Logger, web fs.FS) (*API, error) {
+	if db == nil || authService == nil || auditService == nil || diagnosticService == nil || manager == nil || publisher == nil || transferService == nil || logger == nil || web == nil {
 		return nil, errors.New("HTTP API: nil dependency")
 	}
-	return &API{db: db, auth: authService, audit: auditService, diagnostics: diagnosticService, tailnet: manager, publish: publisher, cfg: cfg, logger: logger, web: web, startedAt: time.Now(), tunnels: make(map[string]int), mutationRates: make(map[string]*rate.Limiter), mutationActive: make(map[string]int), mutationSlots: make(chan struct{}, 64), eventStreams: make(map[string]int), tunnelDial: manager.Dial}, nil
+	return &API{db: db, auth: authService, audit: auditService, diagnostics: diagnosticService, tailnet: manager, publish: publisher, transfer: transferService, cfg: cfg, logger: logger, web: web, startedAt: time.Now(), tunnels: make(map[string]int), mutationRates: make(map[string]*rate.Limiter), mutationActive: make(map[string]int), mutationSlots: make(chan struct{}, 64), eventStreams: make(map[string]int), tunnelDial: manager.Dial}, nil
 }
 
 func (a *API) Handler() (http.Handler, error) {
@@ -70,7 +72,9 @@ func (a *API) Handler() (http.Handler, error) {
 	e.Use(middleware.Recover())
 	e.Use(middleware.BodyLimitWithConfig(middleware.BodyLimitConfig{
 		LimitBytes: 1 << 20,
-		Skipper:    func(c *echo.Context) bool { return strings.HasPrefix(c.Request().URL.Path, "/r/") },
+		Skipper: func(c *echo.Context) bool {
+			return strings.HasPrefix(c.Request().URL.Path, "/r/") || isTransferUploadRequest(c.Request())
+		},
 	}))
 	e.Use(middleware.RequestLoggerWithConfig(middleware.RequestLoggerConfig{
 		HandleError: true, LogRequestID: true, LogMethod: true, LogURIPath: true, LogStatus: true, LogLatency: true,
@@ -132,6 +136,24 @@ func (a *API) Handler() (http.Handler, error) {
 	api.GET("/routes/:id/open", a.openRoute)
 	api.DELETE("/routes/:id", a.deleteRoute)
 	api.GET("/events", a.events)
+	api.POST("/transfers/shares", a.createTransferShare)
+	api.GET("/transfers/shares", a.listTransferShares)
+	api.GET("/transfers/shares/:id", a.getTransferShare)
+	api.GET("/transfers/shares/:id/files", a.listTransferShareFiles)
+	api.POST(TransferUploadRoute, a.uploadTransferShareFile)
+	api.POST("/transfers/shares/:id/finalize", a.finalizeTransferShare)
+	api.POST("/transfers/shares/:id/rotate", a.rotateTransferShare)
+	api.DELETE("/transfers/shares/:id", a.deleteTransferShare)
+	api.POST("/transfers/jobs", a.createTransferJob)
+	api.GET("/transfers/jobs", a.listTransferJobs)
+	api.GET("/transfers/jobs/:id", a.getTransferJob)
+	api.POST("/transfers/jobs/:id/start", a.startTransferJob)
+	api.POST("/transfers/jobs/:id/cancel", a.cancelTransferJob)
+	api.POST("/transfers/jobs/:id/retry", a.retryTransferJob)
+	api.DELETE("/transfers/jobs/:id", a.deleteTransferJob)
+	api.GET("/transfers/jobs/:id/items", a.listTransferJobItems)
+	api.GET("/transfers/jobs/:id/items/:item_id", a.getTransferJobItem)
+	api.GET("/transfers/jobs/:id/items/:item_id/download", a.downloadTransferJobItem)
 
 	e.Any("/r/:slug", a.handlePublished)
 	e.Any("/r/:slug/*", a.handlePublished)
@@ -249,7 +271,17 @@ func (a *API) publicConfig(c *echo.Context) error {
 	if a.cfg.DemoMode {
 		mode = "demo"
 	}
-	return c.JSON(http.StatusOK, map[string]any{"auth_mode": mode, "unsafe_ssh": a.cfg.UnsafeSSH, "version": version.Version})
+	transferConfig := a.cfg.EffectiveTransfer()
+	return c.JSON(http.StatusOK, publicConfigResponse{
+		AuthMode: mode, UnsafeSSH: a.cfg.UnsafeSSH, Version: version.Version,
+		Transfers: publicTransferConfig{
+			MaxFileBytes: transferConfig.MaxFileBytes, MaxShareBytes: transferConfig.MaxShareBytes,
+			MaxJobBytes: transferConfig.MaxJobBytes, MaxOwnerBytes: transferConfig.MaxOwnerBytes,
+			MaxFilesPerShare: transferConfig.MaxFilesPerShare, Workers: transferConfig.Workers,
+			MaxJobsPerOwner: transferConfig.MaxJobsPerOwner, ExpirySeconds: int64(transferConfig.Expiry.Seconds()),
+			RetentionSeconds: int64(transferConfig.Retention.Seconds()), UploadTimeoutSeconds: int64(transferConfig.UploadTimeout.Seconds()),
+		},
+	})
 }
 
 func (a *API) login(c *echo.Context) error {
