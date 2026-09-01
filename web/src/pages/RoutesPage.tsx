@@ -25,6 +25,7 @@ export interface TerminalFileSummary { completed: number; total: number }
 const transferRefreshDelayMS = 100
 const terminalTransferStatuses = new Set<TransferStatus>(['completed', 'failed', 'canceled', 'interrupted', 'expired', 'deleting'])
 const terminalEventStatuses = new Set<TransferEventPayload['status']>(['completed', 'failed', 'canceled', 'interrupted', 'expired', 'deleting', 'deleted'])
+const restartableTransferStatuses = new Set<TransferEventPayload['status']>(['failed', 'canceled', 'interrupted'])
 const maxTerminalSummaries = 100
 
 export const initialTransferQueueState: TransferQueueState = { items: [] }
@@ -156,6 +157,7 @@ export default function RoutesPage() {
   const terminalSummaryAttempts = useRef(new Set<string>())
   const terminalSummaryRequests = useRef(new Map<string, number>())
   const terminalSummaryGeneration = useRef(0)
+  const jobLifecycleGenerations = useRef(new Map<string, number>())
   const sharesDataRef = useRef<TransferShare[] | null>(null)
   const jobsDataRef = useRef<TransferJob[] | null>(null)
   const transferSequences = useRef(new Map<string, number>())
@@ -186,6 +188,24 @@ export default function RoutesPage() {
     terminalSummaryAttempts.current.add(jobID)
     setTerminalFileSummaries(next)
   }, [])
+  const clearTerminalLifecycle = useCallback((jobID: string, clearLive: boolean, forceLive = false) => {
+    jobLifecycleGenerations.current.set(jobID, (jobLifecycleGenerations.current.get(jobID) ?? 0) + 1)
+    terminalSummaryGeneration.current += 1
+    terminalSummaryRequests.current.delete(jobID)
+    terminalSummaryAttempts.current.delete(jobID)
+    if (terminalFileSummariesRef.current[jobID]) {
+      const next = { ...terminalFileSummariesRef.current }
+      delete next[jobID]
+      terminalFileSummariesRef.current = next
+      setTerminalFileSummaries(next)
+    }
+    if (clearLive && liveProgressRef.current[jobID] && (forceLive || terminalEventStatuses.has(liveProgressRef.current[jobID].status))) {
+      const next = { ...liveProgressRef.current }
+      delete next[jobID]
+      liveProgressRef.current = next
+      setLiveProgress(next)
+    }
+  }, [])
   useEffect(() => () => {
     resumeRequestGeneration.current += 1
     if (transferRefreshTimer.current !== null) window.clearTimeout(transferRefreshTimer.current)
@@ -200,6 +220,7 @@ export default function RoutesPage() {
     const retainedIDs = new Set(currentJobs.slice(0, maxTerminalSummaries).map((job) => job.id))
     for (const id of terminalSummaryAttempts.current) if (!retainedIDs.has(id)) terminalSummaryAttempts.current.delete(id)
     for (const id of terminalSummaryRequests.current.keys()) if (!retainedIDs.has(id)) terminalSummaryRequests.current.delete(id)
+    for (const id of jobLifecycleGenerations.current.keys()) if (!retainedIDs.has(id)) jobLifecycleGenerations.current.delete(id)
     const pruned = pruneTerminalSummaries(terminalFileSummariesRef.current, currentJobs)
     if (Object.keys(pruned).length !== Object.keys(terminalFileSummariesRef.current).length) {
       terminalFileSummariesRef.current = pruned
@@ -244,6 +265,7 @@ export default function RoutesPage() {
 
   const loadJobItems = useCallback(async (jobID: string, silent = false) => {
     const requestID = ++detailsRequestID.current
+    const lifecycleGeneration = jobLifecycleGenerations.current.get(jobID) ?? 0
     if (!silent) setDetailsLoading(true)
     setDetailsError('')
     try {
@@ -251,7 +273,7 @@ export default function RoutesPage() {
       if (requestID === detailsRequestID.current) {
         setDetailsItems(items)
         const status = liveProgressRef.current[jobID]?.status ?? jobsDataRef.current?.find((job) => job.id === jobID)?.status
-        if (status && terminalEventStatuses.has(status)) commitTerminalSummary(jobID, { completed: items.filter((item) => item.status === 'completed').length, total: items.length })
+        if ((jobLifecycleGenerations.current.get(jobID) ?? 0) === lifecycleGeneration && status && terminalEventStatuses.has(status)) commitTerminalSummary(jobID, { completed: items.filter((item) => item.status === 'completed').length, total: items.length })
       }
     } catch {
       if (requestID === detailsRequestID.current) setDetailsError(t('transfers.loadItemsFailed'))
@@ -279,6 +301,11 @@ export default function RoutesPage() {
     if (previous !== undefined && event.sequence <= previous) return
     transferSequences.current.set(event.resource_id, event.sequence)
     const previousStatus = liveProgressRef.current[event.resource_id]?.status ?? (event.payload.share_id ? sharesDataRef.current?.find((share) => share.id === event.resource_id)?.status : jobsDataRef.current?.find((job) => job.id === event.resource_id)?.status)
+    if (event.payload.job_id && event.payload.status === 'running' && previousStatus !== undefined && restartableTransferStatuses.has(previousStatus)) clearTerminalLifecycle(event.resource_id, true)
+    if (event.payload.job_id && event.payload.status === 'deleted') {
+      clearTerminalLifecycle(event.resource_id, false)
+      if (selectedJobIDRef.current === event.resource_id) { detailsRequestID.current += 1; selectedJobIDRef.current = ''; setSelectedJobID(''); setDetailsItems([]); setDetailsError('') }
+    }
     const nextLive = { ...liveProgressRef.current, [event.resource_id]: event.payload }
     liveProgressRef.current = nextLive
     setLiveProgress(nextLive)
@@ -295,7 +322,7 @@ export default function RoutesPage() {
     } else if (event.payload.job_id) {
       queueTransferRefresh('jobs', selectedJobIDRef.current === event.resource_id)
     }
-  }, [commitTerminalSummary, queueTransferRefresh, t])
+  }, [clearTerminalLifecycle, commitTerminalSummary, queueTransferRefresh, t])
   useTransferEvents(onTransfer)
 
   const localizedError = (error: unknown, fallback = t('transfers.genericFailure')) => {
@@ -447,10 +474,16 @@ export default function RoutesPage() {
   const jobAction = async (job: TransferJob, action: 'start' | 'cancel' | 'retry' | 'delete') => {
     setJobBusyID(job.id)
     try {
-      if (action === 'start') { const updated = await api.startTransferJob(job.id); jobs.setData((current) => current?.map((item) => item.id === job.id ? updated : item) ?? current); void message.success(t('transfers.started')) }
+      if (action === 'start') { const updated = await api.startTransferJob(job.id); if (updated.status === 'running') clearTerminalLifecycle(job.id, true); jobs.setData((current) => current?.map((item) => item.id === job.id ? updated : item) ?? current); void message.success(t('transfers.started')) }
       if (action === 'cancel') { await api.cancelTransferJob(job.id); void message.success(t('transfers.canceledSuccess')) }
-      if (action === 'retry') { const updated = await api.retryTransferJob(job.id); jobs.setData((current) => current?.map((item) => item.id === job.id ? updated : item) ?? current); void message.success(t('transfers.retryStarted')) }
-      if (action === 'delete') { await api.deleteTransferJob(job.id); jobs.setData((current) => current?.filter((item) => item.id !== job.id) ?? current); if (selectedJobIDRef.current === job.id) { selectedJobIDRef.current = ''; setSelectedJobID('') }; void message.success(t('feedback.deleted')) }
+      if (action === 'retry') { const updated = await api.retryTransferJob(job.id); if (updated.status === 'running') clearTerminalLifecycle(job.id, true); jobs.setData((current) => current?.map((item) => item.id === job.id ? updated : item) ?? current); void message.success(t('transfers.retryStarted')) }
+      if (action === 'delete') {
+        await api.deleteTransferJob(job.id)
+        clearTerminalLifecycle(job.id, true, true)
+        jobs.setData((current) => current?.filter((item) => item.id !== job.id) ?? current)
+        if (selectedJobIDRef.current === job.id) { detailsRequestID.current += 1; selectedJobIDRef.current = ''; setSelectedJobID('') }
+        void message.success(t('feedback.deleted'))
+      }
       jobs.refresh({ silent: true })
     } catch (error) { void message.error(localizedError(error)) } finally { setJobBusyID('') }
   }

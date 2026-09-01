@@ -553,9 +553,62 @@ describe('RoutesPage transfers', () => {
     expect(screen.queryByText('tcs1.new-code')).toBeNull()
   })
 
+  it('clears terminal lifecycle state on retry, rejects stale derivation, re-derives once on completion, and prunes deletion', async () => {
+    const runningAfterRetry = { ...failedJob, status: 'running' as const, error_code: undefined }
+    const completedAfterRetry = { ...runningAfterRetry, status: 'completed' as const, received_bytes: 4, finished_at: timestamp }
+    const terminalItem = { id: 'terminal-item', job_id: failedJob.id, virtual_path: 'terminal.txt', size: 4, status: 'completed' as const, received_bytes: 4, completed_blocks: 1, mtime: timestamp, created_at: timestamp, updated_at: timestamp, finished_at: timestamp }
+    const staleItems = deferred<typeof terminalItem[]>()
+    let itemCall = 0
+    const items = vi.mocked(api.transferJobItems).mockImplementation(async (jobID) => {
+      if (jobID !== failedJob.id) return []
+      itemCall += 1
+      if (itemCall === 1) return [terminalItem]
+      if (itemCall === 2) return staleItems.promise
+      return [terminalItem]
+    })
+    vi.mocked(api.transferJobs).mockResolvedValue([failedJob])
+    vi.spyOn(api, 'retryTransferJob').mockResolvedValue(runningAfterRetry)
+    renderPage()
+    const user = userEvent.setup()
+    await user.click((await screen.findAllByText('File details'))[0]!)
+    await waitFor(() => expect(document.querySelector('.ant-drawer')?.textContent).toContain('1 / 1 files'))
+    await user.keyboard('{Escape}')
+    await waitFor(() => expect(document.querySelector('.ant-drawer-open')).toBeNull())
+    await user.click((await screen.findAllByText('File details'))[0]!)
+    await waitFor(() => expect(items).toHaveBeenCalledTimes(2))
+    vi.mocked(api.transferJobs).mockResolvedValue([runningAfterRetry])
+    await user.click(within(document.querySelector('.ant-drawer') as HTMLElement).getByText('Retry transfer'))
+    await waitFor(() => expect(document.querySelector('.ant-drawer')?.textContent).toContain('Running'))
+    expect(document.querySelector('.ant-drawer')?.textContent).toContain('File progress unavailable')
+    await user.keyboard('{Escape}')
+    staleItems.resolve([terminalItem])
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    expect(document.body.textContent).toContain('File progress unavailable')
+    expect(document.body.textContent).not.toContain('1 / 1 files')
+
+    vi.useFakeTimers()
+    act(() => window.dispatchEvent(new CustomEvent(transferEvent, { detail: { version: 1, type: 'transfer', resource_kind: 'transfer', resource_id: failedJob.id, operation_id: failedJob.id, phase: 'running', sequence: 1, at: timestamp, payload: { job_id: failedJob.id, status: 'running', received_bytes: 2, total_bytes: 4, completed_files: 1, total_files: 4 } } })))
+    expect(document.body.textContent).toContain('1 / 4 files')
+    await act(async () => { vi.advanceTimersByTime(100); await Promise.resolve(); await Promise.resolve() })
+
+    items.mockClear()
+    vi.mocked(api.transferJobs).mockResolvedValue([completedAfterRetry])
+    act(() => window.dispatchEvent(new CustomEvent(transferEvent, { detail: { version: 1, type: 'transfer', resource_kind: 'transfer', resource_id: failedJob.id, operation_id: failedJob.id, phase: 'ready', sequence: 2, at: timestamp, payload: { job_id: failedJob.id, status: 'completed', received_bytes: 4, total_bytes: 4 } } })))
+    await act(async () => { vi.advanceTimersByTime(100); await Promise.resolve(); await Promise.resolve(); await Promise.resolve() })
+    expect(items).toHaveBeenCalledTimes(1)
+    expect(document.body.textContent).toContain('1 / 1 files')
+    act(() => window.dispatchEvent(new CustomEvent(transferEvent, { detail: { version: 1, type: 'transfer', resource_kind: 'transfer', resource_id: failedJob.id, operation_id: failedJob.id, phase: 'ready', sequence: 3, at: timestamp, payload: { job_id: failedJob.id, status: 'completed', received_bytes: 4, total_bytes: 4 } } })))
+    await act(async () => { vi.advanceTimersByTime(100); await Promise.resolve(); await Promise.resolve() })
+    expect(items).toHaveBeenCalledTimes(1)
+    act(() => window.dispatchEvent(new CustomEvent(transferEvent, { detail: { version: 1, type: 'transfer', resource_kind: 'transfer', resource_id: failedJob.id, operation_id: failedJob.id, phase: 'stopped', sequence: 4, at: timestamp, payload: { job_id: failedJob.id, status: 'deleted' } } })))
+    expect(document.body.textContent).not.toContain('terminal.txt')
+    expect(screen.queryByText('Retry transfer')).toBeNull()
+  })
+
   it('owns exactly one initially empty live region and announces only accepted status transitions', async () => {
     renderPage()
     await screen.findByRole('tab', { name: 'Transfers', selected: true })
+    await screen.findByText('Start transfer')
     const regions = document.querySelectorAll('.transfer-live-announcement[aria-live="polite"]')
     expect(regions.length).toBe(1)
     expect(regions[0]?.textContent).toBe('')
