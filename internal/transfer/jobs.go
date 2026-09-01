@@ -303,10 +303,10 @@ func (s *Service) OpenCompletedItem(ctx context.Context, ownerID, jobID, itemID 
 		return CompletedItemRead{}, fmt.Errorf("validate completed transfer job: %w", err)
 	}
 	if err := s.validateJobLimits(ctx, job, time.Now().UTC()); err != nil {
-		if errors.Is(err, errConfiguredIneligible) {
+		if cause, configured := configuredDeletionCause(err); configured {
 			cleanupCtx, cancelCleanup := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
 			defer cancelCleanup()
-			cleanupErr := s.deleteJob(cleanupCtx, ownerID, jobID, "transfer.expire")
+			cleanupErr := s.deleteJob(cleanupCtx, ownerID, jobID, cause)
 			return CompletedItemRead{}, errors.Join(ErrNotFound, cleanupErr)
 		}
 		return CompletedItemRead{}, err
@@ -360,10 +360,10 @@ func (s *Service) startJob(ctx context.Context, ownerID, jobID string, resumeMan
 		return JobView{}, ErrInvalidState
 	}
 	if err := s.validateJobLimits(ctx, row, time.Now().UTC()); err != nil {
-		if errors.Is(err, errConfiguredIneligible) {
+		if cause, configured := configuredDeletionCause(err); configured {
 			cleanupCtx, cancelCleanup := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
 			defer cancelCleanup()
-			cleanupErr := s.deleteJob(cleanupCtx, ownerID, jobID, "transfer.expire")
+			cleanupErr := s.deleteJob(cleanupCtx, ownerID, jobID, cause)
 			return JobView{}, errors.Join(ErrInvalidState, cleanupErr)
 		}
 		return JobView{}, err

@@ -1,11 +1,16 @@
 package docs
 
 import (
+	"bytes"
 	"maps"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ca-x/tailcat-webui/internal/httpapi"
 
@@ -120,6 +125,23 @@ func TestOpenAPIIsValidYAMLWithPaths(t *testing.T) {
 			}
 		}
 	}
+	for _, method := range []string{"get", "head"} {
+		operation := document.Paths["/transfers/jobs/{id}/items/{item_id}/download"][method].(map[string]any)
+		responses := operation["responses"].(map[string]any)
+		for _, status := range []int{http.StatusOK, http.StatusPartialContent, http.StatusNotModified, http.StatusPreconditionFailed, http.StatusRequestedRangeNotSatisfiable} {
+			documented := responses[statusCode(status)].(map[string]any)
+			documentedHeaders, _ := documented["headers"].(map[string]any)
+			actual := representativeDownloadResponse(method, status)
+			if actual.Code != status {
+				t.Fatalf("representative %s download status = %d, want %d", method, actual.Code, status)
+			}
+			got := slices.Sorted(maps.Keys(actual.Header()))
+			want := slices.Sorted(maps.Keys(documentedHeaders))
+			if !slices.Equal(got, want) {
+				t.Errorf("OpenAPI %s download %d headers = %v, actual representative headers %v", method, status, want, got)
+			}
+		}
+	}
 	for schema, forbidden := range map[string][]string{
 		"TransferShare":     {"capability", "capability_hash", "storage_name", "blake3"},
 		"TransferShareFile": {"capability", "storage_name", "blake3", "block_hashes"},
@@ -168,4 +190,34 @@ func TestOpenAPIIsValidYAMLWithPaths(t *testing.T) {
 			t.Errorf("OpenAPI schema RuntimeEvent.%s is missing", field)
 		}
 	}
+}
+
+func representativeDownloadResponse(method string, status int) *httptest.ResponseRecorder {
+	request := httptest.NewRequest(strings.ToUpper(method), "https://tailcat.example/download", nil)
+	modificationTime := time.Unix(1000, 0).UTC()
+	switch status {
+	case http.StatusPartialContent:
+		request.Header.Set("Range", "bytes=0-1")
+	case http.StatusNotModified:
+		request.Header.Set("If-Modified-Since", modificationTime.Add(time.Hour).Format(http.TimeFormat))
+	case http.StatusPreconditionFailed:
+		request.Header.Set("If-Unmodified-Since", time.Unix(1, 0).UTC().Format(http.TimeFormat))
+	}
+	recorder := httptest.NewRecorder()
+	recorder.Header().Set("Content-Type", "application/octet-stream")
+	recorder.Header().Set("Content-Disposition", `attachment; filename="file.bin"`)
+	recorder.Header().Set("X-Content-Type-Options", "nosniff")
+	recorder.Header().Set("Cache-Control", "private, no-store")
+	if status == http.StatusRequestedRangeNotSatisfiable {
+		recorder.Header().Set("Content-Range", "bytes */4")
+		recorder.Header().Set("Accept-Ranges", "bytes")
+		recorder.WriteHeader(status)
+		return recorder
+	}
+	http.ServeContent(recorder, request, "file.bin", modificationTime, bytes.NewReader([]byte("data")))
+	return recorder
+}
+
+func statusCode(status int) string {
+	return strconv.Itoa(status)
 }

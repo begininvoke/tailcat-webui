@@ -555,7 +555,45 @@ func TestTransferReceiveWorkflowAndCompletedDownload(t *testing.T) {
 	if rangeResponse.Header().Get("Content-Range") != "bytes 9-16/22" || rangeResponse.Header().Get("Content-Length") != "8" || rangeResponse.Header().Get("Accept-Ranges") != "bytes" {
 		t.Fatalf("range headers = %v", rangeResponse.Header())
 	}
-	for name, rangeValue := range map[string]string{"multiple": "bytes=0-1,3-4", "invalid": "bytes=nope", "unsatisfiable": "bytes=999-1000"} {
+	for name, ifRange := range map[string]string{
+		"matching": download.Header().Get("Last-Modified"),
+		"stale":    time.Unix(1, 0).UTC().Format(http.TimeFormat),
+	} {
+		t.Run("if-range-"+name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, "https://tailcat.example.com"+downloadPath, nil)
+			request.Header.Set("Range", "bytes=9-")
+			request.Header.Set("If-Range", ifRange)
+			request.AddCookie(&http.Cookie{Name: sessionCookie, Value: h.tokenA})
+			response := httptest.NewRecorder()
+			h.handler.ServeHTTP(response, request)
+			want := http.StatusPartialContent
+			if name == "stale" {
+				want = http.StatusOK
+			}
+			if response.Code != want {
+				t.Fatalf("If-Range %s = %d headers=%v", name, response.Code, response.Header())
+			}
+		})
+	}
+	malformedIfRange := httptest.NewRequest(http.MethodGet, "https://tailcat.example.com"+downloadPath, nil)
+	malformedIfRange.Header.Set("Range", "bytes=abc-def")
+	malformedIfRange.Header.Set("If-Range", time.Unix(1, 0).UTC().Format(http.TimeFormat))
+	malformedIfRange.AddCookie(&http.Cookie{Name: sessionCookie, Value: h.tokenA})
+	malformedIfRangeResponse := httptest.NewRecorder()
+	h.handler.ServeHTTP(malformedIfRangeResponse, malformedIfRange)
+	if malformedIfRangeResponse.Code != http.StatusRequestedRangeNotSatisfiable || malformedIfRangeResponse.Body.Len() != 0 || malformedIfRangeResponse.Header().Get("Content-Range") != "bytes */22" {
+		t.Fatalf("malformed If-Range = %d headers=%v body=%q", malformedIfRangeResponse.Code, malformedIfRangeResponse.Header(), malformedIfRangeResponse.Body.String())
+	}
+	multipleHeaders := httptest.NewRequest(http.MethodGet, "https://tailcat.example.com"+downloadPath, nil)
+	multipleHeaders.Header.Add("Range", "bytes=0-1")
+	multipleHeaders.Header.Add("Range", "bytes=3-4")
+	multipleHeaders.AddCookie(&http.Cookie{Name: sessionCookie, Value: h.tokenA})
+	multipleHeadersResponse := httptest.NewRecorder()
+	h.handler.ServeHTTP(multipleHeadersResponse, multipleHeaders)
+	if multipleHeadersResponse.Code != http.StatusRequestedRangeNotSatisfiable || multipleHeadersResponse.Body.Len() != 0 {
+		t.Fatalf("multiple Range headers = %d body=%q", multipleHeadersResponse.Code, multipleHeadersResponse.Body.String())
+	}
+	for name, rangeValue := range map[string]string{"empty": "", "empty-spec": "bytes=", "multiple": "bytes=0-1,3-4", "invalid": "bytes=nope", "unsatisfiable": "bytes=999-1000"} {
 		t.Run(name, func(t *testing.T) {
 			request := httptest.NewRequest(http.MethodGet, "https://tailcat.example.com"+downloadPath, nil)
 			request.Header.Set("Range", rangeValue)
@@ -615,6 +653,82 @@ func TestTransferReceiveWorkflowAndCompletedDownload(t *testing.T) {
 	sanitizedC1 := safeDownloadName("bad\u0085Injected.txt")
 	if disposition := mime.FormatMediaType("attachment", map[string]string{"filename": sanitizedC1}); sanitizedC1 != "bad_Injected.txt" || strings.Contains(disposition, "%C2%85") || strings.ContainsRune(disposition, '\u0085') {
 		t.Fatalf("C1 download name=%q disposition=%q", sanitizedC1, disposition)
+	}
+}
+
+func TestStrictSingleDownloadRangeParser(t *testing.T) {
+	for _, test := range []struct {
+		header string
+		size   int64
+		valid  bool
+	}{
+		{"", 10, false},
+		{"bytes=0-0", 10, true},
+		{"bytes=3-", 10, true},
+		{"bytes=-3", 10, true},
+		{"bytes=-11", 10, true},
+		{"bytes=0-99", 10, true},
+		{"bytes=", 10, false},
+		{"bytes=abc-def", 10, false},
+		{"bytes=١-٢", 10, false},
+		{"bytes=-0", 10, false},
+		{"bytes=--1", 10, false},
+		{"bytes=+1-2", 10, false},
+		{"bytes=1--2", 10, false},
+		{"bytes=3-2", 10, false},
+		{"bytes=10-", 10, false},
+		{"bytes=0-1,3-4", 10, false},
+		{"bytes=9223372036854775808-", 10, false},
+		{"bytes=-9223372036854775808", 10, false},
+		{"items=0-1", 10, false},
+		{"bytes=0-0", 0, false},
+		{"bytes=-1", 0, false},
+	} {
+		if got := validSingleDownloadRange(test.header, test.size); got != test.valid {
+			t.Errorf("validSingleDownloadRange(%q, %d) = %t, want %t", test.header, test.size, got, test.valid)
+		}
+	}
+}
+
+func TestZeroByteCompletedDownloadRejectsEveryRange(t *testing.T) {
+	h := newTransferAPIHarness(t, config.Transfer{})
+	shareID, capability := h.createShare(h.tokenA)
+	if response := h.upload(h.tokenA, shareID, "empty.txt", nil); response.Code != http.StatusCreated {
+		t.Fatalf("zero upload = %d %s", response.Code, response.Body.String())
+	}
+	if response := h.request(http.MethodPost, "/api/v1/transfers/shares/"+shareID+"/finalize", h.tokenA, "", nil); response.Code != http.StatusOK {
+		t.Fatal(response.Body.String())
+	}
+	created := h.request(http.MethodPost, "/api/v1/transfers/jobs", h.tokenA, "application/json", strings.NewReader(`{"client_id":"`+h.clientA.ID+`","capability":"`+capability+`"}`))
+	var job struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(created.Body.Bytes(), &job); err != nil {
+		t.Fatal(err)
+	}
+	if response := h.request(http.MethodPost, "/api/v1/transfers/jobs/"+job.ID+"/start", h.tokenA, "", nil); response.Code != http.StatusOK {
+		t.Fatal(response.Body.String())
+	}
+	waitTransferAPIJobStatus(t, h, job.ID, "completed")
+	items := h.request(http.MethodGet, "/api/v1/transfers/jobs/"+job.ID+"/items", h.tokenA, "", nil)
+	var listed struct {
+		Items []struct {
+			ID string `json:"id"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(items.Body.Bytes(), &listed); err != nil || len(listed.Items) != 1 {
+		t.Fatalf("items = %s, %v", items.Body.String(), err)
+	}
+	downloadPath := "/api/v1/transfers/jobs/" + job.ID + "/items/" + listed.Items[0].ID + "/download"
+	for _, value := range []string{"bytes=0-0", "bytes=-1", "bytes=abc-def"} {
+		request := httptest.NewRequest(http.MethodGet, "https://tailcat.example.com"+downloadPath, nil)
+		request.Header.Set("Range", value)
+		request.AddCookie(&http.Cookie{Name: sessionCookie, Value: h.tokenA})
+		response := httptest.NewRecorder()
+		h.handler.ServeHTTP(response, request)
+		if response.Code != http.StatusRequestedRangeNotSatisfiable || response.Body.Len() != 0 || response.Header().Get("Content-Range") != "bytes */0" {
+			t.Fatalf("zero-byte range %q = %d headers=%v body=%q", value, response.Code, response.Header(), response.Body.String())
+		}
 	}
 }
 

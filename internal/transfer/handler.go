@@ -57,16 +57,17 @@ func (s *Service) serveReserved(ctx context.Context, serverID string, connection
 		_ = writeErrorResponse(requestCtx, connection, responseCode(err))
 		return err
 	}
-	expireAfterRequest := false
-	expireOwnerID := ""
+	reconcileAfterRequest := false
+	reconcileOwnerID := ""
+	reconcileCause := deletionRequested
 	defer func() {
 		s.finishShareAdmission(admission)
-		if !expireAfterRequest || expireOwnerID == "" {
+		if !reconcileAfterRequest || reconcileOwnerID == "" {
 			return
 		}
 		cleanupCtx, cancelCleanup := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
 		defer cancelCleanup()
-		if cleanupErr := s.deleteShare(cleanupCtx, expireOwnerID, request.ShareID, "transfer.expire"); cleanupErr != nil && !errors.Is(cleanupErr, ErrNotFound) {
+		if cleanupErr := s.deleteShare(cleanupCtx, reconcileOwnerID, request.ShareID, reconcileCause); cleanupErr != nil && !errors.Is(cleanupErr, ErrNotFound) {
 			s.recordFailure(cleanupErr)
 		}
 	}()
@@ -74,9 +75,9 @@ func (s *Service) serveReserved(ctx context.Context, serverID string, connection
 	defer stopAdmission()
 	share, err := s.authorizeRequest(admission.ctx, serverID, request)
 	if err != nil {
-		expireAfterRequest = errors.Is(err, errConfiguredIneligible)
-		if share != nil {
-			expireOwnerID = share.UserID
+		reconcileCause, reconcileAfterRequest = configuredDeletionCause(err)
+		if reconcileAfterRequest && share != nil {
+			reconcileOwnerID = share.UserID
 		}
 		_ = writeErrorResponse(requestCtx, connection, responseCode(err))
 		return err
@@ -146,8 +147,8 @@ func (s *Service) authorizeRequest(ctx context.Context, serverID string, request
 		return nil, protocolError(CodeInvalidCapability, ErrInvalidCapability)
 	}
 	if err := s.validateShareLimits(ctx, row, now); err != nil {
-		if errors.Is(err, errConfiguredIneligible) {
-			if errors.Is(err, errConfiguredExpired) {
+		if cause, configured := configuredDeletionCause(err); configured {
+			if cause == deletionExpired {
 				return row, protocolError(CodeInvalidCapability, err)
 			}
 			return row, protocolError(CodeLimitExceeded, err)

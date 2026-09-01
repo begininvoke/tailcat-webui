@@ -50,6 +50,23 @@ func (function transferAuditFunc) RecordWithClient(ctx context.Context, _ *ent.C
 	return function(ctx, entry)
 }
 
+type selectiveFailAudit struct {
+	delegate     *audit.Service
+	failure      error
+	resourceKind string
+}
+
+func (recorder *selectiveFailAudit) Record(ctx context.Context, entry audit.Entry) error {
+	return recorder.delegate.Record(ctx, entry)
+}
+
+func (recorder *selectiveFailAudit) RecordWithClient(ctx context.Context, client *ent.Client, entry audit.Entry) error {
+	if entry.Action == "transfer.limit" && entry.ResourceKind == recorder.resourceKind {
+		return recorder.failure
+	}
+	return recorder.delegate.RecordWithClient(ctx, client, entry)
+}
+
 type transferPublisherFunc func(string, events.Envelope)
 
 func (function transferPublisherFunc) PublishEvent(ownerID string, event events.Envelope) {
@@ -1180,6 +1197,87 @@ func TestRecoveryExpiredShareAndJobAuditCommitFailuresRemainRetryable(t *testing
 	}
 }
 
+func TestRecoveryLimitShareAndJobCommitFailuresRetryWithOnlyLimitAudit(t *testing.T) {
+	db, storage, box, owner, server, _ := newTransferServiceData(t)
+	client := db.TailClient.Create().SetUserID(owner.ID).SetName("limit-retry").SetServerTokenCipher([]byte("cipher")).SetTokenHint("hint").SaveX(t.Context())
+	first := newLoopbackTransferService(t, db, storage, box, owner.ID, client.ID, server.ID)
+	share, err := first.CreateShare(t.Context(), owner.ID, CreateShareInput{ServerID: server.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.StageFile(t.Context(), owner.ID, share.ID, StageFileInput{VirtualPath: "limit.txt", Size: 3, Body: io.NopCloser(strings.NewReader("abc"))}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.FinalizeShare(t.Context(), owner.ID, share.ID); err != nil {
+		t.Fatal(err)
+	}
+	job, err := first.CreateIncomingJob(t.Context(), owner.ID, CreateIncomingJobInput{ClientID: client.ID, Capability: share.Capability})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	auditor, err := audit.NewService(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	limits := DefaultServiceLimits()
+	limits.MaxFileBytes = 2
+	limits.MaxShareBytes = 2
+	limits.MaxJobBytes = 2
+	second, err := NewServiceWithLimits(t.Context(), db, storage, box,
+		transferDialerFunc(func(context.Context, string, string, uint16) (net.Conn, error) { return nil, errors.New("unused") }),
+		auditor, transferPublisherFunc(func(string, events.Envelope) {}), slog.New(slog.NewTextHandler(io.Discard, nil)), limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = second.Close() })
+	auditFailure := errors.New("injected limit audit failure")
+	second.auditor = &selectiveFailAudit{delegate: auditor, failure: auditFailure, resourceKind: "share"}
+	commitFailure := errors.New("injected limit commit failure")
+	second.lifecycleHooks.beforeCommit = func(operation string) error {
+		if operation == "job.limit" {
+			return commitFailure
+		}
+		return nil
+	}
+	if err := second.RecoverAfterRestore(t.Context()); !errors.Is(err, commitFailure) || !errors.Is(err, auditFailure) {
+		t.Fatalf("RecoverAfterRestore error = %v, want audit and commit failures", err)
+	}
+	shareRow := db.TransferShare.GetX(t.Context(), share.ID)
+	if shareRow.Status != transfershare.StatusDeleting || shareRow.ErrorCode != transfershare.ErrorCodeTransferLimitExceeded {
+		t.Fatalf("limit share state = %s/%s", shareRow.Status, shareRow.ErrorCode)
+	}
+	jobRow := db.TransferJob.GetX(t.Context(), job.ID)
+	if jobRow.Status != transferjob.StatusDeleting || jobRow.ErrorCode != transferjob.ErrorCodeTransferLimitExceeded {
+		t.Fatalf("limit job state = %s/%s", jobRow.Status, jobRow.ErrorCode)
+	}
+	for _, auditID := range []string{"share:" + share.ID + ":transfer.limit", "job:" + job.ID + ":transfer.limit"} {
+		if db.AuditEvent.Query().Where(auditevent.IDEQ(auditID)).ExistX(t.Context()) {
+			t.Fatalf("limit audit committed before metadata deletion: %s", auditID)
+		}
+	}
+	second.auditor = auditor
+	second.lifecycleHooks.beforeCommit = nil
+	if err := second.DeleteShare(t.Context(), owner.ID, share.ID); err != nil {
+		t.Fatalf("public retry DeleteShare: %v", err)
+	}
+	if err := second.DeleteJob(t.Context(), owner.ID, job.ID); err != nil {
+		t.Fatalf("public retry DeleteJob: %v", err)
+	}
+	for _, auditID := range []string{"share:" + share.ID + ":transfer.limit", "job:" + job.ID + ":transfer.limit"} {
+		if count := db.AuditEvent.Query().Where(auditevent.IDEQ(auditID)).CountX(t.Context()); count != 1 {
+			t.Fatalf("limit audit %q count = %d, want 1", auditID, count)
+		}
+	}
+	for _, action := range []string{"transfer.expire", "transfer.delete"} {
+		if count := db.AuditEvent.Query().Where(auditevent.UserIDEQ(owner.ID), auditevent.ActionEQ(action)).CountX(t.Context()); count != 0 {
+			t.Fatalf("limit retry wrote %d %s audits", count, action)
+		}
+	}
+}
+
 func TestExpiryRevokesRequestAuthorizedBeforeStreamRegistration(t *testing.T) {
 	db, storage, box, owner, server, _ := newTransferServiceData(t)
 	service := newTransferServiceForTest(t, db, storage, box)
@@ -1649,8 +1747,13 @@ func TestLowerLimitsAfterRestartDenyHandlerAndStartThenRecoveryCleansUsage(t *te
 	if err != nil || usage != (QuotaUsage{}) {
 		t.Fatalf("usage after lower-limit reconciliation = %+v, %v", usage, err)
 	}
-	if got := db.AuditEvent.Query().Where(auditevent.UserIDEQ(owner.ID), auditevent.ActionEQ("transfer.expire")).CountX(t.Context()); got != 6 {
-		t.Fatalf("lower-limit expire audits = %d, want 6", got)
+	if got := db.AuditEvent.Query().Where(auditevent.UserIDEQ(owner.ID), auditevent.ActionEQ("transfer.limit")).CountX(t.Context()); got != 6 {
+		t.Fatalf("lower-limit audits = %d, want 6", got)
+	}
+	for _, action := range []string{"transfer.expire", "transfer.delete"} {
+		if got := db.AuditEvent.Query().Where(auditevent.UserIDEQ(owner.ID), auditevent.ActionEQ(action)).CountX(t.Context()); got != 0 {
+			t.Fatalf("lower-limit reconciliation wrote %d %s audits", got, action)
+		}
 	}
 }
 

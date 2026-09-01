@@ -430,7 +430,8 @@ func (a *API) downloadTransferJobItem(c *echo.Context) error {
 	response.Header().Set("Content-Disposition", disposition)
 	response.Header().Set("X-Content-Type-Options", "nosniff")
 	response.Header().Set("Cache-Control", "private, no-store")
-	if rangeHeader := c.Request().Header.Get("Range"); rangeHeader != "" && !validSingleDownloadRange(rangeHeader, opened.Item.Size) {
+	rangeHeaders := c.Request().Header.Values("Range")
+	if len(rangeHeaders) > 1 || (len(rangeHeaders) == 1 && !validSingleDownloadRange(rangeHeaders[0], opened.Item.Size)) {
 		response.Header().Set("Content-Range", "bytes */"+strconv.FormatInt(opened.Item.Size, 10))
 		response.Header().Set("Accept-Ranges", "bytes")
 		return c.NoContent(http.StatusRequestedRangeNotSatisfiable)
@@ -448,22 +449,41 @@ func validSingleDownloadRange(header string, size int64) bool {
 	if !ok || strings.Contains(endText, "-") {
 		return false
 	}
-	if size == 0 {
-		return true
+	if size <= 0 {
+		return false
 	}
 	if startText == "" {
-		suffix, err := strconv.ParseUint(endText, 10, 63)
-		return err == nil && suffix > 0
+		suffix, ok := parseASCIIRangeInt(endText)
+		return ok && suffix > 0
 	}
-	start, err := strconv.ParseUint(startText, 10, 63)
-	if err != nil || start >= uint64(size) {
+	start, ok := parseASCIIRangeInt(startText)
+	if !ok || start >= uint64(size) {
 		return false
 	}
 	if endText == "" {
 		return true
 	}
-	end, err := strconv.ParseUint(endText, 10, 63)
-	return err == nil && start <= end
+	end, ok := parseASCIIRangeInt(endText)
+	return ok && start <= end
+}
+
+func parseASCIIRangeInt(text string) (uint64, bool) {
+	if text == "" {
+		return 0, false
+	}
+	var value uint64
+	const maxInt64 = uint64(^uint64(0) >> 1)
+	for _, character := range []byte(text) {
+		if character < '0' || character > '9' {
+			return 0, false
+		}
+		digit := uint64(character - '0')
+		if value > (maxInt64-digit)/10 {
+			return 0, false
+		}
+		value = value*10 + digit
+	}
+	return value, true
 }
 
 func safeDownloadName(name string) string {

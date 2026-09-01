@@ -83,14 +83,36 @@ func terminalAuditForJob(status transferjob.Status) (string, string) {
 	}
 }
 
+func (cause deletionCause) action() string {
+	switch cause {
+	case deletionExpired:
+		return "transfer.expire"
+	case deletionLimit:
+		return "transfer.limit"
+	default:
+		return "transfer.delete"
+	}
+}
+
+func (cause deletionCause) operation(kind string) string {
+	switch cause {
+	case deletionExpired:
+		return kind + ".expire"
+	case deletionLimit:
+		return kind + ".limit"
+	default:
+		return kind + ".delete"
+	}
+}
+
 func (s *Service) DeleteShare(ctx context.Context, ownerID, shareID string) error {
 	if err := s.ensureOpen(); err != nil {
 		return err
 	}
-	return s.deleteShare(ctx, ownerID, shareID, "transfer.delete")
+	return s.deleteShare(ctx, ownerID, shareID, deletionRequested)
 }
 
-func (s *Service) deleteShare(ctx context.Context, ownerID, shareID, action string) (retErr error) {
+func (s *Service) deleteShare(ctx context.Context, ownerID, shareID string, cause deletionCause) (retErr error) {
 	row, err := s.db.TransferShare.Query().Where(transfershare.IDEQ(shareID), transfershare.UserIDEQ(ownerID)).Only(ctx)
 	if ent.IsNotFound(err) {
 		return ErrNotFound
@@ -107,9 +129,15 @@ func (s *Service) deleteShare(ctx context.Context, ownerID, shareID, action stri
 	if err != nil {
 		return fmt.Errorf("recheck transfer share for deletion: %w", err)
 	}
-	if row.Status == transfershare.StatusDeleting && row.ErrorCode == transfershare.ErrorCodeTransferExpired {
-		action = "transfer.expire"
+	if row.Status == transfershare.StatusDeleting {
+		switch row.ErrorCode {
+		case transfershare.ErrorCodeTransferExpired:
+			cause = deletionExpired
+		case transfershare.ErrorCodeTransferLimitExceeded:
+			cause = deletionLimit
+		}
 	}
+	action := cause.action()
 	generation, err := s.closeShareAdmission(ctx, shareID, ErrInvalidCapability)
 	if err != nil {
 		return err
@@ -122,8 +150,11 @@ func (s *Service) deleteShare(ctx context.Context, ownerID, shareID, action stri
 		update := row.Update().
 			Where(transfershare.UserIDEQ(ownerID), transfershare.StatusEQ(row.Status)).
 			SetStatus(transfershare.StatusDeleting)
-		if action == "transfer.expire" {
+		switch cause {
+		case deletionExpired:
 			update.SetErrorCode(transfershare.ErrorCodeTransferExpired)
+		case deletionLimit:
+			update.SetErrorCode(transfershare.ErrorCodeTransferLimitExceeded)
 		}
 		row, err = update.Save(ctx)
 		if ent.IsNotFound(err) {
@@ -169,10 +200,7 @@ func (s *Service) deleteShare(ctx context.Context, ownerID, shareID, action stri
 	if deleted != 1 {
 		return ErrInvalidState
 	}
-	operation := "share.delete"
-	if action == "transfer.expire" {
-		operation = "share.expire"
-	}
+	operation := cause.operation("share")
 	if err := s.commitLifecycle(tx, operation); err != nil {
 		return fmt.Errorf("commit transfer share deletion: %w", err)
 	}
@@ -186,10 +214,10 @@ func (s *Service) DeleteJob(ctx context.Context, ownerID, jobID string) error {
 	if err := s.ensureOpen(); err != nil {
 		return err
 	}
-	return s.deleteJob(ctx, ownerID, jobID, "transfer.delete")
+	return s.deleteJob(ctx, ownerID, jobID, deletionRequested)
 }
 
-func (s *Service) deleteJob(ctx context.Context, ownerID, jobID, action string) (retErr error) {
+func (s *Service) deleteJob(ctx context.Context, ownerID, jobID string, cause deletionCause) (retErr error) {
 	row, err := s.db.TransferJob.Query().Where(transferjob.IDEQ(jobID), transferjob.UserIDEQ(ownerID)).Only(ctx)
 	if ent.IsNotFound(err) {
 		return ErrNotFound
@@ -197,9 +225,15 @@ func (s *Service) deleteJob(ctx context.Context, ownerID, jobID, action string) 
 	if err != nil {
 		return fmt.Errorf("load transfer job for deletion: %w", err)
 	}
-	if row.Status == transferjob.StatusDeleting && row.ErrorCode == transferjob.ErrorCodeTransferExpired {
-		action = "transfer.expire"
+	if row.Status == transferjob.StatusDeleting {
+		switch row.ErrorCode {
+		case transferjob.ErrorCodeTransferExpired:
+			cause = deletionExpired
+		case transferjob.ErrorCodeTransferLimitExceeded:
+			cause = deletionLimit
+		}
 	}
+	action := cause.action()
 	if row.Status != transferjob.StatusDeleting {
 		if !legalTransferTransition(string(row.Status), string(transferjob.StatusDeleting)) {
 			return ErrInvalidState
@@ -207,8 +241,11 @@ func (s *Service) deleteJob(ctx context.Context, ownerID, jobID, action string) 
 		update := row.Update().
 			Where(transferjob.UserIDEQ(ownerID), transferjob.StatusEQ(row.Status)).
 			SetStatus(transferjob.StatusDeleting)
-		if action == "transfer.expire" {
+		switch cause {
+		case deletionExpired:
 			update.SetErrorCode(transferjob.ErrorCodeTransferExpired)
+		case deletionLimit:
+			update.SetErrorCode(transferjob.ErrorCodeTransferLimitExceeded)
 		}
 		row, err = update.Save(ctx)
 		if ent.IsNotFound(err) {
@@ -265,10 +302,7 @@ func (s *Service) deleteJob(ctx context.Context, ownerID, jobID, action string) 
 	if deleted != 1 {
 		return ErrInvalidState
 	}
-	operation := "job.delete"
-	if action == "transfer.expire" {
-		operation = "job.expire"
-	}
+	operation := cause.operation("job")
 	if err := s.commitLifecycle(tx, operation); err != nil {
 		return fmt.Errorf("commit transfer job deletion: %w", err)
 	}
@@ -326,19 +360,16 @@ func (s *Service) RecoverAfterRestore(ctx context.Context) error {
 	}
 	for _, share := range shares {
 		if share.Status == transfershare.StatusDeleting {
-			action := "transfer.delete"
-			if share.ErrorCode == transfershare.ErrorCodeTransferExpired {
-				action = "transfer.expire"
-			}
-			if err := s.deleteShare(ctx, share.UserID, share.ID, action); err != nil && !errors.Is(err, ErrNotFound) {
+			if err := s.deleteShare(ctx, share.UserID, share.ID, deletionRequested); err != nil && !errors.Is(err, ErrNotFound) {
 				errs = append(errs, err)
 			}
 		} else if limitErr := s.validateShareLimits(ctx, share, now); limitErr != nil {
-			if !errors.Is(limitErr, errConfiguredIneligible) {
+			cause, configured := configuredDeletionCause(limitErr)
+			if !configured {
 				errs = append(errs, limitErr)
 				continue
 			}
-			if err := s.deleteShare(ctx, share.UserID, share.ID, "transfer.expire"); err != nil && !errors.Is(err, ErrNotFound) {
+			if err := s.deleteShare(ctx, share.UserID, share.ID, cause); err != nil && !errors.Is(err, ErrNotFound) {
 				errs = append(errs, err)
 			}
 		}
@@ -349,21 +380,18 @@ func (s *Service) RecoverAfterRestore(ctx context.Context) error {
 	}
 	for _, job := range jobs {
 		if job.Status == transferjob.StatusDeleting {
-			action := "transfer.delete"
-			if job.ErrorCode == transferjob.ErrorCodeTransferExpired {
-				action = "transfer.expire"
-			}
-			if err := s.deleteJob(ctx, job.UserID, job.ID, action); err != nil && !errors.Is(err, ErrNotFound) {
+			if err := s.deleteJob(ctx, job.UserID, job.ID, deletionRequested); err != nil && !errors.Is(err, ErrNotFound) {
 				errs = append(errs, err)
 			}
 			continue
 		}
 		if limitErr := s.validateJobLimits(ctx, job, now); limitErr != nil {
-			if !errors.Is(limitErr, errConfiguredIneligible) {
+			cause, configured := configuredDeletionCause(limitErr)
+			if !configured {
 				errs = append(errs, limitErr)
 				continue
 			}
-			if err := s.deleteJob(ctx, job.UserID, job.ID, "transfer.expire"); err != nil && !errors.Is(err, ErrNotFound) {
+			if err := s.deleteJob(ctx, job.UserID, job.ID, cause); err != nil && !errors.Is(err, ErrNotFound) {
 				errs = append(errs, err)
 			}
 			continue
