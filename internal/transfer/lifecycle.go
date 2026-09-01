@@ -90,7 +90,7 @@ func (s *Service) DeleteShare(ctx context.Context, ownerID, shareID string) erro
 	return s.deleteShare(ctx, ownerID, shareID, "transfer.delete")
 }
 
-func (s *Service) deleteShare(ctx context.Context, ownerID, shareID, action string) error {
+func (s *Service) deleteShare(ctx context.Context, ownerID, shareID, action string) (retErr error) {
 	row, err := s.db.TransferShare.Query().Where(transfershare.IDEQ(shareID), transfershare.UserIDEQ(ownerID)).Only(ctx)
 	if ent.IsNotFound(err) {
 		return ErrNotFound
@@ -98,23 +98,39 @@ func (s *Service) deleteShare(ctx context.Context, ownerID, shareID, action stri
 	if err != nil {
 		return fmt.Errorf("load transfer share for deletion: %w", err)
 	}
+	unlock := s.lockShareOperation(shareID)
+	defer unlock()
+	row, err = s.db.TransferShare.Query().Where(transfershare.IDEQ(shareID), transfershare.UserIDEQ(ownerID)).Only(ctx)
+	if ent.IsNotFound(err) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("recheck transfer share for deletion: %w", err)
+	}
+	generation, err := s.closeShareAdmission(ctx, shareID, ErrInvalidCapability)
+	if err != nil {
+		return err
+	}
 	if row.Status != transfershare.StatusDeleting {
 		if !legalTransferTransition(string(row.Status), string(transfershare.StatusDeleting)) {
+			s.reopenShareAdmissionIfLegal(ctx, ownerID, shareID, generation)
 			return ErrInvalidState
 		}
-		row, err = row.Update().
+		update := row.Update().
 			Where(transfershare.UserIDEQ(ownerID), transfershare.StatusEQ(row.Status)).
-			SetStatus(transfershare.StatusDeleting).
-			Save(ctx)
+			SetStatus(transfershare.StatusDeleting)
+		if action == "transfer.expire" {
+			update.SetErrorCode(transfershare.ErrorCodeTransferExpired)
+		}
+		row, err = update.Save(ctx)
 		if ent.IsNotFound(err) {
+			s.reopenShareAdmissionIfLegal(ctx, ownerID, shareID, generation)
 			return ErrInvalidState
 		}
 		if err != nil {
+			s.reopenShareAdmissionIfLegal(context.WithoutCancel(ctx), ownerID, shareID, generation)
 			return fmt.Errorf("mark transfer share deleting: %w", err)
 		}
-	}
-	if err := s.cancelShareStreamsAndWait(ctx, shareID, ErrInvalidCapability); err != nil {
-		return err
 	}
 	files, err := s.db.ShareFile.Query().Where(sharefile.UserIDEQ(ownerID), sharefile.ShareIDEQ(shareID)).All(ctx)
 	if err != nil {
@@ -127,19 +143,38 @@ func (s *Service) deleteShare(ctx context.Context, ownerID, shareID, action stri
 		}
 	}
 	if err := errors.Join(removeErrs...); err != nil {
-		_ = s.recordLifecycle(ctx, ownerID, action+"_failed", "share", shareID, "failure")
-		return fmt.Errorf("remove transfer share bytes: %w", err)
+		auditErr := s.recordLifecycle(ctx, ownerID, action+"_failed", "share", shareID, "failure")
+		return errors.Join(fmt.Errorf("remove transfer share bytes: %w", err), auditErr)
 	}
-	if err := s.recordLifecycle(ctx, ownerID, action, "share", shareID, "success"); err != nil {
+	tx, err := s.db.Tx(ctx)
+	if err != nil {
+		return fmt.Errorf("begin transfer share final deletion: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			retErr = errors.Join(retErr, tx.Rollback())
+		}
+	}()
+	if err := s.recordLifecycleWithClient(ctx, tx.Client(), ownerID, action, "share", shareID, "success"); err != nil {
 		return err
 	}
-	deleted, err := s.db.TransferShare.Delete().Where(transfershare.IDEQ(shareID), transfershare.UserIDEQ(ownerID), transfershare.StatusEQ(transfershare.StatusDeleting)).Exec(ctx)
+	deleted, err := tx.Client().TransferShare.Delete().Where(transfershare.IDEQ(shareID), transfershare.UserIDEQ(ownerID), transfershare.StatusEQ(transfershare.StatusDeleting)).Exec(ctx)
 	if err != nil {
 		return fmt.Errorf("delete transfer share metadata: %w", err)
 	}
 	if deleted != 1 {
 		return ErrInvalidState
 	}
+	operation := "share.delete"
+	if action == "transfer.expire" {
+		operation = "share.expire"
+	}
+	if err := s.commitLifecycle(tx, operation); err != nil {
+		return fmt.Errorf("commit transfer share deletion: %w", err)
+	}
+	committed = true
+	s.removeShareGate(shareID)
 	s.publishTransfer(ownerID, shareID, events.RuntimePhaseStopped, TransferEventPayload{ShareID: shareID, Status: "deleted"})
 	return nil
 }
@@ -151,7 +186,7 @@ func (s *Service) DeleteJob(ctx context.Context, ownerID, jobID string) error {
 	return s.deleteJob(ctx, ownerID, jobID, "transfer.delete")
 }
 
-func (s *Service) deleteJob(ctx context.Context, ownerID, jobID, action string) error {
+func (s *Service) deleteJob(ctx context.Context, ownerID, jobID, action string) (retErr error) {
 	row, err := s.db.TransferJob.Query().Where(transferjob.IDEQ(jobID), transferjob.UserIDEQ(ownerID)).Only(ctx)
 	if ent.IsNotFound(err) {
 		return ErrNotFound
@@ -163,10 +198,13 @@ func (s *Service) deleteJob(ctx context.Context, ownerID, jobID, action string) 
 		if !legalTransferTransition(string(row.Status), string(transferjob.StatusDeleting)) {
 			return ErrInvalidState
 		}
-		row, err = row.Update().
+		update := row.Update().
 			Where(transferjob.UserIDEQ(ownerID), transferjob.StatusEQ(row.Status)).
-			SetStatus(transferjob.StatusDeleting).
-			Save(ctx)
+			SetStatus(transferjob.StatusDeleting)
+		if action == "transfer.expire" {
+			update.SetErrorCode(transferjob.ErrorCodeTransferExpired)
+		}
+		row, err = update.Save(ctx)
 		if ent.IsNotFound(err) {
 			return ErrInvalidState
 		}
@@ -198,40 +236,38 @@ func (s *Service) deleteJob(ctx context.Context, ownerID, jobID, action string) 
 		}
 	}
 	if err := errors.Join(removeErrs...); err != nil {
-		_ = s.recordLifecycle(ctx, ownerID, action+"_failed", "job", jobID, "failure")
-		return fmt.Errorf("remove transfer job bytes: %w", err)
+		auditErr := s.recordLifecycle(ctx, ownerID, action+"_failed", "job", jobID, "failure")
+		return errors.Join(fmt.Errorf("remove transfer job bytes: %w", err), auditErr)
 	}
-	if err := s.recordLifecycle(ctx, ownerID, action, "job", jobID, "success"); err != nil {
+	tx, err := s.db.Tx(ctx)
+	if err != nil {
+		return fmt.Errorf("begin transfer job final deletion: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			retErr = errors.Join(retErr, tx.Rollback())
+		}
+	}()
+	if err := s.recordLifecycleWithClient(ctx, tx.Client(), ownerID, action, "job", jobID, "success"); err != nil {
 		return err
 	}
-	deleted, err := s.db.TransferJob.Delete().Where(transferjob.IDEQ(jobID), transferjob.UserIDEQ(ownerID), transferjob.StatusEQ(transferjob.StatusDeleting)).Exec(ctx)
+	deleted, err := tx.Client().TransferJob.Delete().Where(transferjob.IDEQ(jobID), transferjob.UserIDEQ(ownerID), transferjob.StatusEQ(transferjob.StatusDeleting)).Exec(ctx)
 	if err != nil {
 		return fmt.Errorf("delete transfer job metadata: %w", err)
 	}
 	if deleted != 1 {
 		return ErrInvalidState
 	}
+	operation := "job.delete"
+	if action == "transfer.expire" {
+		operation = "job.expire"
+	}
+	if err := s.commitLifecycle(tx, operation); err != nil {
+		return fmt.Errorf("commit transfer job deletion: %w", err)
+	}
+	committed = true
 	s.publishTransfer(ownerID, jobID, events.RuntimePhaseStopped, TransferEventPayload{JobID: jobID, Status: "deleted"})
-	return nil
-}
-
-func (s *Service) cancelShareStreamsAndWait(ctx context.Context, shareID string, cause error) error {
-	s.mu.Lock()
-	streams := make([]*activeStream, 0, len(s.streams[shareID]))
-	for stream := range s.streams[shareID] {
-		streams = append(streams, stream)
-	}
-	s.mu.Unlock()
-	for _, stream := range streams {
-		stream.cancel(cause)
-	}
-	for _, stream := range streams {
-		select {
-		case <-stream.done:
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
 	return nil
 }
 
@@ -241,10 +277,7 @@ func (s *Service) interruptAbandoned(ctx context.Context) error {
 		return fmt.Errorf("list abandoned transfer jobs: %w", err)
 	}
 	for _, row := range rows {
-		if err := s.recordLifecycle(ctx, row.UserID, "transfer.interrupt", "job", row.ID, "failure"); err != nil {
-			return err
-		}
-		updated, _, err := s.persistJobTerminal(ctx, row.UserID, row.ID, transferjob.StatusInterrupted, transferitem.StatusInterrupted, transferjob.ErrorCodeTransferRemoteUnavailable)
+		updated, _, err := s.persistJobTerminalWithRetry(ctx, row.UserID, row.ID, transferjob.StatusInterrupted, transferitem.StatusInterrupted, transferjob.ErrorCodeTransferRemoteUnavailable)
 		if err != nil {
 			return fmt.Errorf("interrupt abandoned transfer job: %w", err)
 		}
@@ -287,7 +320,11 @@ func (s *Service) RecoverAfterRestore(ctx context.Context) error {
 	}
 	for _, share := range shares {
 		if share.Status == transfershare.StatusDeleting {
-			if err := s.deleteShare(ctx, share.UserID, share.ID, "transfer.delete"); err != nil {
+			action := "transfer.delete"
+			if share.ErrorCode == transfershare.ErrorCodeTransferExpired {
+				action = "transfer.expire"
+			}
+			if err := s.deleteShare(ctx, share.UserID, share.ID, action); err != nil {
 				errs = append(errs, err)
 			}
 		} else if !share.ExpiresAt.After(now) {
@@ -302,7 +339,11 @@ func (s *Service) RecoverAfterRestore(ctx context.Context) error {
 	}
 	for _, job := range jobs {
 		if job.Status == transferjob.StatusDeleting {
-			if err := s.deleteJob(ctx, job.UserID, job.ID, "transfer.delete"); err != nil {
+			action := "transfer.delete"
+			if job.ErrorCode == transferjob.ErrorCodeTransferExpired {
+				action = "transfer.expire"
+			}
+			if err := s.deleteJob(ctx, job.UserID, job.ID, action); err != nil {
 				errs = append(errs, err)
 			}
 			continue
@@ -314,10 +355,11 @@ func (s *Service) RecoverAfterRestore(ctx context.Context) error {
 			continue
 		}
 		if job.Status == transferjob.StatusInterrupted {
-			if _, err := s.ResumeJob(ctx, job.UserID, job.ID); err != nil {
-				if errors.Is(err, ErrOwnerCapacity) {
+			if _, err := s.startJob(ctx, job.UserID, job.ID, true); err != nil {
+				if errors.Is(err, ErrOwnerCapacity) || retryableResumeError(err) {
 					s.enqueueResume(job.UserID, job.ID)
-				} else {
+				}
+				if !errors.Is(err, ErrOwnerCapacity) {
 					errs = append(errs, err)
 				}
 			}

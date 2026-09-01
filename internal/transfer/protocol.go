@@ -1,16 +1,19 @@
 package transfer
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json/jsontext"
 	json "encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"runtime"
 	"strings"
 	"time"
 	"uuid"
@@ -98,7 +101,37 @@ type parsedCapability struct {
 	secret  [capabilitySecretBytes]byte
 }
 
-func encodeCapability(shareID string, secret [capabilitySecretBytes]byte) (string, []byte, error) {
+func (parsed *parsedCapability) clear() {
+	clearSecret(parsed.secret[:])
+}
+
+type capabilityText []byte
+
+func (text capabilityText) MarshalJSON() ([]byte, error) {
+	return jsontext.AppendQuote(nil, text)
+}
+
+func (text *capabilityText) UnmarshalJSON(data []byte) error {
+	clearSecret(*text)
+	decoded, err := jsontext.AppendUnquote((*text)[:0], data)
+	if err != nil {
+		return err
+	}
+	*text = decoded
+	return nil
+}
+
+func (text *capabilityText) clear() {
+	clearSecret(*text)
+	*text = nil
+}
+
+func clearSecret(secret []byte) {
+	clear(secret)
+	runtime.KeepAlive(secret)
+}
+
+func encodeCapability(shareID string, secret *[capabilitySecretBytes]byte) (string, []byte, error) {
 	if err := validateEntityID(shareID); err != nil {
 		return "", nil, fmt.Errorf("%w: share ID", ErrInvalidCapability)
 	}
@@ -107,6 +140,7 @@ func encodeCapability(shareID string, secret [capabilitySecretBytes]byte) (strin
 		return "", nil, fmt.Errorf("%w: share ID", ErrInvalidCapability)
 	}
 	payload := make([]byte, capabilityPayloadBytes)
+	defer clearSecret(payload)
 	copy(payload, parsed[:])
 	copy(payload[16:], secret[:])
 	encoded := base64.RawURLEncoding.EncodeToString(payload)
@@ -115,12 +149,23 @@ func encodeCapability(shareID string, secret [capabilitySecretBytes]byte) (strin
 }
 
 func parseCapability(code string) (parsedCapability, error) {
-	payloadText, ok := strings.CutPrefix(code, capabilityPrefix)
+	encoded := []byte(code)
+	defer clearSecret(encoded)
+	return parseCapabilityBytes(encoded)
+}
+
+func parseCapabilityBytes(code []byte) (parsedCapability, error) {
+	payloadText, ok := bytes.CutPrefix(code, []byte(capabilityPrefix))
 	if !ok || len(payloadText) != base64.RawURLEncoding.EncodedLen(capabilityPayloadBytes) {
 		return parsedCapability{}, ErrInvalidCapability
 	}
-	payload, err := base64.RawURLEncoding.DecodeString(payloadText)
-	if err != nil || len(payload) != capabilityPayloadBytes || base64.RawURLEncoding.EncodeToString(payload) != payloadText {
+	payload := make([]byte, capabilityPayloadBytes)
+	defer clearSecret(payload)
+	written, err := base64.RawURLEncoding.Decode(payload, payloadText)
+	canonical := make([]byte, base64.RawURLEncoding.EncodedLen(capabilityPayloadBytes))
+	defer clearSecret(canonical)
+	base64.RawURLEncoding.Encode(canonical, payload)
+	if err != nil || written != capabilityPayloadBytes || !bytes.Equal(canonical, payloadText) {
 		return parsedCapability{}, ErrInvalidCapability
 	}
 	var shareUUID uuid.UUID
@@ -134,22 +179,26 @@ func parseCapability(code string) (parsedCapability, error) {
 	return parsed, nil
 }
 
-func capabilitySecretHash(parsed parsedCapability) [sha256.Size]byte {
+func capabilitySecretHash(parsed *parsedCapability) [sha256.Size]byte {
 	return sha256.Sum256(parsed.secret[:])
 }
 
 type wireRequest struct {
-	Version    int    `json:"version"`
-	ShareID    string `json:"share_id"`
-	Capability string `json:"capability"`
-	Operation  string `json:"operation"`
-	FileID     string `json:"file_id"`
-	Offset     int64  `json:"offset"`
-	Length     int64  `json:"length"`
+	Version    int            `json:"version"`
+	ShareID    string         `json:"share_id"`
+	Capability capabilityText `json:"capability"`
+	Operation  string         `json:"operation"`
+	FileID     string         `json:"file_id"`
+	Offset     int64          `json:"offset"`
+	Length     int64          `json:"length"`
+}
+
+func (request *wireRequest) clear() {
+	request.Capability.clear()
 }
 
 func (request wireRequest) validate() error {
-	if request.Version != protocolVersion || request.ShareID == "" || request.Capability == "" {
+	if request.Version != protocolVersion || request.ShareID == "" || len(request.Capability) == 0 {
 		return protocolError(CodeProtocolInvalid, errors.New("invalid request envelope"))
 	}
 	switch request.Operation {
@@ -176,9 +225,11 @@ func decodeRequestFrame(body []byte) (wireRequest, error) {
 	}
 	var request wireRequest
 	if err := json.Unmarshal(body, &request, json.RejectUnknownMembers(true)); err != nil {
+		request.clear()
 		return wireRequest{}, protocolError(CodeProtocolInvalid, err)
 	}
 	if err := request.validate(); err != nil {
+		request.clear()
 		return wireRequest{}, err
 	}
 	return request, nil
@@ -196,6 +247,7 @@ func readRequest(ctx context.Context, conn net.Conn) (wireRequest, error) {
 		return wireRequest{}, protocolError(CodeLimitExceeded, errors.New("request frame exceeds limit"))
 	}
 	body := make([]byte, int(length))
+	defer clearSecret(body)
 	if err := readFull(ctx, conn, body); err != nil {
 		return wireRequest{}, err
 	}
@@ -211,8 +263,10 @@ func writeRequest(ctx context.Context, conn net.Conn, request wireRequest) error
 		return protocolError(CodeProtocolInvalid, err)
 	}
 	if len(body) > MaxRequestFrameBytes {
+		clearSecret(body)
 		return protocolError(CodeLimitExceeded, errors.New("encoded request frame exceeds limit"))
 	}
+	defer clearSecret(body)
 	return writeFrame(ctx, conn, body)
 }
 
@@ -421,8 +475,14 @@ func validBLAKE3(value string) bool {
 type protocolDial func(context.Context) (net.Conn, error)
 
 func fetchManifest(ctx context.Context, dial protocolDial, shareID, capability string) (Manifest, error) {
+	secret := capabilityText([]byte(capability))
+	defer secret.clear()
+	return fetchManifestSecret(ctx, dial, shareID, secret)
+}
+
+func fetchManifestSecret(ctx context.Context, dial protocolDial, shareID string, capability []byte) (Manifest, error) {
 	payload, err := executeProtocolRequest(ctx, dial, wireRequest{
-		Version: protocolVersion, ShareID: shareID, Capability: capability, Operation: operationManifest,
+		Version: protocolVersion, ShareID: shareID, Capability: bytes.Clone(capability), Operation: operationManifest,
 	}, MaxManifestResponseBytes)
 	if err != nil {
 		return Manifest{}, err
@@ -435,8 +495,14 @@ func fetchManifest(ctx context.Context, dial protocolDial, shareID, capability s
 }
 
 func fetchRange(ctx context.Context, dial protocolDial, shareID, capability, fileID string, offset, length int64) ([]byte, error) {
+	secret := capabilityText([]byte(capability))
+	defer secret.clear()
+	return fetchRangeSecret(ctx, dial, shareID, secret, fileID, offset, length)
+}
+
+func fetchRangeSecret(ctx context.Context, dial protocolDial, shareID string, capability []byte, fileID string, offset, length int64) ([]byte, error) {
 	payload, err := executeProtocolRequest(ctx, dial, wireRequest{
-		Version: protocolVersion, ShareID: shareID, Capability: capability,
+		Version: protocolVersion, ShareID: shareID, Capability: bytes.Clone(capability),
 		Operation: operationRange, FileID: fileID, Offset: offset, Length: length,
 	}, MaxRangeResponseBytes)
 	if err != nil {
@@ -449,6 +515,7 @@ func fetchRange(ctx context.Context, dial protocolDial, shareID, capability, fil
 }
 
 func executeProtocolRequest(ctx context.Context, dial protocolDial, request wireRequest, maxResponse int) ([]byte, error) {
+	defer request.clear()
 	if dial == nil {
 		return nil, protocolError(CodeRemoteUnavailable, errors.New("nil transfer dialer"))
 	}

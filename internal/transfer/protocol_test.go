@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
+	"io"
 	"net"
 	"strings"
 	"testing"
@@ -19,14 +20,15 @@ func TestCapabilityCanonicalEncodingAndHash(t *testing.T) {
 	for index := range secret {
 		secret[index] = byte(index + 1)
 	}
-	code, hash, err := encodeCapability(shareID, secret)
+	defer clearSecret(secret[:])
+	wantHash := sha256.Sum256(secret[:])
+	code, hash, err := encodeCapability(shareID, &secret)
 	if err != nil {
 		t.Fatalf("encodeCapability: %v", err)
 	}
 	if !strings.HasPrefix(code, capabilityPrefix) || len(code) != len(capabilityPrefix)+base64.RawURLEncoding.EncodedLen(capabilityPayloadBytes) {
 		t.Fatal("capability shape is not canonical")
 	}
-	wantHash := sha256.Sum256(secret[:])
 	if !bytes.Equal(hash, wantHash[:]) {
 		t.Fatalf("capability hash = %x, want SHA-256(secret) %x", hash, wantHash)
 	}
@@ -37,6 +39,7 @@ func TestCapabilityCanonicalEncodingAndHash(t *testing.T) {
 	if parsed.shareID != shareID || parsed.secret != secret {
 		t.Fatal("parsed capability fields differ")
 	}
+	parsed.clear()
 
 	payload, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(code, capabilityPrefix))
 	if err != nil {
@@ -207,6 +210,31 @@ func TestManifestWireValidationBindsImmutableFieldsAndLimits(t *testing.T) {
 	}
 }
 
+func TestRequestMarshalAndCapabilityParseBuffersAreCleared(t *testing.T) {
+	shareID := uuid.NewV7().String()
+	code, _, err := newCapability(shareID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection := new(retainingConn)
+	request := wireRequest{Version: protocolVersion, ShareID: shareID, Capability: capabilityText(code), Operation: operationManifest}
+	if err := writeRequest(t.Context(), connection, request); err != nil {
+		t.Fatalf("writeRequest: %v", err)
+	}
+	if len(connection.writes) != 2 || !allZeroBytes(connection.writes[1]) {
+		t.Fatal("encoded request body retained capability plaintext")
+	}
+	parsed, err := parseCapability(code)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secretReference := parsed.secret[:]
+	parsed.clear()
+	if !allZeroBytes(secretReference) {
+		t.Fatal("parsed capability secret was not cleared")
+	}
+}
+
 func validateManifestError(wire manifestWire, shareID string) error {
 	_, err := validateManifestWire(wire, shareID)
 	return err
@@ -233,4 +261,34 @@ func uint32Bytes(value uint32) []byte {
 	var data [4]byte
 	binary.BigEndian.PutUint32(data[:], value)
 	return data[:]
+}
+
+type retainingConn struct {
+	writes [][]byte
+}
+
+func (connection *retainingConn) Read([]byte) (int, error)         { return 0, io.EOF }
+func (connection *retainingConn) Close() error                     { return nil }
+func (connection *retainingConn) LocalAddr() net.Addr              { return retainedAddr("local") }
+func (connection *retainingConn) RemoteAddr() net.Addr             { return retainedAddr("remote") }
+func (connection *retainingConn) SetDeadline(time.Time) error      { return nil }
+func (connection *retainingConn) SetReadDeadline(time.Time) error  { return nil }
+func (connection *retainingConn) SetWriteDeadline(time.Time) error { return nil }
+func (connection *retainingConn) Write(data []byte) (int, error) {
+	connection.writes = append(connection.writes, data)
+	return len(data), nil
+}
+
+type retainedAddr string
+
+func (address retainedAddr) Network() string { return string(address) }
+func (address retainedAddr) String() string  { return string(address) }
+
+func allZeroBytes(data []byte) bool {
+	for _, value := range data {
+		if value != 0 {
+			return false
+		}
+	}
+	return true
 }

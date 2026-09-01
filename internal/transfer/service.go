@@ -23,8 +23,10 @@ import (
 )
 
 const (
-	defaultTransferExpiry = 24 * time.Hour
-	maxActiveJobsPerOwner = 2
+	defaultTransferExpiry      = 24 * time.Hour
+	maxActiveJobsPerOwner      = 2
+	lifecyclePersistAttempts   = 3
+	lifecyclePersistRetryDelay = 10 * time.Millisecond
 )
 
 var (
@@ -43,6 +45,7 @@ type ClientDialer interface {
 
 type AuditRecorder interface {
 	Record(context.Context, audit.Entry) error
+	RecordWithClient(context.Context, *ent.Client, audit.Entry) error
 }
 
 type EventPublisher interface {
@@ -125,16 +128,51 @@ type TransferEventPayload struct {
 }
 
 type activeStream struct {
-	cancel context.CancelCauseFunc
-	done   chan struct{}
+	shareID     string
+	generation  uint64
+	ctx         context.Context
+	cancel      context.CancelCauseFunc
+	serveCtx    context.Context
+	cancelServe context.CancelFunc
+	done        chan struct{}
+	finishOnce  sync.Once
+}
+
+type shareGate struct {
+	generation  uint64
+	accepting   bool
+	provisional map[*activeStream]struct{}
+	active      map[*activeStream]struct{}
+	expiry      *shareExpiryTask
+}
+
+type shareExpiryTask struct {
+	expiresAt time.Time
+	cancel    context.CancelFunc
+	done      chan struct{}
+}
+
+type handlerHooks struct {
+	afterAuthorized       func()
+	afterRevocationClosed func(string)
+	afterExpiryArmed      func(string, func())
+}
+
+type lifecycleHooks struct {
+	beforeCommit func(string) error
+}
+
+type secretHooks struct {
+	capture func(string, []byte)
 }
 
 type activeJob struct {
-	ownerID    string
-	ctx        context.Context
-	cancel     context.CancelCauseFunc
-	stopExpiry context.CancelFunc
-	done       chan struct{}
+	ownerID       string
+	resumeManaged bool
+	ctx           context.Context
+	cancel        context.CancelCauseFunc
+	stopExpiry    context.CancelFunc
+	done          chan struct{}
 }
 
 type runnerHooks struct {
@@ -142,6 +180,13 @@ type runnerHooks struct {
 	workerStopped      func()
 	afterBlockSync     func(string, int)
 	beforeProgressSave func(string, int)
+}
+
+type queuedResume struct {
+	jobID          string
+	failures       int
+	nextAttempt    time.Time
+	retryRequested bool
 }
 
 type Service struct {
@@ -154,23 +199,32 @@ type Service struct {
 	logger    *slog.Logger
 
 	compareCapability func([]byte, []byte) int
+	progressNow       func() time.Time
 
-	metadataMu       sync.Mutex
-	mu               sync.Mutex
-	pendingCond      *sync.Cond
-	closed           bool
-	pending          int
-	activeJobs       map[string]*activeJob
-	ownerJobs        map[string]int
-	resumeQueue      map[string][]string
-	resumeScheduling map[string]bool
-	streams          map[string]map[*activeStream]struct{}
-	wg               sync.WaitGroup
-	runnerHooks      runnerHooks
-	closeOnce        sync.Once
-	closeDone        chan struct{}
-	closeErr         error
-	failures         []error
+	metadataMu        sync.Mutex
+	mu                sync.Mutex
+	pendingCond       *sync.Cond
+	closed            bool
+	pending           int
+	activeJobs        map[string]*activeJob
+	ownerJobs         map[string]int
+	resumeQueue       map[string][]*queuedResume
+	resumeScheduling  map[string]bool
+	progressPublished map[string]time.Time
+	queueCtx          context.Context
+	cancelQueue       context.CancelCauseFunc
+	queueWake         chan struct{}
+	shareGates        map[string]*shareGate
+	shareOps          map[string]*shareOperationLock
+	wg                sync.WaitGroup
+	runnerHooks       runnerHooks
+	handlerHooks      handlerHooks
+	lifecycleHooks    lifecycleHooks
+	secretHooks       secretHooks
+	closeOnce         sync.Once
+	closeDone         chan struct{}
+	closeErr          error
+	failures          []error
 }
 
 func NewService(ctx context.Context, db *ent.Client, storage *Storage, box *secrets.Box, dialer ClientDialer, auditor AuditRecorder, publisher EventPublisher, logger *slog.Logger) (*Service, error) {
@@ -180,11 +234,15 @@ func NewService(ctx context.Context, db *ent.Client, storage *Storage, box *secr
 	if !box.Available() {
 		return nil, secrets.ErrUnavailable
 	}
+	queueCtx, cancelQueue := context.WithCancelCause(context.Background())
 	service := &Service{
 		db: db, storage: storage, box: box, dialer: dialer, auditor: auditor, publisher: publisher, logger: logger,
 		compareCapability: subtle.ConstantTimeCompare,
-		activeJobs:        make(map[string]*activeJob), ownerJobs: make(map[string]int), streams: make(map[string]map[*activeStream]struct{}),
-		resumeQueue: make(map[string][]string), resumeScheduling: make(map[string]bool),
+		progressNow:       time.Now,
+		activeJobs:        make(map[string]*activeJob), ownerJobs: make(map[string]int), shareGates: make(map[string]*shareGate), shareOps: make(map[string]*shareOperationLock),
+		resumeQueue: make(map[string][]*queuedResume), resumeScheduling: make(map[string]bool),
+		progressPublished: make(map[string]time.Time),
+		queueCtx:          queueCtx, cancelQueue: cancelQueue, queueWake: make(chan struct{}, 1),
 		closeDone: make(chan struct{}),
 	}
 	service.pendingCond = sync.NewCond(&service.mu)
@@ -197,7 +255,7 @@ func NewService(ctx context.Context, db *ent.Client, storage *Storage, box *secr
 	return service, nil
 }
 
-func (s *Service) CreateShare(ctx context.Context, ownerID string, input CreateShareInput) (ShareView, error) {
+func (s *Service) CreateShare(ctx context.Context, ownerID string, input CreateShareInput) (_ ShareView, retErr error) {
 	if err := s.ensureOpen(); err != nil {
 		return ShareView{}, err
 	}
@@ -222,7 +280,17 @@ func (s *Service) CreateShare(ctx context.Context, ownerID string, input CreateS
 	if err != nil {
 		return ShareView{}, err
 	}
-	row, err := s.db.TransferShare.Create().
+	tx, err := s.db.Tx(ctx)
+	if err != nil {
+		return ShareView{}, fmt.Errorf("begin transfer-share create transaction: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			retErr = errors.Join(retErr, tx.Rollback())
+		}
+	}()
+	row, err := tx.Client().TransferShare.Create().
 		SetID(shareID).
 		SetUserID(ownerID).
 		SetServerID(input.ServerID).
@@ -233,10 +301,13 @@ func (s *Service) CreateShare(ctx context.Context, ownerID string, input CreateS
 	if err != nil {
 		return ShareView{}, fmt.Errorf("create transfer share: %w", err)
 	}
-	if err := s.recordLifecycle(ctx, ownerID, "transfer.create", "share", row.ID, "success"); err != nil {
-		cleanupErr := s.db.TransferShare.DeleteOneID(row.ID).Exec(context.WithoutCancel(ctx))
-		return ShareView{}, errors.Join(err, cleanupErr)
+	if err := s.recordLifecycleWithClient(ctx, tx.Client(), ownerID, "transfer.create", "share", row.ID, "success"); err != nil {
+		return ShareView{}, err
 	}
+	if err := s.commitLifecycle(tx, "share.create"); err != nil {
+		return ShareView{}, fmt.Errorf("commit transfer-share create: %w", err)
+	}
+	committed = true
 	s.publishTransfer(ownerID, row.ID, events.RuntimePhaseIdle, TransferEventPayload{ShareID: row.ID, Status: string(row.Status)})
 	view := shareView(row)
 	view.Capability = capability
@@ -386,52 +457,84 @@ func (s *Service) RotateShare(ctx context.Context, ownerID, shareID string) (str
 	if err := s.ensureOpen(); err != nil {
 		return "", err
 	}
-	row, capability, hash, err := s.rotateCapabilityHash(ctx, ownerID, shareID)
+	if _, err := s.db.TransferShare.Query().Where(transfershare.IDEQ(shareID), transfershare.UserIDEQ(ownerID)).Only(ctx); ent.IsNotFound(err) {
+		return "", ErrNotFound
+	} else if err != nil {
+		return "", fmt.Errorf("load transfer share for rotation: %w", err)
+	}
+	unlock := s.lockShareOperation(shareID)
+	defer unlock()
+	generation, err := s.closeShareAdmission(ctx, shareID, ErrInvalidCapability)
 	if err != nil {
 		return "", err
 	}
-	s.cancelShareStreams(shareID, ErrInvalidCapability)
-	if err := s.recordLifecycle(ctx, ownerID, "transfer.rotate", "share", shareID, "success"); err != nil {
-		s.metadataMu.Lock()
-		_, rollbackErr := s.db.TransferShare.Update().Where(
-			transfershare.IDEQ(shareID), transfershare.UserIDEQ(ownerID), transfershare.CapabilityHashEQ(hash),
-		).SetCapabilityHash(row.CapabilityHash).Save(context.WithoutCancel(ctx))
-		s.metadataMu.Unlock()
-		return "", errors.Join(err, rollbackErr)
+	capability, err := s.rotateCapability(ctx, ownerID, shareID)
+	if err != nil {
+		s.reopenShareAdmissionIfLegal(ctx, ownerID, shareID, generation)
+		return "", err
 	}
+	s.reopenShareAdmissionIfLegal(ctx, ownerID, shareID, generation)
 	return capability, nil
 }
 
-func (s *Service) rotateCapabilityHash(ctx context.Context, ownerID, shareID string) (*ent.TransferShare, string, []byte, error) {
+func (s *Service) reopenShareAdmissionIfLegal(ctx context.Context, ownerID, shareID string, generation uint64) {
+	exists, err := s.db.TransferShare.Query().Where(
+		transfershare.IDEQ(shareID), transfershare.UserIDEQ(ownerID),
+		transfershare.StatusIn(transfershare.StatusStaging, transfershare.StatusReady),
+		transfershare.ExpiresAtGT(time.Now().UTC()),
+	).Exist(ctx)
+	if err == nil && exists {
+		s.reopenShareAdmission(shareID, generation)
+	}
+}
+
+func (s *Service) rotateCapability(ctx context.Context, ownerID, shareID string) (_ string, retErr error) {
 	s.metadataMu.Lock()
 	defer s.metadataMu.Unlock()
-	row, err := s.db.TransferShare.Query().Where(transfershare.IDEQ(shareID), transfershare.UserIDEQ(ownerID)).Only(ctx)
+	tx, err := s.db.Tx(ctx)
+	if err != nil {
+		return "", fmt.Errorf("begin capability rotation: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			retErr = errors.Join(retErr, tx.Rollback())
+		}
+	}()
+	row, err := tx.Client().TransferShare.Query().Where(transfershare.IDEQ(shareID), transfershare.UserIDEQ(ownerID)).Only(ctx)
 	if ent.IsNotFound(err) {
-		return nil, "", nil, ErrNotFound
+		return "", ErrNotFound
 	}
 	if err != nil {
-		return nil, "", nil, fmt.Errorf("load transfer share for rotation: %w", err)
+		return "", fmt.Errorf("load transfer share for rotation: %w", err)
 	}
 	if row.Status != transfershare.StatusStaging && row.Status != transfershare.StatusReady {
-		return nil, "", nil, ErrInvalidState
+		return "", ErrInvalidState
 	}
 	now := time.Now().UTC()
 	if !row.ExpiresAt.After(now) {
-		return nil, "", nil, fmt.Errorf("%w: share expired before rotation", ErrInvalidState)
+		return "", fmt.Errorf("%w: share expired before rotation", ErrInvalidState)
 	}
 	capability, hash, err := newCapability(row.ID)
 	if err != nil {
-		return nil, "", nil, err
+		return "", err
 	}
 	if _, err := row.Update().
 		Where(transfershare.UserIDEQ(ownerID), transfershare.StatusIn(transfershare.StatusStaging, transfershare.StatusReady), transfershare.ExpiresAtGT(now)).
 		SetCapabilityHash(hash).
 		Save(ctx); ent.IsNotFound(err) {
-		return nil, "", nil, fmt.Errorf("%w: rotation compare-and-swap lost", ErrInvalidState)
+		return "", fmt.Errorf("%w: rotation compare-and-swap lost", ErrInvalidState)
 	} else if err != nil {
-		return nil, "", nil, fmt.Errorf("rotate transfer capability: %w", err)
+		return "", fmt.Errorf("rotate transfer capability: %w", err)
 	}
-	return row, capability, hash, nil
+	if err := s.recordLifecycleWithClient(ctx, tx.Client(), ownerID, "transfer.rotate", "share", shareID, "success"); err != nil {
+		return "", err
+	}
+	if err := s.commitLifecycle(tx, "share.rotate"); err != nil {
+		return "", fmt.Errorf("commit capability rotation: %w", err)
+	}
+	committed = true
+	return capability, nil
 }
 
 func (s *Service) Close() error {
@@ -441,15 +544,28 @@ func (s *Service) Close() error {
 	s.closeOnce.Do(func() {
 		s.mu.Lock()
 		var streamDones []<-chan struct{}
+		var streams []*activeStream
+		var expiryDones []<-chan struct{}
+		var jobCancels []context.CancelCauseFunc
 		if !s.closed {
 			s.closed = true
 			for _, job := range s.activeJobs {
-				job.cancel(errServiceClosed)
+				jobCancels = append(jobCancels, job.cancel)
 			}
-			for _, streams := range s.streams {
-				for stream := range streams {
+			for _, gate := range s.shareGates {
+				gate.accepting = false
+				gate.generation++
+				for stream := range gate.provisional {
+					streams = append(streams, stream)
 					streamDones = append(streamDones, stream.done)
-					stream.cancel(errServiceClosed)
+				}
+				for stream := range gate.active {
+					streams = append(streams, stream)
+					streamDones = append(streamDones, stream.done)
+				}
+				if gate.expiry != nil {
+					gate.expiry.cancel()
+					expiryDones = append(expiryDones, gate.expiry.done)
 				}
 			}
 		}
@@ -457,8 +573,18 @@ func (s *Service) Close() error {
 			s.pendingCond.Wait()
 		}
 		s.mu.Unlock()
+		for _, cancel := range jobCancels {
+			cancel(errServiceClosed)
+		}
+		s.cancelQueue(errServiceClosed)
+		for _, stream := range streams {
+			stream.cancel(errServiceClosed)
+		}
 		s.wg.Wait()
 		for _, done := range streamDones {
+			<-done
+		}
+		for _, done := range expiryDones {
 			<-done
 		}
 		s.mu.Lock()
@@ -484,10 +610,11 @@ func (s *Service) ensureOpen() error {
 
 func newCapability(shareID string) (string, []byte, error) {
 	var secret [capabilitySecretBytes]byte
+	defer clearSecret(secret[:])
 	if _, err := rand.Read(secret[:]); err != nil {
 		return "", nil, fmt.Errorf("generate transfer capability: %w", err)
 	}
-	return encodeCapability(shareID, secret)
+	return encodeCapability(shareID, &secret)
 }
 
 func newEntityID() string { return uuid.NewV7().String() }
@@ -506,10 +633,7 @@ func shareView(row *ent.TransferShare) ShareView {
 }
 
 func (s *Service) recordLifecycle(ctx context.Context, ownerID, action, resourceKind, resourceID, outcome string) error {
-	entry := audit.Entry{
-		ID: resourceKind + ":" + resourceID + ":" + action, UserID: ownerID, Action: action,
-		ResourceKind: resourceKind, ResourceID: resourceID, Outcome: outcome,
-	}
+	entry := lifecycleAuditEntry(ownerID, action, resourceKind, resourceID, outcome)
 	var lastErr error
 	for attempt := range 3 {
 		if err := s.auditor.Record(ctx, entry); err == nil {
@@ -533,11 +657,42 @@ func (s *Service) recordLifecycle(ctx context.Context, ownerID, action, resource
 	return fmt.Errorf("record transfer lifecycle after 3 attempts: %w", lastErr)
 }
 
+func (s *Service) recordLifecycleWithClient(ctx context.Context, client *ent.Client, ownerID, action, resourceKind, resourceID, outcome string) error {
+	entry := lifecycleAuditEntry(ownerID, action, resourceKind, resourceID, outcome)
+	if err := s.auditor.RecordWithClient(ctx, client, entry); err != nil {
+		return fmt.Errorf("record transfer lifecycle transaction: %w", err)
+	}
+	return nil
+}
+
+func lifecycleAuditEntry(ownerID, action, resourceKind, resourceID, outcome string) audit.Entry {
+	return audit.Entry{
+		ID: resourceKind + ":" + resourceID + ":" + action, UserID: ownerID, Action: action,
+		ResourceKind: resourceKind, ResourceID: resourceID, Outcome: outcome,
+	}
+}
+
 func (s *Service) publishTransfer(ownerID, resourceID string, phase events.RuntimePhase, payload TransferEventPayload) {
 	s.publisher.PublishEvent(ownerID, events.Envelope{
 		Version: 1, Type: "transfer", ResourceKind: "transfer", ResourceID: resourceID,
 		OperationID: resourceID, Phase: phase, Payload: payload,
 	})
+}
+
+// publishJobProgress throttles nonterminal job events to at most one per
+// second. Terminal lifecycle events use publishTransfer directly and are a
+// distinct state transition rather than a progress sample.
+func (s *Service) publishJobProgress(ownerID, jobID string, payload TransferEventPayload) {
+	now := s.progressNow()
+	s.mu.Lock()
+	last := s.progressPublished[jobID]
+	if !last.IsZero() && now.Sub(last) < time.Second {
+		s.mu.Unlock()
+		return
+	}
+	s.progressPublished[jobID] = now
+	s.mu.Unlock()
+	s.publishTransfer(ownerID, jobID, events.RuntimePhaseRunning, payload)
 }
 
 func (s *Service) recordFailure(err error) {
@@ -547,4 +702,19 @@ func (s *Service) recordFailure(err error) {
 	s.mu.Lock()
 	s.failures = append(s.failures, err)
 	s.mu.Unlock()
+}
+
+func (s *Service) commitLifecycle(tx *ent.Tx, operation string) error {
+	if s.lifecycleHooks.beforeCommit != nil {
+		if err := s.lifecycleHooks.beforeCommit(operation); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *Service) captureSecret(kind string, secret []byte) {
+	if s.secretHooks.capture != nil {
+		s.secretHooks.capture(kind, secret)
+	}
 }

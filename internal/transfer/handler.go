@@ -7,7 +7,6 @@ import (
 	"errors"
 	"io"
 	"net"
-	"sync"
 	"time"
 
 	"github.com/ca-x/tailcat-webui/ent"
@@ -46,17 +45,38 @@ func (s *Service) serveReserved(ctx context.Context, serverID string, connection
 		_ = writeErrorResponse(requestCtx, connection, responseCode(err))
 		return err
 	}
-	share, err := s.authorizeRequest(requestCtx, serverID, request)
+	s.captureSecret("handler.request", request.Capability)
+	defer request.clear()
+	if validateEntityID(request.ShareID) != nil {
+		err := protocolError(CodeInvalidCapability, ErrInvalidCapability)
+		_ = writeErrorResponse(requestCtx, connection, responseCode(err))
+		return err
+	}
+	admission, err := s.beginShareAdmission(requestCtx, request.ShareID)
 	if err != nil {
 		_ = writeErrorResponse(requestCtx, connection, responseCode(err))
 		return err
 	}
-	streamCtx, unregister, err := s.registerShareStream(requestCtx, share.ID, share.ExpiresAt)
+	defer s.finishShareAdmission(admission)
+	stopAdmission := context.AfterFunc(admission.ctx, func() { _ = connection.Close() })
+	defer stopAdmission()
+	share, err := s.authorizeRequest(admission.ctx, serverID, request)
 	if err != nil {
-		_ = writeErrorResponse(ctx, connection, responseCode(err))
+		_ = writeErrorResponse(requestCtx, connection, responseCode(err))
 		return err
 	}
-	defer unregister()
+	if err := s.armShareExpiry(admission, share.ExpiresAt); err != nil {
+		_ = writeErrorResponse(requestCtx, connection, responseCode(err))
+		return err
+	}
+	if s.handlerHooks.afterAuthorized != nil {
+		s.handlerHooks.afterAuthorized()
+	}
+	streamCtx, err := s.commitShareAdmission(admission, share.ExpiresAt)
+	if err != nil {
+		_ = writeErrorResponse(requestCtx, connection, responseCode(err))
+		return err
+	}
 	stop := context.AfterFunc(streamCtx, func() { _ = connection.Close() })
 	defer stop()
 	if deadline, ok := streamCtx.Deadline(); ok {
@@ -82,17 +102,23 @@ func (s *Service) serveReserved(ctx context.Context, serverID string, connection
 func (s *Service) authorizeRequest(ctx context.Context, serverID string, request wireRequest) (*ent.TransferShare, error) {
 	storedHash := dummyCapabilityHash[:]
 	candidateHash := dummyCapabilityHash
-	parsed, parseErr := parseCapability(request.Capability)
+	parsed, parseErr := parseCapabilityBytes(request.Capability)
 	if parseErr == nil {
-		candidateHash = capabilitySecretHash(parsed)
+		s.captureSecret("authorization.secret", parsed.secret[:])
+		defer parsed.clear()
+	}
+	if parseErr == nil {
+		candidateHash = capabilitySecretHash(&parsed)
 	}
 	var row *ent.TransferShare
 	var queryErr error
-	if validateEntityID(request.ShareID) == nil {
-		row, queryErr = s.db.TransferShare.Query().Where(transfershare.IDEQ(request.ShareID)).Only(ctx)
-	}
+	now := time.Now().UTC()
+	row, queryErr = s.db.TransferShare.Query().Where(
+		transfershare.IDEQ(request.ShareID), transfershare.ServerIDEQ(serverID),
+		transfershare.StatusEQ(transfershare.StatusReady), transfershare.ExpiresAtGT(now),
+	).Only(ctx)
 	eligible := queryErr == nil && row != nil && parseErr == nil && parsed.shareID == request.ShareID &&
-		row.ServerID == serverID && row.Status == transfershare.StatusReady && row.ExpiresAt.After(time.Now()) && len(row.CapabilityHash) == sha256.Size
+		len(row.CapabilityHash) == sha256.Size
 	if eligible {
 		storedHash = row.CapabilityHash
 	}
@@ -191,47 +217,4 @@ func responseCode(err error) ErrorCode {
 		return CodeRemoteUnavailable
 	}
 	return code
-}
-
-func (s *Service) registerShareStream(parent context.Context, shareID string, expiresAt time.Time) (context.Context, func(), error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed {
-		return nil, nil, protocolError(CodeRemoteUnavailable, ErrServiceClosed)
-	}
-	expiryCtx, cancelExpiry := context.WithDeadlineCause(parent, expiresAt, protocolError(CodeExpired, errors.New("transfer share expired")))
-	ctx, cancel := context.WithCancelCause(expiryCtx)
-	stream := &activeStream{cancel: cancel, done: make(chan struct{})}
-	if s.streams[shareID] == nil {
-		s.streams[shareID] = make(map[*activeStream]struct{})
-	}
-	s.streams[shareID][stream] = struct{}{}
-	return ctx, syncOnce(func() {
-		cancel(nil)
-		cancelExpiry()
-		s.mu.Lock()
-		delete(s.streams[shareID], stream)
-		if len(s.streams[shareID]) == 0 {
-			delete(s.streams, shareID)
-		}
-		s.mu.Unlock()
-		close(stream.done)
-	}), nil
-}
-
-func (s *Service) cancelShareStreams(shareID string, cause error) {
-	s.mu.Lock()
-	streams := make([]*activeStream, 0, len(s.streams[shareID]))
-	for stream := range s.streams[shareID] {
-		streams = append(streams, stream)
-	}
-	s.mu.Unlock()
-	for _, stream := range streams {
-		stream.cancel(cause)
-	}
-}
-
-func syncOnce(function func()) func() {
-	var once sync.Once
-	return func() { once.Do(function) }
 }

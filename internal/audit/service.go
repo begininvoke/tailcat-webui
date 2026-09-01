@@ -35,10 +35,24 @@ func NewService(db *ent.Client) (*Service, error) {
 }
 
 func (s *Service) Record(ctx context.Context, entry Entry) error {
+	if err := s.RecordWithClient(ctx, s.db, entry); err != nil {
+		return err
+	}
+	s.cleanup(ctx)
+	return nil
+}
+
+// RecordWithClient writes an idempotent audit entry using the supplied Ent
+// client. Passing tx.Client() makes the audit row atomic with the caller's
+// lifecycle metadata transaction.
+func (s *Service) RecordWithClient(ctx context.Context, client *ent.Client, entry Entry) error {
+	if client == nil {
+		return errors.New("audit service: nil transaction client")
+	}
 	if entry.Outcome != "failure" {
 		entry.Outcome = "success"
 	}
-	create := s.db.AuditEvent.Create().SetAction(entry.Action).SetResourceKind(entry.ResourceKind).SetResourceID(entry.ResourceID).SetOutcome(auditevent.Outcome(entry.Outcome)).SetRequestID(entry.RequestID).SetDetail(entry.Detail)
+	create := client.AuditEvent.Create().SetAction(entry.Action).SetResourceKind(entry.ResourceKind).SetResourceID(entry.ResourceID).SetOutcome(auditevent.Outcome(entry.Outcome)).SetRequestID(entry.RequestID).SetDetail(entry.Detail)
 	if entry.ID != "" {
 		create.SetID(entry.ID)
 	}
@@ -47,7 +61,7 @@ func (s *Service) Record(ctx context.Context, entry Entry) error {
 	}
 	if _, err := create.Save(ctx); err != nil {
 		if entry.ID != "" && ent.IsConstraintError(err) {
-			existing, lookupErr := s.db.AuditEvent.Get(ctx, entry.ID)
+			existing, lookupErr := client.AuditEvent.Get(ctx, entry.ID)
 			if lookupErr != nil {
 				return errors.Join(err, lookupErr)
 			}
@@ -58,7 +72,6 @@ func (s *Service) Record(ctx context.Context, entry Entry) error {
 		}
 		return err
 	}
-	s.cleanup(ctx)
 	return nil
 }
 
