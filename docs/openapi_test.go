@@ -157,6 +157,11 @@ func TestOpenAPIIsValidYAMLWithPaths(t *testing.T) {
 	if document.Components.Schemas["TransferShareCreated"].Properties["capability"] == nil || document.Components.Schemas["TransferCapabilityRotated"].Properties["capability"] == nil {
 		t.Error("one-time transfer capability schemas are missing capability")
 	}
+	for _, field := range []string{"max_owner_files", "max_retained_shares_per_owner", "max_retained_jobs_per_owner"} {
+		if document.Components.Schemas["PublicTransferConfig"].Properties[field] == nil {
+			t.Errorf("OpenAPI public transfer config is missing fixed cap %s", field)
+		}
+	}
 	for schema, want := range map[string][]string{
 		"TransferShare":     {"created_at", "expires_at", "file_count", "id", "ready_at", "server_id", "status", "total_bytes", "updated_at"},
 		"TransferShareFile": {"created_at", "id", "mtime", "size", "virtual_path"},

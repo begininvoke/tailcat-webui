@@ -26,6 +26,10 @@ const (
 	FieldRemoteCapabilityCipher = "remote_capability_cipher"
 	// FieldStatus holds the string denoting the status field in the database.
 	FieldStatus = "status"
+	// FieldAttempt holds the string denoting the attempt field in the database.
+	FieldAttempt = "attempt"
+	// FieldAttemptKind holds the string denoting the attempt_kind field in the database.
+	FieldAttemptKind = "attempt_kind"
 	// FieldTotalBytes holds the string denoting the total_bytes field in the database.
 	FieldTotalBytes = "total_bytes"
 	// FieldReceivedBytes holds the string denoting the received_bytes field in the database.
@@ -81,6 +85,8 @@ var Columns = []string{
 	FieldRemoteShareID,
 	FieldRemoteCapabilityCipher,
 	FieldStatus,
+	FieldAttempt,
+	FieldAttemptKind,
 	FieldTotalBytes,
 	FieldReceivedBytes,
 	FieldStartedAt,
@@ -112,6 +118,10 @@ var (
 	RemoteShareIDValidator func(string) error
 	// RemoteCapabilityCipherValidator is a validator for the "remote_capability_cipher" field. It is called by the builders before save.
 	RemoteCapabilityCipherValidator func([]byte) error
+	// DefaultAttempt holds the default value on creation for the "attempt" field.
+	DefaultAttempt int
+	// AttemptValidator is a validator for the "attempt" field. It is called by the builders before save.
+	AttemptValidator func(int) error
 	// DefaultTotalBytes holds the default value on creation for the "total_bytes" field.
 	DefaultTotalBytes int64
 	// TotalBytesValidator is a validator for the "total_bytes" field. It is called by the builders before save.
@@ -160,6 +170,30 @@ func StatusValidator(s Status) error {
 		return nil
 	default:
 		return fmt.Errorf("transferjob: invalid enum value for status field: %q", s)
+	}
+}
+
+// AttemptKind defines the type for the "attempt_kind" enum field.
+type AttemptKind string
+
+// AttemptKind values.
+const (
+	AttemptKindStart  AttemptKind = "start"
+	AttemptKindRetry  AttemptKind = "retry"
+	AttemptKindResume AttemptKind = "resume"
+)
+
+func (ak AttemptKind) String() string {
+	return string(ak)
+}
+
+// AttemptKindValidator is a validator for the "attempt_kind" field enum values. It is called by the builders before save.
+func AttemptKindValidator(ak AttemptKind) error {
+	switch ak {
+	case AttemptKindStart, AttemptKindRetry, AttemptKindResume:
+		return nil
+	default:
+		return fmt.Errorf("transferjob: invalid enum value for attempt_kind field: %q", ak)
 	}
 }
 
@@ -219,6 +253,16 @@ func ByRemoteShareID(opts ...sql.OrderTermOption) OrderOption {
 // ByStatus orders the results by the status field.
 func ByStatus(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldStatus, opts...).ToFunc()
+}
+
+// ByAttempt orders the results by the attempt field.
+func ByAttempt(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldAttempt, opts...).ToFunc()
+}
+
+// ByAttemptKind orders the results by the attempt_kind field.
+func ByAttemptKind(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldAttemptKind, opts...).ToFunc()
 }
 
 // ByTotalBytes orders the results by the total_bytes field.

@@ -925,7 +925,9 @@ func TestTransferPublicConfigAndConfiguredSingleJobAdmission(t *testing.T) {
 	limits.Workers = 4
 	h := newTransferAPIHarness(t, limits)
 	public := h.request(http.MethodGet, "/api/v1/config", "", "", nil)
-	if public.Code != http.StatusOK || !strings.Contains(public.Body.String(), `"workers":4`) || !strings.Contains(public.Body.String(), `"max_jobs_per_owner":1`) {
+	if public.Code != http.StatusOK || !strings.Contains(public.Body.String(), `"workers":4`) || !strings.Contains(public.Body.String(), `"max_jobs_per_owner":1`) ||
+		!strings.Contains(public.Body.String(), `"max_owner_files":4096`) || !strings.Contains(public.Body.String(), `"max_retained_shares_per_owner":128`) ||
+		!strings.Contains(public.Body.String(), `"max_retained_jobs_per_owner":128`) {
 		t.Fatalf("public transfer config = %d %s", public.Code, public.Body.String())
 	}
 	shareID, capability := h.createShare(h.tokenA)

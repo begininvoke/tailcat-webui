@@ -3,10 +3,12 @@ package transfer
 import (
 	"context"
 	"errors"
+	"math/rand/v2"
 	"slices"
 	"time"
 
 	"github.com/ca-x/tailcat-webui/ent"
+	"github.com/ca-x/tailcat-webui/ent/transferjob"
 )
 
 func (s *Service) leavePending() {
@@ -63,7 +65,7 @@ func (s *Service) runQueuedResumes(ownerID string) {
 			s.mu.Unlock()
 			return
 		}
-		queued, wait := nextQueuedResume(s.resumeQueue[ownerID], time.Now())
+		queued, wait := nextQueuedResume(s.resumeQueue[ownerID], s.resumeNow())
 		s.mu.Unlock()
 		if wait > 0 {
 			timer := time.NewTimer(wait)
@@ -81,7 +83,7 @@ func (s *Service) runQueuedResumes(ownerID string) {
 			continue
 		}
 
-		if _, err := s.startJob(s.queueCtx, ownerID, queued.jobID, true); err != nil {
+		if _, err := s.startJob(s.queueCtx, ownerID, queued.jobID, true, transferjob.AttemptKindResume); err != nil {
 			if errors.Is(err, ErrOwnerCapacity) {
 				if s.finishResumeSchedulerForCapacity(ownerID) {
 					continue
@@ -94,7 +96,7 @@ func (s *Service) runQueuedResumes(ownerID string) {
 			s.mu.Lock()
 			if retryableResumeError(err) {
 				queued.failures++
-				queued.nextAttempt = time.Now().Add(resumeRetryDelay(queued.failures))
+				queued.nextAttempt = s.resumeNow().Add(s.resumeJitter(resumeRetryDelay(queued.failures)))
 				moveQueuedResumeToBack(s.resumeQueue[ownerID], queued)
 			} else {
 				removeQueuedResumeLocked(s, ownerID, queued)
@@ -107,8 +109,6 @@ func (s *Service) runQueuedResumes(ownerID string) {
 		s.mu.Lock()
 		if queued.retryRequested {
 			queued.retryRequested = false
-			queued.failures++
-			queued.nextAttempt = time.Now().Add(resumeRetryDelay(queued.failures))
 			moveQueuedResumeToBack(s.resumeQueue[ownerID], queued)
 		} else {
 			removeQueuedResumeLocked(s, ownerID, queued)
@@ -132,11 +132,16 @@ func (s *Service) finishResumeSchedulerForCapacity(ownerID string) bool {
 
 func (s *Service) requeueManagedResume(ownerID, jobID string) {
 	s.mu.Lock()
+	s.resumeFailures[jobID]++
+	failures := s.resumeFailures[jobID]
+	nextAttempt := s.resumeNow().Add(s.resumeJitter(resumeRetryDelay(failures)))
 	queue := s.resumeQueue[ownerID]
 	if index := slices.IndexFunc(queue, func(queued *queuedResume) bool { return queued.jobID == jobID }); index >= 0 {
 		queue[index].retryRequested = true
+		queue[index].failures = failures
+		queue[index].nextAttempt = nextAttempt
 	} else {
-		s.resumeQueue[ownerID] = append(queue, &queuedResume{jobID: jobID, failures: 1, nextAttempt: time.Now().Add(resumeRetryDelay(1))})
+		s.resumeQueue[ownerID] = append(queue, &queuedResume{jobID: jobID, failures: failures, nextAttempt: nextAttempt})
 	}
 	s.scheduleQueuedResumesLocked(ownerID)
 	s.mu.Unlock()
@@ -153,7 +158,7 @@ func nextQueuedResume(queue []*queuedResume, now time.Time) (*queuedResume, time
 			earliest = queued
 		}
 	}
-	return earliest, time.Until(earliest.nextAttempt)
+	return earliest, earliest.nextAttempt.Sub(now)
 }
 
 func moveQueuedResumeToBack(queue []*queuedResume, target *queuedResume) {
@@ -185,7 +190,21 @@ func retryableResumeError(err error) bool {
 
 func resumeRetryDelay(failures int) time.Duration {
 	shift := min(max(failures-1, 0), 6)
-	return min(time.Second, 10*time.Millisecond*time.Duration(1<<shift))
+	return min(time.Minute, time.Second*time.Duration(1<<shift))
+}
+
+func jitterResumeDelay(delay time.Duration) time.Duration {
+	spread := delay / 4
+	if spread <= 0 {
+		return delay
+	}
+	return delay + time.Duration(rand.Int64N(int64(spread)+1))
+}
+
+func (s *Service) resetManagedResumeFailures(jobID string) {
+	s.mu.Lock()
+	delete(s.resumeFailures, jobID)
+	s.mu.Unlock()
 }
 
 func (s *Service) wakeResumeQueue() {

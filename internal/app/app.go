@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -21,6 +22,7 @@ import (
 	"github.com/ca-x/tailcat-webui/internal/database"
 	"github.com/ca-x/tailcat-webui/internal/diagnostics"
 	"github.com/ca-x/tailcat-webui/internal/httpapi"
+	"github.com/ca-x/tailcat-webui/internal/privatefs"
 	"github.com/ca-x/tailcat-webui/internal/publish"
 	"github.com/ca-x/tailcat-webui/internal/secrets"
 	"github.com/ca-x/tailcat-webui/internal/tailnet"
@@ -54,6 +56,9 @@ func New(ctx context.Context, logger *slog.Logger) (*App, error) {
 	}
 	if err := config.EnsureRuntimeDirs(cfg); err != nil {
 		return nil, err
+	}
+	if err := privatefs.SecureDataDirectory(cfg.DataDir); err != nil {
+		return nil, fmt.Errorf("secure private data directory: %w", err)
 	}
 	processLock := flock.New(filepath.Join(cfg.DataDir, "tailcat-webui.lock"))
 	locked, err := processLock.TryLock()
@@ -121,6 +126,20 @@ func New(ctx context.Context, logger *slog.Logger) (*App, error) {
 	}
 	diagnosticService, err := diagnostics.NewService(ctx, db, manager, auditService, manager, logger)
 	if err != nil {
+		manager.Close()
+		db.Close()
+		return nil, err
+	}
+	diagnosticHandler := diagnostics.Handler{}
+	if err := manager.RegisterReservedTCPHandler(diagnostics.ReservedPort, func(serverID string) tailnet.TCPHandler {
+		return func(runtimeCtx context.Context, connection net.Conn) {
+			defer connection.Close()
+			if err := diagnosticHandler.Serve(runtimeCtx, connection); err != nil {
+				logger.DebugContext(runtimeCtx, "Tailcat diagnostic request ended", "server_id", serverID, "error", err)
+			}
+		}
+	}); err != nil {
+		diagnosticService.Close()
 		manager.Close()
 		db.Close()
 		return nil, err
@@ -232,6 +251,10 @@ func loadOrCreateDemoSecretKey(dataDir string) ([]byte, error) {
 			removeErr := os.Remove(keyPath)
 			return nil, errors.Join(fmt.Errorf("persist demo secret key: %w", err), removeErr)
 		}
+		if err := privatefs.ValidatePrivateFile(keyPath); err != nil {
+			clear(key)
+			return nil, fmt.Errorf("validate demo secret key: %w", err)
+		}
 		if runtime.GOOS != "windows" {
 			directory, err := os.Open(dataDir)
 			if err != nil {
@@ -250,6 +273,9 @@ func loadOrCreateDemoSecretKey(dataDir string) ([]byte, error) {
 	}
 	if before.Mode()&os.ModeSymlink != 0 || !before.Mode().IsRegular() || runtime.GOOS != "windows" && before.Mode().Perm() != 0o600 {
 		return nil, errors.New("demo secret key has unsafe type or permissions")
+	}
+	if err := privatefs.ValidatePrivateFile(keyPath); err != nil {
+		return nil, fmt.Errorf("validate demo secret key: %w", err)
 	}
 	file, err := os.Open(keyPath)
 	if err != nil {

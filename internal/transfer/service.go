@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"strconv"
 	"sync"
 	"time"
 	"uuid"
@@ -25,6 +26,8 @@ import (
 const (
 	defaultTransferExpiry      = 24 * time.Hour
 	maxActiveJobsPerOwner      = 2
+	MaxRetainedSharesPerOwner  = 128
+	MaxRetainedJobsPerOwner    = 128
 	lifecyclePersistAttempts   = 3
 	lifecyclePersistRetryDelay = 10 * time.Millisecond
 )
@@ -85,19 +88,22 @@ type FileView struct {
 }
 
 type ServiceLimits struct {
-	MaxFileBytes     int64
-	MaxShareBytes    int64
-	MaxJobBytes      int64
-	MaxFilesPerShare int
-	Workers          int
-	MaxJobsPerOwner  int
-	Expiry           time.Duration
+	MaxFileBytes            int64
+	MaxShareBytes           int64
+	MaxJobBytes             int64
+	MaxFilesPerShare        int
+	Workers                 int
+	MaxJobsPerOwner         int
+	MaxSharesPerOwner       int
+	MaxRetainedJobsPerOwner int
+	Expiry                  time.Duration
 }
 
 func DefaultServiceLimits() ServiceLimits {
 	return ServiceLimits{
 		MaxFileBytes: MaxFileBytes, MaxShareBytes: MaxShareBytes, MaxJobBytes: MaxShareBytes,
 		MaxFilesPerShare: MaxFilesPerShare, Workers: 4, MaxJobsPerOwner: 2,
+		MaxSharesPerOwner: MaxRetainedSharesPerOwner, MaxRetainedJobsPerOwner: MaxRetainedJobsPerOwner,
 		Expiry: defaultTransferExpiry,
 	}
 }
@@ -246,19 +252,25 @@ type queuedResume struct {
 }
 
 type Service struct {
-	db        *ent.Client
-	storage   *Storage
-	box       *secrets.Box
-	dialer    ClientDialer
-	auditor   AuditRecorder
-	publisher EventPublisher
-	logger    *slog.Logger
-	limits    ServiceLimits
+	db           *ent.Client
+	storage      *Storage
+	box          *secrets.Box
+	dialer       ClientDialer
+	auditor      AuditRecorder
+	publisher    EventPublisher
+	logger       *slog.Logger
+	limits       ServiceLimits
+	handlerSlots chan struct{}
 
 	compareCapability func([]byte, []byte) int
 	progressNow       func() time.Time
+	resumeNow         func() time.Time
+	resumeJitter      func(time.Duration) time.Duration
 
 	metadataMu        sync.Mutex
+	objectMu          sync.Mutex
+	pendingShares     map[string]int
+	pendingJobs       map[string]int
 	mu                sync.Mutex
 	pendingCond       *sync.Cond
 	closed            bool
@@ -267,12 +279,17 @@ type Service struct {
 	ownerJobs         map[string]int
 	resumeQueue       map[string][]*queuedResume
 	resumeScheduling  map[string]bool
+	resumeFailures    map[string]int
 	progressPublished map[string]time.Time
 	queueCtx          context.Context
 	cancelQueue       context.CancelCauseFunc
 	queueWake         chan struct{}
+	expiryCtx         context.Context
+	cancelExpiry      context.CancelCauseFunc
+	expiryWake        chan struct{}
 	shareGates        map[string]*shareGate
 	shareOps          map[string]*shareOperationLock
+	jobReadGates      map[string]*jobReadGate
 	wg                sync.WaitGroup
 	runnerHooks       runnerHooks
 	handlerHooks      handlerHooks
@@ -292,21 +309,33 @@ func NewServiceWithLimits(ctx context.Context, db *ent.Client, storage *Storage,
 	if db == nil || storage == nil || box == nil || dialer == nil || auditor == nil || publisher == nil || logger == nil {
 		return nil, errors.New("transfer service: nil dependency")
 	}
-	if limits.MaxFileBytes <= 0 || limits.MaxFileBytes > MaxFileBytes || limits.MaxShareBytes < limits.MaxFileBytes || limits.MaxShareBytes > MaxShareBytes || limits.MaxJobBytes < limits.MaxFileBytes || limits.MaxJobBytes > MaxShareBytes || limits.MaxFilesPerShare <= 0 || limits.MaxFilesPerShare > MaxFilesPerShare || limits.Workers != 4 || limits.MaxJobsPerOwner <= 0 || limits.MaxJobsPerOwner > 2 || limits.Expiry <= 0 || limits.Expiry > defaultTransferExpiry {
+	if limits.MaxSharesPerOwner == 0 {
+		limits.MaxSharesPerOwner = MaxRetainedSharesPerOwner
+	}
+	if limits.MaxRetainedJobsPerOwner == 0 {
+		limits.MaxRetainedJobsPerOwner = MaxRetainedJobsPerOwner
+	}
+	if limits.MaxFileBytes <= 0 || limits.MaxFileBytes > MaxFileBytes || limits.MaxShareBytes < limits.MaxFileBytes || limits.MaxShareBytes > MaxShareBytes || limits.MaxJobBytes < limits.MaxFileBytes || limits.MaxJobBytes > MaxShareBytes || limits.MaxFilesPerShare <= 0 || limits.MaxFilesPerShare > MaxFilesPerShare || limits.Workers != 4 || limits.MaxJobsPerOwner <= 0 || limits.MaxJobsPerOwner > 2 || limits.MaxSharesPerOwner <= 0 || limits.MaxSharesPerOwner > MaxRetainedSharesPerOwner || limits.MaxRetainedJobsPerOwner <= 0 || limits.MaxRetainedJobsPerOwner > MaxRetainedJobsPerOwner || limits.Expiry <= 0 || limits.Expiry > defaultTransferExpiry {
 		return nil, errors.New("transfer service: invalid limits")
 	}
 	if !box.Available() {
 		return nil, secrets.ErrUnavailable
 	}
 	queueCtx, cancelQueue := context.WithCancelCause(context.Background())
+	expiryCtx, cancelExpiry := context.WithCancelCause(context.Background())
 	service := &Service{
 		db: db, storage: storage, box: box, dialer: dialer, auditor: auditor, publisher: publisher, logger: logger, limits: limits,
 		compareCapability: subtle.ConstantTimeCompare,
 		progressNow:       time.Now,
-		activeJobs:        make(map[string]*activeJob), ownerJobs: make(map[string]int), shareGates: make(map[string]*shareGate), shareOps: make(map[string]*shareOperationLock),
-		resumeQueue: make(map[string][]*queuedResume), resumeScheduling: make(map[string]bool),
+		resumeNow:         time.Now,
+		resumeJitter:      jitterResumeDelay,
+		handlerSlots:      make(chan struct{}, 16),
+		activeJobs:        make(map[string]*activeJob), ownerJobs: make(map[string]int), shareGates: make(map[string]*shareGate), shareOps: make(map[string]*shareOperationLock), jobReadGates: make(map[string]*jobReadGate),
+		resumeQueue: make(map[string][]*queuedResume), resumeScheduling: make(map[string]bool), resumeFailures: make(map[string]int),
 		progressPublished: make(map[string]time.Time),
-		queueCtx:          queueCtx, cancelQueue: cancelQueue, queueWake: make(chan struct{}, 1),
+		pendingShares:     make(map[string]int), pendingJobs: make(map[string]int),
+		queueCtx: queueCtx, cancelQueue: cancelQueue, queueWake: make(chan struct{}, 1),
+		expiryCtx: expiryCtx, cancelExpiry: cancelExpiry, expiryWake: make(chan struct{}, 1),
 		closeDone: make(chan struct{}),
 	}
 	service.pendingCond = sync.NewCond(&service.mu)
@@ -316,6 +345,8 @@ func NewServiceWithLimits(ctx context.Context, db *ent.Client, storage *Storage,
 	if err := service.interruptAbandoned(ctx); err != nil {
 		return nil, err
 	}
+	service.wg.Go(service.runExpiryScheduler)
+	service.wakeExpiryScheduler()
 	return service, nil
 }
 
@@ -331,6 +362,11 @@ func (s *Service) CreateShare(ctx context.Context, ownerID string, input CreateS
 	} else if err != nil {
 		return ShareView{}, fmt.Errorf("validate transfer server ownership: %w", err)
 	}
+	releaseObject, err := s.reserveOwnerObject(ctx, ownerID, ownerObjectShare)
+	if err != nil {
+		return ShareView{}, err
+	}
+	defer releaseObject()
 	now := time.Now()
 	expiresAt := input.ExpiresAt
 	if expiresAt.IsZero() {
@@ -373,6 +409,7 @@ func (s *Service) CreateShare(ctx context.Context, ownerID string, input CreateS
 		return ShareView{}, fmt.Errorf("commit transfer-share create: %w", err)
 	}
 	committed = true
+	s.wakeExpiryScheduler()
 	s.publishTransfer(ownerID, row.ID, events.RuntimePhaseIdle, TransferEventPayload{ShareID: row.ID, Status: string(row.Status)})
 	view := shareView(row)
 	view.Capability = string(capability.text)
@@ -489,7 +526,21 @@ func (s *Service) FinalizeShare(ctx context.Context, ownerID, shareID string) (S
 	if err := s.ensureOpen(); err != nil {
 		return ShareView{}, err
 	}
-	row, err := s.db.TransferShare.Query().Where(transfershare.IDEQ(shareID), transfershare.UserIDEQ(ownerID)).Only(ctx)
+	unlock := s.lockShareOperation(shareID)
+	defer unlock()
+	s.metadataMu.Lock()
+	defer s.metadataMu.Unlock()
+	tx, err := s.db.Tx(ctx)
+	if err != nil {
+		return ShareView{}, fmt.Errorf("begin transfer share finalize: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	row, err := tx.TransferShare.Query().Where(transfershare.IDEQ(shareID), transfershare.UserIDEQ(ownerID)).Only(ctx)
 	if ent.IsNotFound(err) {
 		return ShareView{}, ErrNotFound
 	}
@@ -514,6 +565,13 @@ func (s *Service) FinalizeShare(ctx context.Context, ownerID, shareID string) (S
 	if err != nil {
 		return ShareView{}, fmt.Errorf("finalize transfer share: %w", err)
 	}
+	if err := s.recordLifecycleWithClient(ctx, tx.Client(), ownerID, "transfer.finalize", "share", shareID, "success"); err != nil {
+		return ShareView{}, err
+	}
+	if err := s.commitLifecycle(tx, "share.finalize"); err != nil {
+		return ShareView{}, fmt.Errorf("commit transfer share finalize: %w", err)
+	}
+	committed = true
 	s.publishTransfer(ownerID, shareID, events.RuntimePhaseReady, TransferEventPayload{ShareID: shareID, Status: string(updated.Status)})
 	return shareView(updated), nil
 }
@@ -593,15 +651,17 @@ func (s *Service) rotateCapability(ctx context.Context, ownerID, shareID string)
 			capability.clear()
 		}
 	}()
+	nextGeneration := row.CapabilityGeneration + 1
 	if _, err := row.Update().
 		Where(transfershare.UserIDEQ(ownerID), transfershare.StatusIn(transfershare.StatusStaging, transfershare.StatusReady), transfershare.ExpiresAtGT(now)).
 		SetCapabilityHash(capability.hash).
+		SetCapabilityGeneration(nextGeneration).
 		Save(ctx); ent.IsNotFound(err) {
 		return generatedCapability{}, fmt.Errorf("%w: rotation compare-and-swap lost", ErrInvalidState)
 	} else if err != nil {
 		return generatedCapability{}, fmt.Errorf("rotate transfer capability: %w", err)
 	}
-	if err := s.recordLifecycleWithClient(ctx, tx.Client(), ownerID, "transfer.rotate", "share", shareID, "success"); err != nil {
+	if err := s.recordLifecycleOccurrenceWithClient(ctx, tx.Client(), ownerID, "transfer.rotate", "share", shareID, "success", nextGeneration-1); err != nil {
 		return generatedCapability{}, err
 	}
 	if err := s.commitLifecycle(tx, "share.rotate"); err != nil {
@@ -622,6 +682,7 @@ func (s *Service) Close() error {
 		var streams []*activeStream
 		var expiryDones []<-chan struct{}
 		var jobCancels []context.CancelCauseFunc
+		var readLeases []*jobReadLease
 		if !s.closed {
 			s.closed = true
 			for _, job := range s.activeJobs {
@@ -643,6 +704,13 @@ func (s *Service) Close() error {
 					expiryDones = append(expiryDones, gate.expiry.done)
 				}
 			}
+			for _, gate := range s.jobReadGates {
+				gate.accepting = false
+				gate.generation++
+				for lease := range gate.leases {
+					readLeases = append(readLeases, lease)
+				}
+			}
 		}
 		for s.pending > 0 {
 			s.pendingCond.Wait()
@@ -652,8 +720,12 @@ func (s *Service) Close() error {
 			cancel(errServiceClosed)
 		}
 		s.cancelQueue(errServiceClosed)
+		s.cancelExpiry(errServiceClosed)
 		for _, stream := range streams {
 			stream.cancel(errServiceClosed)
+		}
+		for _, lease := range readLeases {
+			lease.cancel()
 		}
 		s.wg.Wait()
 		for _, done := range streamDones {
@@ -661,6 +733,9 @@ func (s *Service) Close() error {
 		}
 		for _, done := range expiryDones {
 			<-done
+		}
+		for _, lease := range readLeases {
+			<-lease.done
 		}
 		s.mu.Lock()
 		s.closeErr = errors.Join(s.failures...)
@@ -722,7 +797,11 @@ func fileView(row *ent.ShareFile) FileView {
 }
 
 func (s *Service) recordLifecycle(ctx context.Context, ownerID, action, resourceKind, resourceID, outcome string) error {
-	entry := lifecycleAuditEntry(ownerID, action, resourceKind, resourceID, outcome)
+	return s.recordLifecycleOccurrence(ctx, ownerID, action, resourceKind, resourceID, outcome, 0)
+}
+
+func (s *Service) recordLifecycleOccurrence(ctx context.Context, ownerID, action, resourceKind, resourceID, outcome string, occurrence int) error {
+	entry := lifecycleAuditEntry(ownerID, action, resourceKind, resourceID, outcome, occurrence)
 	var lastErr error
 	for attempt := range 3 {
 		if err := s.auditor.Record(ctx, entry); err == nil {
@@ -747,16 +826,24 @@ func (s *Service) recordLifecycle(ctx context.Context, ownerID, action, resource
 }
 
 func (s *Service) recordLifecycleWithClient(ctx context.Context, client *ent.Client, ownerID, action, resourceKind, resourceID, outcome string) error {
-	entry := lifecycleAuditEntry(ownerID, action, resourceKind, resourceID, outcome)
+	return s.recordLifecycleOccurrenceWithClient(ctx, client, ownerID, action, resourceKind, resourceID, outcome, 0)
+}
+
+func (s *Service) recordLifecycleOccurrenceWithClient(ctx context.Context, client *ent.Client, ownerID, action, resourceKind, resourceID, outcome string, occurrence int) error {
+	entry := lifecycleAuditEntry(ownerID, action, resourceKind, resourceID, outcome, occurrence)
 	if err := s.auditor.RecordWithClient(ctx, client, entry); err != nil {
 		return fmt.Errorf("record transfer lifecycle transaction: %w", err)
 	}
 	return nil
 }
 
-func lifecycleAuditEntry(ownerID, action, resourceKind, resourceID, outcome string) audit.Entry {
+func lifecycleAuditEntry(ownerID, action, resourceKind, resourceID, outcome string, occurrence int) audit.Entry {
+	id := resourceKind + ":" + resourceID + ":" + action
+	if occurrence > 1 {
+		id += ":" + strconv.Itoa(occurrence)
+	}
 	return audit.Entry{
-		ID: resourceKind + ":" + resourceID + ":" + action, UserID: ownerID, Action: action,
+		ID: id, UserID: ownerID, Action: action,
 		ResourceKind: resourceKind, ResourceID: resourceID, Outcome: outcome,
 	}
 }

@@ -1,6 +1,7 @@
 export interface PublicTransferConfig {
   max_file_bytes: number; max_share_bytes: number; max_job_bytes: number; max_owner_bytes: number;
-  max_files_per_share: number; workers: 4; max_jobs_per_owner: number; expiry_seconds: number;
+  max_files_per_share: number; max_owner_files: number; max_retained_shares_per_owner: number;
+  max_retained_jobs_per_owner: number; workers: 4; max_jobs_per_owner: number; expiry_seconds: number;
   retention_seconds: number; upload_timeout_seconds: number;
 }
 export interface PublicConfig { auth_mode: 'oidc' | 'demo'; unsafe_ssh: boolean; version: string; transfers: PublicTransferConfig }
@@ -168,9 +169,9 @@ export const api = {
   createTransferShare: (body: { server_id: string }) => request<TransferShareCreated>('/api/v1/transfers/shares', { method: 'POST', body: JSON.stringify(body) }),
   transferShare: (id: string) => request<TransferShare>(`/api/v1/transfers/shares/${id}`),
   transferShareFiles: (id: string) => request<{ items: TransferShareFile[] }>(`/api/v1/transfers/shares/${id}/files`).then((r) => r.items),
-  uploadTransferShareFile: async (id: string, body: Blob, virtualPath: string): Promise<TransferShareFile> => {
+  uploadTransferShareFile: async (id: string, body: Blob, virtualPath: string, signal?: AbortSignal): Promise<TransferShareFile> => {
     const response = await fetch(`/api/v1/transfers/shares/${id}/files`, {
-      credentials: 'same-origin', method: 'POST', body,
+      credentials: 'same-origin', method: 'POST', body, signal,
       headers: { 'Content-Type': 'application/octet-stream', 'X-Tailcat-Virtual-Path': headerByteString(virtualPath) },
     })
     if (!response.ok) {

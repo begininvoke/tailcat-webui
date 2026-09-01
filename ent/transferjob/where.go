@@ -85,6 +85,11 @@ func RemoteCapabilityCipher(v []byte) predicate.TransferJob {
 	return predicate.TransferJob(sql.FieldEQ(FieldRemoteCapabilityCipher, v))
 }
 
+// Attempt applies equality check predicate on the "attempt" field. It's identical to AttemptEQ.
+func Attempt(v int) predicate.TransferJob {
+	return predicate.TransferJob(sql.FieldEQ(FieldAttempt, v))
+}
+
 // TotalBytes applies equality check predicate on the "total_bytes" field. It's identical to TotalBytesEQ.
 func TotalBytes(v int64) predicate.TransferJob {
 	return predicate.TransferJob(sql.FieldEQ(FieldTotalBytes, v))
@@ -373,6 +378,76 @@ func StatusIn(vs ...Status) predicate.TransferJob {
 // StatusNotIn applies the NotIn predicate on the "status" field.
 func StatusNotIn(vs ...Status) predicate.TransferJob {
 	return predicate.TransferJob(sql.FieldNotIn(FieldStatus, vs...))
+}
+
+// AttemptEQ applies the EQ predicate on the "attempt" field.
+func AttemptEQ(v int) predicate.TransferJob {
+	return predicate.TransferJob(sql.FieldEQ(FieldAttempt, v))
+}
+
+// AttemptNEQ applies the NEQ predicate on the "attempt" field.
+func AttemptNEQ(v int) predicate.TransferJob {
+	return predicate.TransferJob(sql.FieldNEQ(FieldAttempt, v))
+}
+
+// AttemptIn applies the In predicate on the "attempt" field.
+func AttemptIn(vs ...int) predicate.TransferJob {
+	return predicate.TransferJob(sql.FieldIn(FieldAttempt, vs...))
+}
+
+// AttemptNotIn applies the NotIn predicate on the "attempt" field.
+func AttemptNotIn(vs ...int) predicate.TransferJob {
+	return predicate.TransferJob(sql.FieldNotIn(FieldAttempt, vs...))
+}
+
+// AttemptGT applies the GT predicate on the "attempt" field.
+func AttemptGT(v int) predicate.TransferJob {
+	return predicate.TransferJob(sql.FieldGT(FieldAttempt, v))
+}
+
+// AttemptGTE applies the GTE predicate on the "attempt" field.
+func AttemptGTE(v int) predicate.TransferJob {
+	return predicate.TransferJob(sql.FieldGTE(FieldAttempt, v))
+}
+
+// AttemptLT applies the LT predicate on the "attempt" field.
+func AttemptLT(v int) predicate.TransferJob {
+	return predicate.TransferJob(sql.FieldLT(FieldAttempt, v))
+}
+
+// AttemptLTE applies the LTE predicate on the "attempt" field.
+func AttemptLTE(v int) predicate.TransferJob {
+	return predicate.TransferJob(sql.FieldLTE(FieldAttempt, v))
+}
+
+// AttemptKindEQ applies the EQ predicate on the "attempt_kind" field.
+func AttemptKindEQ(v AttemptKind) predicate.TransferJob {
+	return predicate.TransferJob(sql.FieldEQ(FieldAttemptKind, v))
+}
+
+// AttemptKindNEQ applies the NEQ predicate on the "attempt_kind" field.
+func AttemptKindNEQ(v AttemptKind) predicate.TransferJob {
+	return predicate.TransferJob(sql.FieldNEQ(FieldAttemptKind, v))
+}
+
+// AttemptKindIn applies the In predicate on the "attempt_kind" field.
+func AttemptKindIn(vs ...AttemptKind) predicate.TransferJob {
+	return predicate.TransferJob(sql.FieldIn(FieldAttemptKind, vs...))
+}
+
+// AttemptKindNotIn applies the NotIn predicate on the "attempt_kind" field.
+func AttemptKindNotIn(vs ...AttemptKind) predicate.TransferJob {
+	return predicate.TransferJob(sql.FieldNotIn(FieldAttemptKind, vs...))
+}
+
+// AttemptKindIsNil applies the IsNil predicate on the "attempt_kind" field.
+func AttemptKindIsNil() predicate.TransferJob {
+	return predicate.TransferJob(sql.FieldIsNull(FieldAttemptKind))
+}
+
+// AttemptKindNotNil applies the NotNil predicate on the "attempt_kind" field.
+func AttemptKindNotNil() predicate.TransferJob {
+	return predicate.TransferJob(sql.FieldNotNull(FieldAttemptKind))
 }
 
 // TotalBytesEQ applies the EQ predicate on the "total_bytes" field.

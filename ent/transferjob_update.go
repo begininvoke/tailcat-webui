@@ -43,6 +43,47 @@ func (_u *TransferJobUpdate) SetNillableStatus(v *transferjob.Status) *TransferJ
 	return _u
 }
 
+// SetAttempt sets the "attempt" field.
+func (_u *TransferJobUpdate) SetAttempt(v int) *TransferJobUpdate {
+	_u.mutation.ResetAttempt()
+	_u.mutation.SetAttempt(v)
+	return _u
+}
+
+// SetNillableAttempt sets the "attempt" field if the given value is not nil.
+func (_u *TransferJobUpdate) SetNillableAttempt(v *int) *TransferJobUpdate {
+	if v != nil {
+		_u.SetAttempt(*v)
+	}
+	return _u
+}
+
+// AddAttempt adds value to the "attempt" field.
+func (_u *TransferJobUpdate) AddAttempt(v int) *TransferJobUpdate {
+	_u.mutation.AddAttempt(v)
+	return _u
+}
+
+// SetAttemptKind sets the "attempt_kind" field.
+func (_u *TransferJobUpdate) SetAttemptKind(v transferjob.AttemptKind) *TransferJobUpdate {
+	_u.mutation.SetAttemptKind(v)
+	return _u
+}
+
+// SetNillableAttemptKind sets the "attempt_kind" field if the given value is not nil.
+func (_u *TransferJobUpdate) SetNillableAttemptKind(v *transferjob.AttemptKind) *TransferJobUpdate {
+	if v != nil {
+		_u.SetAttemptKind(*v)
+	}
+	return _u
+}
+
+// ClearAttemptKind clears the value of the "attempt_kind" field.
+func (_u *TransferJobUpdate) ClearAttemptKind() *TransferJobUpdate {
+	_u.mutation.ClearAttemptKind()
+	return _u
+}
+
 // SetTotalBytes sets the "total_bytes" field.
 func (_u *TransferJobUpdate) SetTotalBytes(v int64) *TransferJobUpdate {
 	_u.mutation.ResetTotalBytes()
@@ -241,6 +282,16 @@ func (_u *TransferJobUpdate) check() error {
 			return &ValidationError{Name: "status", err: fmt.Errorf(`ent: validator failed for field "TransferJob.status": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.Attempt(); ok {
+		if err := transferjob.AttemptValidator(v); err != nil {
+			return &ValidationError{Name: "attempt", err: fmt.Errorf(`ent: validator failed for field "TransferJob.attempt": %w`, err)}
+		}
+	}
+	if v, ok := _u.mutation.AttemptKind(); ok {
+		if err := transferjob.AttemptKindValidator(v); err != nil {
+			return &ValidationError{Name: "attempt_kind", err: fmt.Errorf(`ent: validator failed for field "TransferJob.attempt_kind": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.TotalBytes(); ok {
 		if err := transferjob.TotalBytesValidator(v); err != nil {
 			return &ValidationError{Name: "total_bytes", err: fmt.Errorf(`ent: validator failed for field "TransferJob.total_bytes": %w`, err)}
@@ -279,6 +330,18 @@ func (_u *TransferJobUpdate) sqlSave(ctx context.Context) (_node int, err error)
 	}
 	if value, ok := _u.mutation.Status(); ok {
 		_spec.SetField(transferjob.FieldStatus, field.TypeEnum, value)
+	}
+	if value, ok := _u.mutation.Attempt(); ok {
+		_spec.SetField(transferjob.FieldAttempt, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedAttempt(); ok {
+		_spec.AddField(transferjob.FieldAttempt, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AttemptKind(); ok {
+		_spec.SetField(transferjob.FieldAttemptKind, field.TypeEnum, value)
+	}
+	if _u.mutation.AttemptKindCleared() {
+		_spec.ClearField(transferjob.FieldAttemptKind, field.TypeEnum)
 	}
 	if value, ok := _u.mutation.TotalBytes(); ok {
 		_spec.SetField(transferjob.FieldTotalBytes, field.TypeInt64, value)
@@ -389,6 +452,47 @@ func (_u *TransferJobUpdateOne) SetNillableStatus(v *transferjob.Status) *Transf
 	if v != nil {
 		_u.SetStatus(*v)
 	}
+	return _u
+}
+
+// SetAttempt sets the "attempt" field.
+func (_u *TransferJobUpdateOne) SetAttempt(v int) *TransferJobUpdateOne {
+	_u.mutation.ResetAttempt()
+	_u.mutation.SetAttempt(v)
+	return _u
+}
+
+// SetNillableAttempt sets the "attempt" field if the given value is not nil.
+func (_u *TransferJobUpdateOne) SetNillableAttempt(v *int) *TransferJobUpdateOne {
+	if v != nil {
+		_u.SetAttempt(*v)
+	}
+	return _u
+}
+
+// AddAttempt adds value to the "attempt" field.
+func (_u *TransferJobUpdateOne) AddAttempt(v int) *TransferJobUpdateOne {
+	_u.mutation.AddAttempt(v)
+	return _u
+}
+
+// SetAttemptKind sets the "attempt_kind" field.
+func (_u *TransferJobUpdateOne) SetAttemptKind(v transferjob.AttemptKind) *TransferJobUpdateOne {
+	_u.mutation.SetAttemptKind(v)
+	return _u
+}
+
+// SetNillableAttemptKind sets the "attempt_kind" field if the given value is not nil.
+func (_u *TransferJobUpdateOne) SetNillableAttemptKind(v *transferjob.AttemptKind) *TransferJobUpdateOne {
+	if v != nil {
+		_u.SetAttemptKind(*v)
+	}
+	return _u
+}
+
+// ClearAttemptKind clears the value of the "attempt_kind" field.
+func (_u *TransferJobUpdateOne) ClearAttemptKind() *TransferJobUpdateOne {
+	_u.mutation.ClearAttemptKind()
 	return _u
 }
 
@@ -603,6 +707,16 @@ func (_u *TransferJobUpdateOne) check() error {
 			return &ValidationError{Name: "status", err: fmt.Errorf(`ent: validator failed for field "TransferJob.status": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.Attempt(); ok {
+		if err := transferjob.AttemptValidator(v); err != nil {
+			return &ValidationError{Name: "attempt", err: fmt.Errorf(`ent: validator failed for field "TransferJob.attempt": %w`, err)}
+		}
+	}
+	if v, ok := _u.mutation.AttemptKind(); ok {
+		if err := transferjob.AttemptKindValidator(v); err != nil {
+			return &ValidationError{Name: "attempt_kind", err: fmt.Errorf(`ent: validator failed for field "TransferJob.attempt_kind": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.TotalBytes(); ok {
 		if err := transferjob.TotalBytesValidator(v); err != nil {
 			return &ValidationError{Name: "total_bytes", err: fmt.Errorf(`ent: validator failed for field "TransferJob.total_bytes": %w`, err)}
@@ -658,6 +772,18 @@ func (_u *TransferJobUpdateOne) sqlSave(ctx context.Context) (_node *TransferJob
 	}
 	if value, ok := _u.mutation.Status(); ok {
 		_spec.SetField(transferjob.FieldStatus, field.TypeEnum, value)
+	}
+	if value, ok := _u.mutation.Attempt(); ok {
+		_spec.SetField(transferjob.FieldAttempt, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedAttempt(); ok {
+		_spec.AddField(transferjob.FieldAttempt, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AttemptKind(); ok {
+		_spec.SetField(transferjob.FieldAttemptKind, field.TypeEnum, value)
+	}
+	if _u.mutation.AttemptKindCleared() {
+		_spec.ClearField(transferjob.FieldAttemptKind, field.TypeEnum)
 	}
 	if value, ok := _u.mutation.TotalBytes(); ok {
 		_spec.SetField(transferjob.FieldTotalBytes, field.TypeInt64, value)

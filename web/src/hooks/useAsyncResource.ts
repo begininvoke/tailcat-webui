@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { runtimeRefreshEvent } from './useRuntimeEvents'
+import { runtimeRefreshEvent, runtimeStreamOpenEvent } from './useRuntimeEvents'
 
-export interface AsyncResourceOptions { refreshOnRuntime?: boolean }
+export interface AsyncResourceOptions { refreshOnRuntime?: boolean; refreshOnStreamOpen?: boolean }
 
-export function useAsyncResource<T>(load: () => Promise<T>, { refreshOnRuntime = true }: AsyncResourceOptions = {}) {
+export function useAsyncResource<T>(load: () => Promise<T>, { refreshOnRuntime = true, refreshOnStreamOpen = false }: AsyncResourceOptions = {}) {
   const [data, setData] = useState<T | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<unknown>(null)
@@ -32,5 +32,11 @@ export function useAsyncResource<T>(load: () => Promise<T>, { refreshOnRuntime =
     window.addEventListener(runtimeRefreshEvent, onRuntime)
     return () => window.removeEventListener(runtimeRefreshEvent, onRuntime)
   }, [refresh, refreshOnRuntime])
+  useEffect(() => {
+    if (!refreshOnStreamOpen) return
+    const onOpen = () => refresh({ silent: true })
+    window.addEventListener(runtimeStreamOpenEvent, onOpen)
+    return () => window.removeEventListener(runtimeStreamOpenEvent, onOpen)
+  }, [refresh, refreshOnStreamOpen])
   return { data, loading, error, refresh, setData }
 }

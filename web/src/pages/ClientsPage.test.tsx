@@ -165,6 +165,14 @@ describe('ClientsPage diagnostics', () => {
     expect(diagnostics.refresh).not.toHaveBeenCalled()
   })
 
+  it('polls authoritative diagnostics while a durable run is active', () => {
+    vi.useFakeTimers()
+    renderPage()
+    expect(diagnostics.refresh).not.toHaveBeenCalled()
+    act(() => vi.advanceTimersByTime(2000))
+    expect(diagnostics.refresh).toHaveBeenCalledWith({ silent: true })
+  })
+
   it.each([
     ['duration underflow', '0'],
     ['duration overflow', '5001'],

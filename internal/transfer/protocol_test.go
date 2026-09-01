@@ -119,7 +119,7 @@ func TestReadRequestRejectsOversizedAndTruncatedFramesBeforeAllocation(t *testin
 				_, err := conn.Write([]byte("{}"))
 				return err
 			},
-			code: CodeProtocolInvalid,
+			code: CodeRemoteUnavailable,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -148,7 +148,7 @@ func TestReadResponseRejectsUnknownOversizedAndTruncatedEnvelopes(t *testing.T) 
 		code ErrorCode
 	}{
 		{name: "unknown status", wire: rawResponseFrame(9, nil), code: CodeProtocolInvalid},
-		{name: "truncated", wire: append(uint32Bytes(5), responseStatusSuccess, 'x'), code: CodeProtocolInvalid},
+		{name: "truncated", wire: append(uint32Bytes(5), responseStatusSuccess, 'x'), code: CodeRemoteUnavailable},
 		{name: "oversized", wire: uint32Bytes(uint32(MaxRangeResponseBytes + 2)), code: CodeLimitExceeded},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -163,6 +163,61 @@ func TestReadResponseRejectsUnknownOversizedAndTruncatedEnvelopes(t *testing.T) 
 				t.Fatalf("readResponse error = %v, want %s", err, test.code)
 			}
 		})
+	}
+}
+
+func TestTransportResetIsRemoteUnavailable(t *testing.T) {
+	err := classifyProtocolIO(t.Context(), io.ErrUnexpectedEOF)
+	if protocolCode(err) != CodeRemoteUnavailable {
+		t.Fatalf("transport reset error = %v, want %s", err, CodeRemoteUnavailable)
+	}
+}
+
+type countingWriter struct {
+	total int64
+	max   int
+}
+
+func (writer *countingWriter) Write(data []byte) (int, error) {
+	writer.total += int64(len(data))
+	writer.max = max(writer.max, len(data))
+	return len(data), nil
+}
+
+type zeroReader struct{}
+
+func (zeroReader) Read(data []byte) (int, error) {
+	clear(data)
+	return len(data), nil
+}
+
+func TestSuccessStreamUsesSmallFixedWritesForFullBlock(t *testing.T) {
+	writer := new(countingWriter)
+	if err := writeSuccessStream(t.Context(), writer, BlockSize, zeroReader{}, BlockSize); err != nil {
+		t.Fatal(err)
+	}
+	if writer.total != BlockSize+5 || writer.max > protocolStreamBufferBytes {
+		t.Fatalf("stream writes total=%d max=%d", writer.total, writer.max)
+	}
+}
+
+func TestProgressingConnectionOutlivesOneInactivityWindow(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	go func() {
+		defer server.Close()
+		for value := byte(1); value <= 5; value++ {
+			_, _ = server.Write([]byte{value})
+			time.Sleep(15 * time.Millisecond)
+		}
+	}()
+	started := time.Now()
+	data := make([]byte, 5)
+	if err := readFull(t.Context(), &progressConn{Conn: client, inactivity: 30 * time.Millisecond}, data); err != nil {
+		t.Fatal(err)
+	}
+	if time.Since(started) <= 30*time.Millisecond {
+		t.Fatal("test did not span an inactivity window")
 	}
 }
 

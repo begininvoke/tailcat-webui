@@ -29,19 +29,23 @@ correlation.
 Every durable query for servers, clients, mappings, allowlist keys, exit rules,
 diagnostics, shares, files, jobs, and downloads includes the authenticated
 owner ID. A cross-owner identifier returns not-found instead of revealing
-whether the resource exists. Account deletion immediately cascades database
-configuration, sessions, transfer metadata, and encrypted key material. That
-database cascade does not directly traverse the transfer filesystem. Explicit
-share/job deletion removes bytes through `Storage`; otherwise startup orphan
-reconciliation eventually removes staged bytes that no metadata row references.
+whether the resource exists. Deleting a Tailcat server or client through the
+API first invokes owner-and-parent-scoped transfer cleanup. It cancels active
+work, removes dependent shares or jobs and staged bytes, and releases quota
+before deleting the parent row. A cleanup failure leaves the parent row intact
+for retry. Account deletion still cascades database configuration, sessions,
+transfer metadata, and encrypted key material. Startup orphan reconciliation
+removes staged bytes left without metadata after an abnormal shutdown.
 
-Deployment target rules are the maximum authority. Their grammar is `CIDR`,
-`CIDR@port`, `CIDR@start-end`, `domain@port`, or `domain@start-end`. A bare CIDR
-allows all ports for compatibility. An exact IDNA domain always requires an
+Deployment target rules are the maximum authority. Mapping targets accept
+`CIDR`, `CIDR@port`, `CIDR@start-end`, `domain@port`, or `domain@start-end`. A
+bare CIDR allows all ports for compatibility. An exact IDNA domain requires an
 exact or ranged port clause. All DNS answers must satisfy policy, and the
-checked numeric address is pinned for the dial. Owner-scoped exit rules can
-only narrow the deployment rules. Empty deployment or owner exit rules deny
-exit traffic.
+checked numeric address is pinned for the dial. Exit targets accept only the
+three CIDR forms because Tailcat exit forwarding supplies numeric addresses;
+domain exit rules are rejected at startup. Owner-scoped exit rules can only
+narrow the deployment rules. Empty deployment or owner exit rules deny exit
+traffic.
 
 ## Network diagnostics
 
@@ -91,6 +95,10 @@ must use `application/octet-stream`, provide a non-negative `Content-Length`,
 and stay within the configured file, share, owner, file-count, and read-deadline
 limits. `http.MaxBytesReader` remains the final body ceiling. The UTF-8 virtual
 path header is capped at 1,024 bytes and validated as a relative path.
+Each sender operation owns an `AbortController`. The drawer and background
+progress card can cancel the active upload, and closing the drawer or leaving
+the route aborts it. The sender stops before the next queued file and retains
+files that were already staged so the same share can be retried.
 
 Downloads are available only for completed owner-scoped items. Responses use
 `application/octet-stream`, a sanitized attachment filename,
@@ -114,22 +122,34 @@ removes orphaned aliases or temporary files without leaving the owner root.
 Unix permission and link-count checks are enforced directly. Windows ACL,
 reparse-point, hard-link, and directory-sync behavior requires the dedicated
 `windows-latest` runtime test; a Linux cross-build cannot prove NTFS semantics.
+On Windows, the application also protects the complete data directory before
+opening the process lock, SQLite database, or demo master key. Its DACL permits
+only the current owner, SYSTEM, and Administrators, and inherited access is
+disabled.
 
 Shares and jobs default to a 24-hour lifetime. Operators may tighten the value
 from 1 second up to the 24-hour ceiling. Expiry or explicit deletion revokes
 active streams, cancels jobs, removes staged bytes, and cascades the matching
-metadata. Configured lifetime and retention describe the same boundary. Audit
-records cover share create, rotate, finalize, delete, job start, cancel, retry,
-complete, fail, and delete. Audit data contains owner-scoped IDs, counts,
-outcome, and stable error codes, never capability text, private keys, file
-bodies, or whole virtual paths.
+metadata. A service-owned scheduler enforces expiry throughout the process
+lifetime, wakes for new deadlines, bounds each cleanup batch, and retries
+failures. Completed-item downloads hold tracked read leases; deletion closes
+and waits for those readers before unlinking data. Configured lifetime and
+retention describe the same boundary. Audit records cover every distinct share
+create, finalize, rotation and job attempt, including managed resume and
+terminal outcome. Audit data contains owner-scoped IDs, counts, outcome, and
+stable error codes, never capability text, private keys, file bodies, or whole
+virtual paths.
 
 ## Resource and deployment controls
 
 Compiled transfer ceilings are 512 MiB per file, 1 GiB per share/job, 2 GiB per
-owner, 1,000 files per share, exactly four workers, and two active jobs per
-owner. Operators may tighten supported limits, but cannot raise these ceilings.
-Diagnostics and transfer reserved ports cannot be used for user mappings.
+owner, 1,000 files per share, 4,096 retained files per owner, exactly four
+workers, and two active jobs per owner. Fixed owner-wide object caps permit 128
+retained outgoing shares and 128 retained incoming jobs. Pending object and file
+reservations count toward admission, including zero-byte files. Operators may
+tighten the configurable byte, per-share file, active-job, and lifetime limits,
+but cannot raise the compiled ceilings. Diagnostics and transfer reserved ports
+cannot be used for user mappings.
 
 The HTTP server applies header and body limits, timeouts, owner and source rate
 limits, and bounded published-route concurrency. The deployment master key is

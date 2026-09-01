@@ -66,6 +66,23 @@ describe('runtime events', () => {
     vi.unstubAllGlobals()
   })
 
+  it('announces every stream open for authoritative focused-resource reconciliation', () => {
+    vi.stubGlobal('EventSource', EventSourceStub)
+    const opened = vi.fn()
+    window.addEventListener('tailcat:runtime-stream-open', opened)
+    const view = render(<Harness />)
+    const source = EventSourceStub.latest
+    if (!source) throw new Error('EventSource was not created')
+
+    act(() => source.emit('open', ''))
+    act(() => source.emit('open', ''))
+    expect(opened).toHaveBeenCalledTimes(2)
+
+    view.unmount()
+    window.removeEventListener('tailcat:runtime-stream-open', opened)
+    vi.unstubAllGlobals()
+  })
+
   it('validates and targets transfer events without causing a global refresh', () => {
     vi.stubGlobal('EventSource', EventSourceStub)
     const runtime = vi.fn()

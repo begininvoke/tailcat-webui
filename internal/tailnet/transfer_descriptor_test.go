@@ -18,7 +18,7 @@ func TestTransferSchemaFieldsHaveExactReviewedAllowlists(t *testing.T) {
 	}{
 		"share": {
 			fields: entschema.TransferShare{}.Fields(),
-			want:   []string{"capability_hash", "created_at", "error_code", "expires_at", "file_count", "finished_at", "id", "ready_at", "server_id", "status", "total_bytes", "updated_at", "user_id"},
+			want:   []string{"capability_generation", "capability_hash", "created_at", "error_code", "expires_at", "file_count", "finished_at", "id", "ready_at", "server_id", "status", "total_bytes", "updated_at", "user_id"},
 		},
 		"share file": {
 			fields: entschema.ShareFile{}.Fields(),
@@ -26,7 +26,7 @@ func TestTransferSchemaFieldsHaveExactReviewedAllowlists(t *testing.T) {
 		},
 		"job": {
 			fields: entschema.TransferJob{}.Fields(),
-			want:   []string{"client_id", "created_at", "error_code", "expires_at", "finished_at", "id", "received_bytes", "remote_capability_cipher", "remote_share_id", "started_at", "status", "total_bytes", "updated_at", "user_id"},
+			want:   []string{"attempt", "attempt_kind", "client_id", "created_at", "error_code", "expires_at", "finished_at", "id", "received_bytes", "remote_capability_cipher", "remote_share_id", "started_at", "status", "total_bytes", "updated_at", "user_id"},
 		},
 		"item": {
 			fields: entschema.TransferItem{}.Fields(),

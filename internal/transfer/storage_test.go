@@ -642,6 +642,34 @@ func TestQuotaEnforcesShareBytesAndFileCount(t *testing.T) {
 	}
 }
 
+func TestOwnerWideFileCapIncludesConcurrentZeroByteReservations(t *testing.T) {
+	limits := DefaultStorageLimits()
+	limits.MaxOwnerFiles = 2
+	storage, err := NewStorageWithLimits(filepath.Join(t.TempDir(), "owner-files"), limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = storage.Close() })
+	first, err := storage.Reserve(t.Context(), testOwnerID, "01900000-0000-7000-8000-000000000101", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := storage.Reserve(t.Context(), testOwnerID, "01900000-0000-7000-8000-000000000102", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := storage.Reserve(t.Context(), testOwnerID, "01900000-0000-7000-8000-000000000103", 0); !errors.Is(err, ErrQuotaExceeded) {
+		t.Fatalf("third owner file reservation error = %v, want quota exceeded", err)
+	}
+	first.Release()
+	third, err := storage.Reserve(t.Context(), testOwnerID, "01900000-0000-7000-8000-000000000103", 0)
+	if err != nil {
+		t.Fatalf("reservation after release: %v", err)
+	}
+	second.Release()
+	third.Release()
+}
+
 func TestScopedStoreAtomicallyKeepsTheMinimumLiveScopeLimitWithoutReadingRejectedSource(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "scoped-store")
 	storage, err := NewStorageWithLimits(root, StorageLimits{MaxFileBytes: 8, MaxScopeBytes: 8, MaxOwnerBytes: 16, MaxFilesPerScope: 8})
@@ -732,7 +760,7 @@ func TestReservationCommitIsIdempotentAndStaysCharged(t *testing.T) {
 		t.Fatalf("second commit: %v", err)
 	}
 	reservation.Release()
-	if got := requireUsage(t, storage); got != (QuotaUsage{OwnerBytes: 1, ShareBytes: 1, ShareFiles: 1}) {
+	if got := requireUsage(t, storage); got != (QuotaUsage{OwnerBytes: 1, OwnerFiles: 1, ShareBytes: 1, ShareFiles: 1}) {
 		t.Fatalf("usage after repeated commit/release = %+v", got)
 	}
 	if err := storage.Remove(t.Context(), testOwnerID, testShareID, stored.StorageName); err != nil {
@@ -800,7 +828,7 @@ func TestStorePublishesAtomicallyAndRemoveReleasesCommittedQuota(t *testing.T) {
 	if got := info.Mode().Perm(); got != 0o600 {
 		t.Errorf("stored mode = %o, want 600", got)
 	}
-	if got := requireUsage(t, storage); got != (QuotaUsage{OwnerBytes: 3, ShareBytes: 3, ShareFiles: 1}) {
+	if got := requireUsage(t, storage); got != (QuotaUsage{OwnerBytes: 3, OwnerFiles: 1, ShareBytes: 3, ShareFiles: 1}) {
 		t.Fatalf("committed usage = %+v", got)
 	}
 
@@ -1115,7 +1143,7 @@ func TestIndependentStorageHandlesPublishNoReplace(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Usage: %v", err)
 		}
-		if usage != (QuotaUsage{OwnerBytes: 3, ShareBytes: 3, ShareFiles: 1}) {
+		if usage != (QuotaUsage{OwnerBytes: 3, OwnerFiles: 1, ShareBytes: 3, ShareFiles: 1}) {
 			t.Fatalf("shared usage from handle %d = %+v", index, usage)
 		}
 	}
@@ -1153,7 +1181,7 @@ func TestIndependentStorageHandlesShareQuotaAdmission(t *testing.T) {
 	if _, err := first.Reserve(t.Context(), testOwnerID, testShareID, 1); !errors.Is(err, ErrQuotaExceeded) {
 		t.Fatalf("cross-handle over-share error = %v, want ErrQuotaExceeded", err)
 	}
-	if got := requireUsage(t, second); got != (QuotaUsage{OwnerBytes: MaxShareBytes, ShareBytes: MaxShareBytes, ShareFiles: 2}) {
+	if got := requireUsage(t, second); got != (QuotaUsage{OwnerBytes: MaxShareBytes, OwnerFiles: 2, ShareBytes: MaxShareBytes, ShareFiles: 2}) {
 		t.Fatalf("shared usage = %+v", got)
 	}
 }
@@ -1258,13 +1286,13 @@ func TestIndependentStorageHandlesShareCommitRemovalAndCloseLifecycle(t *testing
 	if err != nil {
 		t.Fatalf("Store: %v", err)
 	}
-	if got := requireUsage(t, second); got != (QuotaUsage{OwnerBytes: 3, ShareBytes: 3, ShareFiles: 1}) {
+	if got := requireUsage(t, second); got != (QuotaUsage{OwnerBytes: 3, OwnerFiles: 1, ShareBytes: 3, ShareFiles: 1}) {
 		t.Fatalf("second-handle committed usage = %+v", got)
 	}
 	if err := first.Close(); err != nil {
 		t.Fatalf("Close first: %v", err)
 	}
-	if got := requireUsage(t, second); got != (QuotaUsage{OwnerBytes: 3, ShareBytes: 3, ShareFiles: 1}) {
+	if got := requireUsage(t, second); got != (QuotaUsage{OwnerBytes: 3, OwnerFiles: 1, ShareBytes: 3, ShareFiles: 1}) {
 		t.Fatalf("usage after first close = %+v", got)
 	}
 	if err := second.Remove(t.Context(), testOwnerID, testShareID, stored.StorageName); err != nil {
@@ -1315,7 +1343,7 @@ func TestSharedQuotaConcurrentCloseAndRestart(t *testing.T) {
 		t.Fatalf("reopen Storage: %v", err)
 	}
 	defer reopened.Close()
-	if got := requireUsage(t, reopened); got != (QuotaUsage{OwnerBytes: 3, ShareBytes: 3, ShareFiles: 1}) {
+	if got := requireUsage(t, reopened); got != (QuotaUsage{OwnerBytes: 3, OwnerFiles: 1, ShareBytes: 3, ShareFiles: 1}) {
 		t.Fatalf("restarted usage after concurrent close = %+v", got)
 	}
 	if err := reopened.Remove(t.Context(), testOwnerID, testShareID, stored.StorageName); err != nil {
@@ -1417,7 +1445,7 @@ func TestPostPublishRollbackFailureRetainsQuotaAndReturnsCleanupName(t *testing.
 	if stored.StorageName != finalName {
 		t.Fatalf("cleanup storage name = %q, want %q", stored.StorageName, finalName)
 	}
-	if got := requireUsage(t, storage); got != (QuotaUsage{OwnerBytes: 3, ShareBytes: 3, ShareFiles: 1}) {
+	if got := requireUsage(t, storage); got != (QuotaUsage{OwnerBytes: 3, OwnerFiles: 1, ShareBytes: 3, ShareFiles: 1}) {
 		t.Fatalf("usage after incomplete rollback = %+v", got)
 	}
 	if content, readErr := os.ReadFile(filepath.Join(rootPath, testOwnerID, testShareID, finalName)); readErr != nil || string(content) != "abc" {
@@ -1432,7 +1460,7 @@ func TestPostPublishRollbackFailureRetainsQuotaAndReturnsCleanupName(t *testing.
 		t.Fatalf("reopen Storage: %v", err)
 	}
 	t.Cleanup(func() { _ = reopened.Close() })
-	if got := requireUsage(t, reopened); got != (QuotaUsage{OwnerBytes: 3, ShareBytes: 3, ShareFiles: 1}) {
+	if got := requireUsage(t, reopened); got != (QuotaUsage{OwnerBytes: 3, OwnerFiles: 1, ShareBytes: 3, ShareFiles: 1}) {
 		t.Fatalf("reconciled usage = %+v", got)
 	}
 	if err := reopened.Remove(t.Context(), testOwnerID, testShareID, finalName); err != nil {
@@ -1451,7 +1479,7 @@ func TestCleanupTempsRecoversVerifiedPublishedPairAfterPersistentUnlinkFailure(t
 	if _, err := storage.CleanupTemps(t.Context(), testOwnerID, testShareID); err == nil {
 		t.Fatal("CleanupTemps unexpectedly bypassed persistent unlink failure")
 	}
-	if got := requireUsage(t, storage); got != (QuotaUsage{OwnerBytes: 3, ShareBytes: 3, ShareFiles: 1}) {
+	if got := requireUsage(t, storage); got != (QuotaUsage{OwnerBytes: 3, OwnerFiles: 1, ShareBytes: 3, ShareFiles: 1}) {
 		t.Fatalf("usage during persistent unlink failure = %+v", got)
 	}
 	for _, name := range []string{tempName, finalName} {
@@ -1478,7 +1506,7 @@ func TestCleanupTempsRecoversVerifiedPublishedPairAfterPersistentUnlinkFailure(t
 	if err := handle.Close(); err != nil {
 		t.Fatalf("Close recovered final: %v", err)
 	}
-	if got := requireUsage(t, storage); got != (QuotaUsage{OwnerBytes: 3, ShareBytes: 3, ShareFiles: 1}) {
+	if got := requireUsage(t, storage); got != (QuotaUsage{OwnerBytes: 3, OwnerFiles: 1, ShareBytes: 3, ShareFiles: 1}) {
 		t.Fatalf("usage after pair recovery = %+v", got)
 	}
 }
@@ -1510,7 +1538,7 @@ func TestCleanupTempsAccountsAndSyncsSuccessfulRecoveryBeforeReturningCloseError
 		t.Fatalf("temp alias still exists: %v", err)
 	}
 	requireSingleStoredLink(t, storage, finalName)
-	if got := requireUsage(t, storage); got != (QuotaUsage{OwnerBytes: 3, ShareBytes: 3, ShareFiles: 1}) {
+	if got := requireUsage(t, storage); got != (QuotaUsage{OwnerBytes: 3, OwnerFiles: 1, ShareBytes: 3, ShareFiles: 1}) {
 		t.Fatalf("usage after close-failed recovery = %+v", got)
 	}
 
@@ -1557,7 +1585,7 @@ func TestCleanupTempsSyncsAliasRemovalWhenRecoveredFinalValidationFails(t *testi
 		t.Fatalf("temporary alias still exists: %v", err)
 	}
 	requireSingleStoredLink(t, storage, finalName)
-	if got := requireUsage(t, storage); got != (QuotaUsage{OwnerBytes: 3, ShareBytes: 3, ShareFiles: 1}) {
+	if got := requireUsage(t, storage); got != (QuotaUsage{OwnerBytes: 3, OwnerFiles: 1, ShareBytes: 3, ShareFiles: 1}) {
 		t.Fatalf("quota after failed validation = %+v", got)
 	}
 
@@ -1631,7 +1659,7 @@ func TestRestartRecoversVerifiedTempFinalPairAndChargesOnce(t *testing.T) {
 	if _, err := os.Lstat(filepath.Join(rootPath, testOwnerID, testShareID, tempName)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("restart left temp alias: %v", err)
 	}
-	if got := requireUsage(t, reopened); got != (QuotaUsage{OwnerBytes: 3, ShareBytes: 3, ShareFiles: 1}) {
+	if got := requireUsage(t, reopened); got != (QuotaUsage{OwnerBytes: 3, OwnerFiles: 1, ShareBytes: 3, ShareFiles: 1}) {
 		t.Fatalf("restart pair usage = %+v", got)
 	}
 	if err := reopened.Remove(t.Context(), testOwnerID, testShareID, finalName); err != nil {
@@ -1675,7 +1703,7 @@ func TestRestartSyncsSuccessfulRecoveryBeforeReturningCloseError(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = reopened.Close() })
 	requireSingleStoredLink(t, reopened, finalName)
-	if got := requireUsage(t, reopened); got != (QuotaUsage{OwnerBytes: 3, ShareBytes: 3, ShareFiles: 1}) {
+	if got := requireUsage(t, reopened); got != (QuotaUsage{OwnerBytes: 3, OwnerFiles: 1, ShareBytes: 3, ShareFiles: 1}) {
 		t.Fatalf("second-restart usage = %+v", got)
 	}
 }
@@ -1720,7 +1748,7 @@ func TestRestartSyncsAliasRemovalWhenRecoveredFinalValidationFails(t *testing.T)
 	}
 	t.Cleanup(func() { _ = reopened.Close() })
 	requireSingleStoredLink(t, reopened, finalName)
-	if got := requireUsage(t, reopened); got != (QuotaUsage{OwnerBytes: 3, ShareBytes: 3, ShareFiles: 1}) {
+	if got := requireUsage(t, reopened); got != (QuotaUsage{OwnerBytes: 3, OwnerFiles: 1, ShareBytes: 3, ShareFiles: 1}) {
 		t.Fatalf("reconciled quota = %+v", got)
 	}
 }
@@ -1765,7 +1793,7 @@ func TestRemoveSyncsRecoveredAliasBeforeReturningCloseErrorAndRetries(t *testing
 		t.Fatalf("temp alias still exists: %v", err)
 	}
 	requireSingleStoredLink(t, storage, finalName)
-	if got := requireUsage(t, storage); got != (QuotaUsage{OwnerBytes: 3, ShareBytes: 3, ShareFiles: 1}) {
+	if got := requireUsage(t, storage); got != (QuotaUsage{OwnerBytes: 3, OwnerFiles: 1, ShareBytes: 3, ShareFiles: 1}) {
 		t.Fatalf("usage after close-failed Remove = %+v", got)
 	}
 
@@ -1817,7 +1845,7 @@ func TestRemoveSyncsAliasRemovalWhenRecoveredFinalValidationFails(t *testing.T) 
 		t.Fatalf("temporary alias still exists: %v", err)
 	}
 	requireSingleStoredLink(t, storage, finalName)
-	if got := requireUsage(t, storage); got != (QuotaUsage{OwnerBytes: 3, ShareBytes: 3, ShareFiles: 1}) {
+	if got := requireUsage(t, storage); got != (QuotaUsage{OwnerBytes: 3, OwnerFiles: 1, ShareBytes: 3, ShareFiles: 1}) {
 		t.Fatalf("quota after failed validation = %+v", got)
 	}
 
@@ -1956,7 +1984,7 @@ func TestPairRecoveryRejectsFinalReplacementBetweenVerifyAndUnlink(t *testing.T)
 	if err != nil || string(content) != "replacement" {
 		t.Fatalf("replacement content=%q error=%v", content, err)
 	}
-	if got := requireUsage(t, storage); got != (QuotaUsage{OwnerBytes: 3, ShareBytes: 3, ShareFiles: 1}) {
+	if got := requireUsage(t, storage); got != (QuotaUsage{OwnerBytes: 3, OwnerFiles: 1, ShareBytes: 3, ShareFiles: 1}) {
 		t.Fatalf("quota after rejected replacement = %+v", got)
 	}
 }
@@ -2038,7 +2066,7 @@ func TestCloseRacingAfterLifecycleCheckWaitsForLinkWinner(t *testing.T) {
 		t.Fatalf("reopen Storage: %v", err)
 	}
 	defer reopened.Close()
-	if got := requireUsage(t, reopened); got != (QuotaUsage{OwnerBytes: 3, ShareBytes: 3, ShareFiles: 1}) {
+	if got := requireUsage(t, reopened); got != (QuotaUsage{OwnerBytes: 3, OwnerFiles: 1, ShareBytes: 3, ShareFiles: 1}) {
 		t.Fatalf("post-Close committed usage = %+v", got)
 	}
 	handle, err := reopened.Open(t.Context(), testOwnerID, testShareID, stored.file.StorageName)
@@ -2098,7 +2126,7 @@ func TestRemoveErrorRetainsCommittedQuota(t *testing.T) {
 	if err := storage.Remove(t.Context(), testOwnerID, testShareID, stored.StorageName); err == nil {
 		t.Fatal("Remove unexpectedly succeeded")
 	}
-	if got := requireUsage(t, storage); got != (QuotaUsage{OwnerBytes: 3, ShareBytes: 3, ShareFiles: 1}) {
+	if got := requireUsage(t, storage); got != (QuotaUsage{OwnerBytes: 3, OwnerFiles: 1, ShareBytes: 3, ShareFiles: 1}) {
 		t.Fatalf("usage after remove error = %+v", got)
 	}
 	storage.hooks.remove = (*os.Root).Remove
@@ -2242,7 +2270,7 @@ func TestNewStorageRebuildsCommittedQuotaUntilExplicitRemoval(t *testing.T) {
 		t.Fatalf("reopen Storage: %v", err)
 	}
 	t.Cleanup(func() { _ = reopened.Close() })
-	if got := requireUsage(t, reopened); got != (QuotaUsage{OwnerBytes: 3, ShareBytes: 3, ShareFiles: 1}) {
+	if got := requireUsage(t, reopened); got != (QuotaUsage{OwnerBytes: 3, OwnerFiles: 1, ShareBytes: 3, ShareFiles: 1}) {
 		t.Fatalf("rebuilt usage = %+v", got)
 	}
 	if err := reopened.Remove(t.Context(), testOwnerID, testShareID, stored.StorageName); err != nil {
@@ -2366,7 +2394,7 @@ func makeFailedTempFinalPair(t *testing.T) (*Storage, string, string, string) {
 	if stored.StorageName != finalName {
 		t.Fatalf("retained storage name = %q, want %q", stored.StorageName, finalName)
 	}
-	if got := requireUsage(t, storage); got != (QuotaUsage{OwnerBytes: 3, ShareBytes: 3, ShareFiles: 1}) {
+	if got := requireUsage(t, storage); got != (QuotaUsage{OwnerBytes: 3, OwnerFiles: 1, ShareBytes: 3, ShareFiles: 1}) {
 		t.Fatalf("retained pair usage = %+v", got)
 	}
 	return storage, rootPath, tempName, finalName

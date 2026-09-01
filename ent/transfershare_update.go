@@ -49,6 +49,27 @@ func (_u *TransferShareUpdate) SetCapabilityHash(v []byte) *TransferShareUpdate 
 	return _u
 }
 
+// SetCapabilityGeneration sets the "capability_generation" field.
+func (_u *TransferShareUpdate) SetCapabilityGeneration(v int) *TransferShareUpdate {
+	_u.mutation.ResetCapabilityGeneration()
+	_u.mutation.SetCapabilityGeneration(v)
+	return _u
+}
+
+// SetNillableCapabilityGeneration sets the "capability_generation" field if the given value is not nil.
+func (_u *TransferShareUpdate) SetNillableCapabilityGeneration(v *int) *TransferShareUpdate {
+	if v != nil {
+		_u.SetCapabilityGeneration(*v)
+	}
+	return _u
+}
+
+// AddCapabilityGeneration adds value to the "capability_generation" field.
+func (_u *TransferShareUpdate) AddCapabilityGeneration(v int) *TransferShareUpdate {
+	_u.mutation.AddCapabilityGeneration(v)
+	return _u
+}
+
 // SetTotalBytes sets the "total_bytes" field.
 func (_u *TransferShareUpdate) SetTotalBytes(v int64) *TransferShareUpdate {
 	_u.mutation.ResetTotalBytes()
@@ -246,6 +267,11 @@ func (_u *TransferShareUpdate) check() error {
 			return &ValidationError{Name: "capability_hash", err: fmt.Errorf(`ent: validator failed for field "TransferShare.capability_hash": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.CapabilityGeneration(); ok {
+		if err := transfershare.CapabilityGenerationValidator(v); err != nil {
+			return &ValidationError{Name: "capability_generation", err: fmt.Errorf(`ent: validator failed for field "TransferShare.capability_generation": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.TotalBytes(); ok {
 		if err := transfershare.TotalBytesValidator(v); err != nil {
 			return &ValidationError{Name: "total_bytes", err: fmt.Errorf(`ent: validator failed for field "TransferShare.total_bytes": %w`, err)}
@@ -287,6 +313,12 @@ func (_u *TransferShareUpdate) sqlSave(ctx context.Context) (_node int, err erro
 	}
 	if value, ok := _u.mutation.CapabilityHash(); ok {
 		_spec.SetField(transfershare.FieldCapabilityHash, field.TypeBytes, value)
+	}
+	if value, ok := _u.mutation.CapabilityGeneration(); ok {
+		_spec.SetField(transfershare.FieldCapabilityGeneration, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedCapabilityGeneration(); ok {
+		_spec.AddField(transfershare.FieldCapabilityGeneration, field.TypeInt, value)
 	}
 	if value, ok := _u.mutation.TotalBytes(); ok {
 		_spec.SetField(transfershare.FieldTotalBytes, field.TypeInt64, value)
@@ -403,6 +435,27 @@ func (_u *TransferShareUpdateOne) SetNillableStatus(v *transfershare.Status) *Tr
 // SetCapabilityHash sets the "capability_hash" field.
 func (_u *TransferShareUpdateOne) SetCapabilityHash(v []byte) *TransferShareUpdateOne {
 	_u.mutation.SetCapabilityHash(v)
+	return _u
+}
+
+// SetCapabilityGeneration sets the "capability_generation" field.
+func (_u *TransferShareUpdateOne) SetCapabilityGeneration(v int) *TransferShareUpdateOne {
+	_u.mutation.ResetCapabilityGeneration()
+	_u.mutation.SetCapabilityGeneration(v)
+	return _u
+}
+
+// SetNillableCapabilityGeneration sets the "capability_generation" field if the given value is not nil.
+func (_u *TransferShareUpdateOne) SetNillableCapabilityGeneration(v *int) *TransferShareUpdateOne {
+	if v != nil {
+		_u.SetCapabilityGeneration(*v)
+	}
+	return _u
+}
+
+// AddCapabilityGeneration adds value to the "capability_generation" field.
+func (_u *TransferShareUpdateOne) AddCapabilityGeneration(v int) *TransferShareUpdateOne {
+	_u.mutation.AddCapabilityGeneration(v)
 	return _u
 }
 
@@ -616,6 +669,11 @@ func (_u *TransferShareUpdateOne) check() error {
 			return &ValidationError{Name: "capability_hash", err: fmt.Errorf(`ent: validator failed for field "TransferShare.capability_hash": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.CapabilityGeneration(); ok {
+		if err := transfershare.CapabilityGenerationValidator(v); err != nil {
+			return &ValidationError{Name: "capability_generation", err: fmt.Errorf(`ent: validator failed for field "TransferShare.capability_generation": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.TotalBytes(); ok {
 		if err := transfershare.TotalBytesValidator(v); err != nil {
 			return &ValidationError{Name: "total_bytes", err: fmt.Errorf(`ent: validator failed for field "TransferShare.total_bytes": %w`, err)}
@@ -674,6 +732,12 @@ func (_u *TransferShareUpdateOne) sqlSave(ctx context.Context) (_node *TransferS
 	}
 	if value, ok := _u.mutation.CapabilityHash(); ok {
 		_spec.SetField(transfershare.FieldCapabilityHash, field.TypeBytes, value)
+	}
+	if value, ok := _u.mutation.CapabilityGeneration(); ok {
+		_spec.SetField(transfershare.FieldCapabilityGeneration, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedCapabilityGeneration(); ok {
+		_spec.AddField(transfershare.FieldCapabilityGeneration, field.TypeInt, value)
 	}
 	if value, ok := _u.mutation.TotalBytes(); ok {
 		_spec.SetField(transfershare.FieldTotalBytes, field.TypeInt64, value)

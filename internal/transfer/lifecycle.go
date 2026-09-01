@@ -8,11 +8,55 @@ import (
 
 	"github.com/ca-x/tailcat-webui/ent"
 	"github.com/ca-x/tailcat-webui/ent/sharefile"
+	"github.com/ca-x/tailcat-webui/ent/tailclient"
+	"github.com/ca-x/tailcat-webui/ent/tailserver"
 	"github.com/ca-x/tailcat-webui/ent/transferitem"
 	"github.com/ca-x/tailcat-webui/ent/transferjob"
 	"github.com/ca-x/tailcat-webui/ent/transfershare"
 	"github.com/ca-x/tailcat-webui/internal/events"
 )
+
+func (s *Service) DeleteServerResources(ctx context.Context, ownerID, serverID string) error {
+	if err := s.ensureOpen(); err != nil {
+		return err
+	}
+	if exists, err := s.db.TailServer.Query().Where(tailserver.IDEQ(serverID), tailserver.UserIDEQ(ownerID)).Exist(ctx); err != nil {
+		return fmt.Errorf("validate transfer server cleanup ownership: %w", err)
+	} else if !exists {
+		return ErrNotFound
+	}
+	shareIDs, err := s.db.TransferShare.Query().Where(transfershare.UserIDEQ(ownerID), transfershare.ServerIDEQ(serverID)).IDs(ctx)
+	if err != nil {
+		return fmt.Errorf("list server transfer shares: %w", err)
+	}
+	for _, shareID := range shareIDs {
+		if err := s.deleteShare(ctx, ownerID, shareID, deletionRequested); err != nil && !errors.Is(err, ErrNotFound) {
+			return fmt.Errorf("delete server transfer share %s: %w", shareID, err)
+		}
+	}
+	return nil
+}
+
+func (s *Service) DeleteClientResources(ctx context.Context, ownerID, clientID string) error {
+	if err := s.ensureOpen(); err != nil {
+		return err
+	}
+	if exists, err := s.db.TailClient.Query().Where(tailclient.IDEQ(clientID), tailclient.UserIDEQ(ownerID)).Exist(ctx); err != nil {
+		return fmt.Errorf("validate transfer client cleanup ownership: %w", err)
+	} else if !exists {
+		return ErrNotFound
+	}
+	jobIDs, err := s.db.TransferJob.Query().Where(transferjob.UserIDEQ(ownerID), transferjob.ClientIDEQ(clientID)).IDs(ctx)
+	if err != nil {
+		return fmt.Errorf("list client transfer jobs: %w", err)
+	}
+	for _, jobID := range jobIDs {
+		if err := s.deleteJob(ctx, ownerID, jobID, deletionRequested); err != nil && !errors.Is(err, ErrNotFound) {
+			return fmt.Errorf("delete client transfer job %s: %w", jobID, err)
+		}
+	}
+	return nil
+}
 
 func legalTransferTransition(from, to string) bool {
 	switch from {
@@ -42,6 +86,16 @@ func (s *Service) reconcileAudits(ctx context.Context) error {
 		if err := s.recordLifecycle(ctx, share.UserID, "transfer.create", "share", share.ID, "success"); err != nil {
 			return err
 		}
+		if share.ReadyAt != nil {
+			if err := s.recordLifecycle(ctx, share.UserID, "transfer.finalize", "share", share.ID, "success"); err != nil {
+				return err
+			}
+		}
+		for generation := 2; generation <= share.CapabilityGeneration; generation++ {
+			if err := s.recordLifecycleOccurrence(ctx, share.UserID, "transfer.rotate", "share", share.ID, "success", generation-1); err != nil {
+				return err
+			}
+		}
 	}
 	jobs, err := s.db.TransferJob.Query().All(ctx)
 	if err != nil {
@@ -52,18 +106,33 @@ func (s *Service) reconcileAudits(ctx context.Context) error {
 			return err
 		}
 		if job.StartedAt != nil {
-			if err := s.recordLifecycle(ctx, job.UserID, "transfer.start", "job", job.ID, "success"); err != nil {
+			action := attemptAuditAction(job.AttemptKind)
+			if job.Attempt == 0 {
+				action = "transfer.start"
+			}
+			if err := s.recordLifecycleOccurrence(ctx, job.UserID, action, "job", job.ID, "success", job.Attempt); err != nil {
 				return err
 			}
 		}
 		action, outcome := terminalAuditForJob(job.Status)
 		if action != "" {
-			if err := s.recordLifecycle(ctx, job.UserID, action, "job", job.ID, outcome); err != nil {
+			if err := s.recordLifecycleOccurrence(ctx, job.UserID, action, "job", job.ID, outcome, job.Attempt); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
+}
+
+func attemptAuditAction(kind transferjob.AttemptKind) string {
+	switch kind {
+	case transferjob.AttemptKindRetry:
+		return "transfer.retry"
+	case transferjob.AttemptKindResume:
+		return "transfer.resume"
+	default:
+		return "transfer.start"
+	}
 }
 
 func terminalAuditForJob(status transferjob.Status) (string, string) {
@@ -234,10 +303,14 @@ func (s *Service) deleteJob(ctx context.Context, ownerID, jobID string, cause de
 		}
 	}
 	action := cause.action()
+	if row.Status != transferjob.StatusDeleting && !legalTransferTransition(string(row.Status), string(transferjob.StatusDeleting)) {
+		return ErrInvalidState
+	}
+	readGeneration, err := s.closeJobReads(ctx, jobID)
+	if err != nil {
+		return err
+	}
 	if row.Status != transferjob.StatusDeleting {
-		if !legalTransferTransition(string(row.Status), string(transferjob.StatusDeleting)) {
-			return ErrInvalidState
-		}
 		update := row.Update().
 			Where(transferjob.UserIDEQ(ownerID), transferjob.StatusEQ(row.Status)).
 			SetStatus(transferjob.StatusDeleting)
@@ -249,9 +322,11 @@ func (s *Service) deleteJob(ctx context.Context, ownerID, jobID string, cause de
 		}
 		row, err = update.Save(ctx)
 		if ent.IsNotFound(err) {
+			s.reopenJobReads(jobID, readGeneration)
 			return ErrInvalidState
 		}
 		if err != nil {
+			s.reopenJobReads(jobID, readGeneration)
 			return fmt.Errorf("mark transfer job deleting: %w", err)
 		}
 	}
@@ -307,6 +382,7 @@ func (s *Service) deleteJob(ctx context.Context, ownerID, jobID string, cause de
 		return fmt.Errorf("commit transfer job deletion: %w", err)
 	}
 	committed = true
+	s.removeJobReadGate(jobID)
 	s.publishTransfer(ownerID, jobID, events.RuntimePhaseStopped, TransferEventPayload{JobID: jobID, Status: "deleted"})
 	return nil
 }
@@ -397,7 +473,7 @@ func (s *Service) RecoverAfterRestore(ctx context.Context) error {
 			continue
 		}
 		if job.Status == transferjob.StatusInterrupted {
-			if _, err := s.startJob(ctx, job.UserID, job.ID, true); err != nil {
+			if _, err := s.startJob(ctx, job.UserID, job.ID, true, transferjob.AttemptKindResume); err != nil {
 				if errors.Is(err, ErrOwnerCapacity) || retryableResumeError(err) {
 					s.enqueueResume(job.UserID, job.ID)
 				}

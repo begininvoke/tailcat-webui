@@ -39,10 +39,15 @@ func (f diagnosticAPIDialer) DialPort(ctx context.Context, ownerID, clientID str
 	return f(ctx, ownerID, clientID, port)
 }
 
+func (diagnosticAPIDialer) CurrentPath(context.Context, string, string) (string, error) {
+	return "", errors.New("current path unavailable")
+}
+
 type diagnosticAPIPublisher func(string, string, events.RuntimePhase, diagnostics.EventPayload)
 
-func (f diagnosticAPIPublisher) PublishDiagnostic(ownerID, runID string, phase events.RuntimePhase, payload diagnostics.EventPayload) {
-	f(ownerID, runID, phase, payload)
+func (f diagnosticAPIPublisher) PublishEvent(ownerID string, event events.Envelope) {
+	payload, _ := event.Payload.(diagnostics.EventPayload)
+	f(ownerID, event.ResourceID, event.Phase, payload)
 }
 
 func (r *exitPolicyTestRuntime) Start() error {

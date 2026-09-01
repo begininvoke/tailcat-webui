@@ -110,13 +110,19 @@ data directory, finalizes an immutable share, and receives a capability code
 that is shown once. Rotating the code revokes the previous value. The receiver
 saves an encrypted code only when a job needs restart or resume. TCP `41641`
 serves fixed manifest and range operations, not filesystem browsing.
+The drawer and background progress card can cancel an active browser upload.
+Closing the drawer or leaving the page also aborts the current request, while
+files already staged remain available for retry.
 
 Compiled transfer ceilings are 512 MiB per file, 1 GiB per outgoing share or
-incoming job, 2 GiB of staged bytes per owner, and 1,000 files per share. A job
-uses exactly four range workers, with at most two active jobs per owner. Shares
-and jobs default to a 24-hour lifetime; operators may tighten it from 1 second
-up to the 24-hour ceiling. BLAKE3 manifests use 8 MiB blocks, and every completed
-file receives a final whole-file hash check.
+incoming job, 2 GiB of staged bytes per owner, 1,000 files per share, and 4,096
+retained files per owner. Fixed owner-wide metadata caps allow 128 retained
+outgoing shares and 128 retained incoming jobs; pending creations count toward
+admission. A job uses exactly four range workers, with at most two active jobs
+per owner. Shares and jobs default to a 24-hour lifetime; operators may tighten
+it from 1 second up to the 24-hour ceiling. A service-owned scheduler enforces
+expiry continuously and retries failed cleanup. BLAKE3 manifests use 8 MiB
+blocks, and every completed file receives a final whole-file hash check.
 
 Transfer storage uses owner/share/job rooted directories and random disk names.
 Virtual paths are normalized relative paths, never host filesystem paths.
@@ -124,6 +130,9 @@ The storage layer rejects absolute paths, dot segments, controls, symlinks,
 Windows reparse escapes, unsafe hard links, and root replacement. Staged files
 are private, fsynced, atomically published, and removed through owner-scoped
 deletion. SQLite and Tailcat WebUI remain pure Go with `CGO_ENABLED=0`.
+Deleting a Tailcat server or client first cancels and removes its dependent
+shares or jobs and staged bytes. If cleanup fails, the parent row remains so
+the deletion can be retried.
 
 ## Quick start
 
@@ -204,7 +213,7 @@ this isolates public scripts and private route cookies from other tenants.
 | `TAILCAT_WEBUI_OIDC_CLIENT_SECRET` | empty | OIDC client secret |
 | `TAILCAT_WEBUI_OIDC_SCOPES` | `openid,profile,email` | Requested scopes |
 | `TAILCAT_WEBUI_ALLOWED_MAPPING_TARGETS` | loopback CIDRs | Host targets allowed for explicit port mappings |
-| `TAILCAT_WEBUI_ALLOWED_EXIT_TARGETS` | empty | Destination CIDRs an exit-node may reach |
+| `TAILCAT_WEBUI_ALLOWED_EXIT_TARGETS` | empty | Destination CIDRs an exit-node may reach; domain rules are rejected |
 | `TAILCAT_WEBUI_TRUSTED_PROXIES` | empty | Proxy CIDRs trusted for `X-Forwarded-For` rate-limit identity |
 | `TAILCAT_WEBUI_ALLOWED_DERP_HOSTS` | empty | Extra HTTPS DERP map/relay hosts users may select |
 | `TAILCAT_WEBUI_TRANSFER_MAX_FILE_BYTES` | `512MiB` | Per-file staging limit; may only tighten the compiled ceiling |
@@ -220,13 +229,15 @@ this isolates public scripts and private route cookies from other tenants.
 | `TAILCAT_WEBUI_DEMO_MODE` | `false` | Loopback-only development login |
 | `TAILCAT_WEBUI_DEMO_UNSAFE_SSH` | `false` | Enable Tailcat's in-process shell only in loopback demo mode |
 
-Target-rule values are comma-separated. Each rule is `CIDR`, `CIDR@port`,
+Mapping-target values are comma-separated. Each rule is `CIDR`, `CIDR@port`,
 `CIDR@start-end`, `domain@port`, or `domain@start-end`. A bare CIDR allows every
-port for compatibility; domains always require an exact or ranged port clause.
-The `@` separator keeps IPv6 CIDRs unambiguous. Mapping rules define the
-deployment maximum. Owner-scoped exit rules can only narrow
-`TAILCAT_WEBUI_ALLOWED_EXIT_TARGETS`, and an empty exit rule set denies all exit
-traffic.
+port for compatibility; domains require an exact or ranged port clause. Exit
+targets accept only the three CIDR forms because Tailcat exit forwarding
+supplies numeric destinations. A domain in
+`TAILCAT_WEBUI_ALLOWED_EXIT_TARGETS` is rejected at startup. The `@` separator
+keeps IPv6 CIDRs unambiguous. Mapping and exit deployment rules set the maximum
+authority. Owner-scoped exit rules can only narrow that maximum, and an empty
+exit rule set denies all exit traffic.
 
 SQLite uses foreign keys, WAL, `synchronous=NORMAL`, a five-second busy
 timeout, mmap, and a bounded connection pool. Shared-cache mode is deliberately

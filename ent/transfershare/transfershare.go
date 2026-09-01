@@ -23,6 +23,8 @@ const (
 	FieldStatus = "status"
 	// FieldCapabilityHash holds the string denoting the capability_hash field in the database.
 	FieldCapabilityHash = "capability_hash"
+	// FieldCapabilityGeneration holds the string denoting the capability_generation field in the database.
+	FieldCapabilityGeneration = "capability_generation"
 	// FieldTotalBytes holds the string denoting the total_bytes field in the database.
 	FieldTotalBytes = "total_bytes"
 	// FieldFileCount holds the string denoting the file_count field in the database.
@@ -77,6 +79,7 @@ var Columns = []string{
 	FieldServerID,
 	FieldStatus,
 	FieldCapabilityHash,
+	FieldCapabilityGeneration,
 	FieldTotalBytes,
 	FieldFileCount,
 	FieldReadyAt,
@@ -100,6 +103,10 @@ func ValidColumn(column string) bool {
 var (
 	// CapabilityHashValidator is a validator for the "capability_hash" field. It is called by the builders before save.
 	CapabilityHashValidator func([]byte) error
+	// DefaultCapabilityGeneration holds the default value on creation for the "capability_generation" field.
+	DefaultCapabilityGeneration int
+	// CapabilityGenerationValidator is a validator for the "capability_generation" field. It is called by the builders before save.
+	CapabilityGenerationValidator func(int) error
 	// DefaultTotalBytes holds the default value on creation for the "total_bytes" field.
 	DefaultTotalBytes int64
 	// TotalBytesValidator is a validator for the "total_bytes" field. It is called by the builders before save.
@@ -202,6 +209,11 @@ func ByServerID(opts ...sql.OrderTermOption) OrderOption {
 // ByStatus orders the results by the status field.
 func ByStatus(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldStatus, opts...).ToFunc()
+}
+
+// ByCapabilityGeneration orders the results by the capability_generation field.
+func ByCapabilityGeneration(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldCapabilityGeneration, opts...).ToFunc()
 }
 
 // ByTotalBytes orders the results by the total_bytes field.

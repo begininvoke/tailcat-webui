@@ -481,24 +481,30 @@ func init() {
 	transferjobDescRemoteCapabilityCipher := transferjobFields[4].Descriptor()
 	// transferjob.RemoteCapabilityCipherValidator is a validator for the "remote_capability_cipher" field. It is called by the builders before save.
 	transferjob.RemoteCapabilityCipherValidator = transferjobDescRemoteCapabilityCipher.Validators[0].(func([]byte) error)
+	// transferjobDescAttempt is the schema descriptor for attempt field.
+	transferjobDescAttempt := transferjobFields[6].Descriptor()
+	// transferjob.DefaultAttempt holds the default value on creation for the attempt field.
+	transferjob.DefaultAttempt = transferjobDescAttempt.Default.(int)
+	// transferjob.AttemptValidator is a validator for the "attempt" field. It is called by the builders before save.
+	transferjob.AttemptValidator = transferjobDescAttempt.Validators[0].(func(int) error)
 	// transferjobDescTotalBytes is the schema descriptor for total_bytes field.
-	transferjobDescTotalBytes := transferjobFields[6].Descriptor()
+	transferjobDescTotalBytes := transferjobFields[8].Descriptor()
 	// transferjob.DefaultTotalBytes holds the default value on creation for the total_bytes field.
 	transferjob.DefaultTotalBytes = transferjobDescTotalBytes.Default.(int64)
 	// transferjob.TotalBytesValidator is a validator for the "total_bytes" field. It is called by the builders before save.
 	transferjob.TotalBytesValidator = transferjobDescTotalBytes.Validators[0].(func(int64) error)
 	// transferjobDescReceivedBytes is the schema descriptor for received_bytes field.
-	transferjobDescReceivedBytes := transferjobFields[7].Descriptor()
+	transferjobDescReceivedBytes := transferjobFields[9].Descriptor()
 	// transferjob.DefaultReceivedBytes holds the default value on creation for the received_bytes field.
 	transferjob.DefaultReceivedBytes = transferjobDescReceivedBytes.Default.(int64)
 	// transferjob.ReceivedBytesValidator is a validator for the "received_bytes" field. It is called by the builders before save.
 	transferjob.ReceivedBytesValidator = transferjobDescReceivedBytes.Validators[0].(func(int64) error)
 	// transferjobDescCreatedAt is the schema descriptor for created_at field.
-	transferjobDescCreatedAt := transferjobFields[12].Descriptor()
+	transferjobDescCreatedAt := transferjobFields[14].Descriptor()
 	// transferjob.DefaultCreatedAt holds the default value on creation for the created_at field.
 	transferjob.DefaultCreatedAt = transferjobDescCreatedAt.Default.(func() time.Time)
 	// transferjobDescUpdatedAt is the schema descriptor for updated_at field.
-	transferjobDescUpdatedAt := transferjobFields[13].Descriptor()
+	transferjobDescUpdatedAt := transferjobFields[15].Descriptor()
 	// transferjob.DefaultUpdatedAt holds the default value on creation for the updated_at field.
 	transferjob.DefaultUpdatedAt = transferjobDescUpdatedAt.Default.(func() time.Time)
 	// transferjob.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
@@ -527,24 +533,30 @@ func init() {
 			return nil
 		}
 	}()
+	// transfershareDescCapabilityGeneration is the schema descriptor for capability_generation field.
+	transfershareDescCapabilityGeneration := transfershareFields[5].Descriptor()
+	// transfershare.DefaultCapabilityGeneration holds the default value on creation for the capability_generation field.
+	transfershare.DefaultCapabilityGeneration = transfershareDescCapabilityGeneration.Default.(int)
+	// transfershare.CapabilityGenerationValidator is a validator for the "capability_generation" field. It is called by the builders before save.
+	transfershare.CapabilityGenerationValidator = transfershareDescCapabilityGeneration.Validators[0].(func(int) error)
 	// transfershareDescTotalBytes is the schema descriptor for total_bytes field.
-	transfershareDescTotalBytes := transfershareFields[5].Descriptor()
+	transfershareDescTotalBytes := transfershareFields[6].Descriptor()
 	// transfershare.DefaultTotalBytes holds the default value on creation for the total_bytes field.
 	transfershare.DefaultTotalBytes = transfershareDescTotalBytes.Default.(int64)
 	// transfershare.TotalBytesValidator is a validator for the "total_bytes" field. It is called by the builders before save.
 	transfershare.TotalBytesValidator = transfershareDescTotalBytes.Validators[0].(func(int64) error)
 	// transfershareDescFileCount is the schema descriptor for file_count field.
-	transfershareDescFileCount := transfershareFields[6].Descriptor()
+	transfershareDescFileCount := transfershareFields[7].Descriptor()
 	// transfershare.DefaultFileCount holds the default value on creation for the file_count field.
 	transfershare.DefaultFileCount = transfershareDescFileCount.Default.(int)
 	// transfershare.FileCountValidator is a validator for the "file_count" field. It is called by the builders before save.
 	transfershare.FileCountValidator = transfershareDescFileCount.Validators[0].(func(int) error)
 	// transfershareDescCreatedAt is the schema descriptor for created_at field.
-	transfershareDescCreatedAt := transfershareFields[11].Descriptor()
+	transfershareDescCreatedAt := transfershareFields[12].Descriptor()
 	// transfershare.DefaultCreatedAt holds the default value on creation for the created_at field.
 	transfershare.DefaultCreatedAt = transfershareDescCreatedAt.Default.(func() time.Time)
 	// transfershareDescUpdatedAt is the schema descriptor for updated_at field.
-	transfershareDescUpdatedAt := transfershareFields[12].Descriptor()
+	transfershareDescUpdatedAt := transfershareFields[13].Descriptor()
 	// transfershare.DefaultUpdatedAt holds the default value on creation for the updated_at field.
 	transfershare.DefaultUpdatedAt = transfershareDescUpdatedAt.Default.(func() time.Time)
 	// transfershare.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.

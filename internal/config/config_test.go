@@ -205,6 +205,15 @@ func TestLoadParsesPortAwareTargetRules(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsDomainRulesForNumericExitForwarding(t *testing.T) {
+	t.Setenv("TAILCAT_WEBUI_DEMO_MODE", "true")
+	t.Setenv("TAILCAT_WEBUI_ALLOWED_MAPPING_TARGETS", "example.com@443")
+	t.Setenv("TAILCAT_WEBUI_ALLOWED_EXIT_TARGETS", "example.com@443")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "CIDR") {
+		t.Fatalf("Load exit-domain error = %v, want clear CIDR-only rejection", err)
+	}
+}
+
 func TestLoadPreservesAllowedTargetsAlias(t *testing.T) {
 	t.Setenv("TAILCAT_WEBUI_DEMO_MODE", "true")
 	t.Setenv("TAILCAT_WEBUI_ALLOWED_MAPPING_TARGETS", "")

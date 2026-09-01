@@ -20,7 +20,6 @@ import (
 	"github.com/ca-x/tailcat-webui/ent/portmapping"
 	"github.com/ca-x/tailcat-webui/ent/tailclient"
 	"github.com/ca-x/tailcat-webui/ent/tailserver"
-	"github.com/ca-x/tailcat-webui/internal/diagnostics"
 	"github.com/ca-x/tailcat-webui/internal/events"
 	"github.com/ca-x/tailcat-webui/internal/secrets"
 
@@ -28,10 +27,6 @@ import (
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 )
-
-// ReservedTransferPort is held for Tailcat's bounded file-transfer service.
-// User mappings cannot claim it before that service is wired.
-const ReservedTransferPort uint16 = 41641
 
 var (
 	ErrNotFound           = errors.New("tailnet resource not found")
@@ -243,17 +238,6 @@ func NewManager(db *ent.Client, box *secrets.Box, mappingPolicy, exitPolicy *Tar
 		reservedHandlers: make(map[uint16]ReservedTCPHandlerFactory),
 		servers:          make(map[string]*runningServer), clients: make(map[string]*runningClient), serverOps: make(map[string]*operationLock), clientOps: make(map[string]*operationLock), starting: make(map[string]string),
 	}
-	diagnosticHandler := diagnostics.Handler{}
-	if err := manager.RegisterReservedTCPHandler(diagnostics.ReservedPort, func(serverID string) TCPHandler {
-		return func(runtimeCtx context.Context, connection net.Conn) {
-			defer connection.Close()
-			if err := diagnosticHandler.Serve(runtimeCtx, connection); err != nil {
-				manager.logger.DebugContext(runtimeCtx, "Tailcat diagnostic request ended", "server_id", serverID, "error", err)
-			}
-		}
-	}); err != nil {
-		return nil, err
-	}
 	return manager, nil
 }
 
@@ -321,7 +305,6 @@ func (m *Manager) ReleaseEvents(userID string) {
 	m.eventsMu.Lock()
 	defer m.eventsMu.Unlock()
 	delete(m.userEvents, userID)
-	delete(m.eventSequences, userID)
 }
 
 func (m *Manager) Restore(ctx context.Context) error {
@@ -833,13 +816,38 @@ func (m *Manager) DeleteExitRule(ctx context.Context, userID, id string) error {
 			return err
 		}
 	}
-	count, err := m.db.ExitRule.Delete().Where(exitrule.IDEQ(id), exitrule.UserIDEQ(userID)).Exec(ctx)
+	tx, err := m.db.Tx(ctx)
+	if err != nil {
+		return fmt.Errorf("begin exit rule deletion: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	count, err := tx.ExitRule.Delete().Where(exitrule.IDEQ(id), exitrule.UserIDEQ(userID)).Exec(ctx)
 	if err != nil {
 		return fmt.Errorf("delete exit rule: %w", err)
 	}
 	if count == 0 {
 		return ErrNotFound
 	}
+	if row.Enabled {
+		enabled, err := tx.ExitRule.Query().Where(exitrule.ServerIDEQ(row.ServerID), exitrule.UserIDEQ(userID), exitrule.Enabled(true)).Exist(ctx)
+		if err != nil {
+			return fmt.Errorf("count remaining enabled exit rules: %w", err)
+		}
+		if !enabled {
+			if err := tx.TailServer.UpdateOneID(row.ServerID).Where(tailserver.UserIDEQ(userID)).SetExitNodeEnabled(false).Exec(ctx); err != nil {
+				return fmt.Errorf("disable exit node after final rule deletion: %w", err)
+			}
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit exit rule deletion: %w", err)
+	}
+	committed = true
 	return nil
 }
 
@@ -1062,12 +1070,7 @@ func (m *Manager) PingClient(ctx context.Context, userID, id string) (ClientView
 		m.publish(userID, "client", id, RuntimePhaseError, "ping failed")
 		return ClientView{}, fmt.Errorf("ping Tailcat server: %w", err)
 	}
-	path := "derp"
-	if result.Endpoint != "" {
-		path = "direct"
-	} else if result.PeerRelay != "" {
-		path = "peer-relay"
-	}
+	path := pingResultPath(result)
 	latencyMS := int64(result.LatencySeconds * 1000)
 	now := time.Now()
 	row, err = row.Update().SetLastPingMs(latencyMS).SetLastPath(path).SetLastPingAt(now).Save(ctx)
@@ -1080,6 +1083,28 @@ func (m *Manager) PingClient(ctx context.Context, userID, id string) (ClientView
 	view.PublicKey = client.PublicKey()
 	m.publish(userID, "client", id, RuntimePhaseReady, path)
 	return view, nil
+}
+
+func (m *Manager) CurrentPath(ctx context.Context, userID, id string) (string, error) {
+	client, _, err := m.client(ctx, userID, id)
+	if err != nil {
+		return "", err
+	}
+	result, err := client.DiscoPing(ctx)
+	if err != nil {
+		return "", err
+	}
+	return pingResultPath(result), nil
+}
+
+func pingResultPath(result PingResult) string {
+	if result.Endpoint != "" {
+		return "direct"
+	}
+	if result.PeerRelay != "" {
+		return "peer-relay"
+	}
+	return "derp"
 }
 
 func (m *Manager) DialPort(ctx context.Context, userID, id string, port uint16) (net.Conn, error) {
@@ -1498,14 +1523,7 @@ func mappingView(row *ent.PortMapping) PortMappingView {
 	return PortMappingView{ID: row.ID, ServerID: row.ServerID, Name: row.Name, Kind: string(row.Kind), ListenPort: row.ListenPort, TargetHost: row.TargetHost, TargetPort: row.TargetPort, Enabled: row.Enabled, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt}
 }
 
-func reservedTailcatPort(port uint16) bool {
-	return port == diagnostics.ReservedPort || port == ReservedTransferPort
-}
-
 func (m *Manager) isReservedTailcatPort(port uint16) bool {
-	if reservedTailcatPort(port) {
-		return true
-	}
 	m.reservedMu.Lock()
 	defer m.reservedMu.Unlock()
 	return m.reservedHandlers[port] != nil
@@ -1526,13 +1544,6 @@ func (m *Manager) publish(userID, kind, id string, phase RuntimePhase, message s
 			m.logger.ErrorContext(auditCtx, "Write runtime audit event failed", "error", err)
 		}
 	}
-}
-
-func (m *Manager) PublishDiagnostic(userID, runID string, phase events.RuntimePhase, payload diagnostics.EventPayload) {
-	m.PublishEvent(userID, events.Envelope{
-		Version: 1, Type: "diagnostic", ResourceKind: "diagnostic", ResourceID: runID,
-		OperationID: runID, Phase: phase, Payload: payload,
-	})
 }
 
 // PublishEvent publishes a typed owner-scoped operation through the same

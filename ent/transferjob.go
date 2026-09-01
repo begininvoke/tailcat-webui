@@ -29,6 +29,10 @@ type TransferJob struct {
 	RemoteCapabilityCipher []byte `json:"-"`
 	// Status holds the value of the "status" field.
 	Status transferjob.Status `json:"status,omitempty"`
+	// Attempt holds the value of the "attempt" field.
+	Attempt int `json:"attempt,omitempty"`
+	// AttemptKind holds the value of the "attempt_kind" field.
+	AttemptKind transferjob.AttemptKind `json:"attempt_kind,omitempty"`
 	// TotalBytes holds the value of the "total_bytes" field.
 	TotalBytes int64 `json:"total_bytes,omitempty"`
 	// ReceivedBytes holds the value of the "received_bytes" field.
@@ -102,9 +106,9 @@ func (*TransferJob) scanValues(columns []string) ([]any, error) {
 		switch columns[i] {
 		case transferjob.FieldRemoteCapabilityCipher:
 			values[i] = new([]byte)
-		case transferjob.FieldTotalBytes, transferjob.FieldReceivedBytes:
+		case transferjob.FieldAttempt, transferjob.FieldTotalBytes, transferjob.FieldReceivedBytes:
 			values[i] = new(sql.NullInt64)
-		case transferjob.FieldID, transferjob.FieldUserID, transferjob.FieldClientID, transferjob.FieldRemoteShareID, transferjob.FieldStatus, transferjob.FieldErrorCode:
+		case transferjob.FieldID, transferjob.FieldUserID, transferjob.FieldClientID, transferjob.FieldRemoteShareID, transferjob.FieldStatus, transferjob.FieldAttemptKind, transferjob.FieldErrorCode:
 			values[i] = new(sql.NullString)
 		case transferjob.FieldStartedAt, transferjob.FieldFinishedAt, transferjob.FieldExpiresAt, transferjob.FieldCreatedAt, transferjob.FieldUpdatedAt:
 			values[i] = new(sql.NullTime)
@@ -158,6 +162,18 @@ func (_m *TransferJob) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field status", values[i])
 			} else if value.Valid {
 				_m.Status = transferjob.Status(value.String)
+			}
+		case transferjob.FieldAttempt:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field attempt", values[i])
+			} else if value.Valid {
+				_m.Attempt = int(value.Int64)
+			}
+		case transferjob.FieldAttemptKind:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field attempt_kind", values[i])
+			} else if value.Valid {
+				_m.AttemptKind = transferjob.AttemptKind(value.String)
 			}
 		case transferjob.FieldTotalBytes:
 			if value, ok := values[i].(*sql.NullInt64); !ok {
@@ -273,6 +289,12 @@ func (_m *TransferJob) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("status=")
 	builder.WriteString(fmt.Sprintf("%v", _m.Status))
+	builder.WriteString(", ")
+	builder.WriteString("attempt=")
+	builder.WriteString(fmt.Sprintf("%v", _m.Attempt))
+	builder.WriteString(", ")
+	builder.WriteString("attempt_kind=")
+	builder.WriteString(fmt.Sprintf("%v", _m.AttemptKind))
 	builder.WriteString(", ")
 	builder.WriteString("total_bytes=")
 	builder.WriteString(fmt.Sprintf("%v", _m.TotalBytes))

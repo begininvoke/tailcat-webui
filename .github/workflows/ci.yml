@@ -112,7 +112,7 @@ jobs:
           test -s "$RUNNER_TEMP/tailcat-compile/${{ matrix.binary }}"
 
   windows-transfer-runtime:
-    name: Transfer storage runtime (Windows)
+    name: Private filesystem and transfer runtime (Windows)
     runs-on: windows-latest
     env:
       CGO_ENABLED: '0'
@@ -123,7 +123,7 @@ jobs:
           go-version-file: go.mod
           check-latest: true
           cache-dependency-path: go.sum
-      - name: Verify modules and Windows transfer storage behavior
+      - name: Verify modules and Windows private filesystem behavior
         run: |
           go mod verify
-          go test -count=1 ./internal/transfer
+          go test -count=1 ./internal/privatefs ./internal/transfer

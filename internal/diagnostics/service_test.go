@@ -33,6 +33,20 @@ func (f dialPortFunc) DialPort(ctx context.Context, ownerID, clientID string, po
 	return f(ctx, ownerID, clientID, port)
 }
 
+func (dialPortFunc) CurrentPath(context.Context, string, string) (string, error) {
+	return "", errors.New("current path unavailable")
+}
+
+type probingDialer struct {
+	ClientDialer
+	path string
+	err  error
+}
+
+func (d *probingDialer) CurrentPath(context.Context, string, string) (string, error) {
+	return d.path, d.err
+}
+
 type auditRecorderFunc func(context.Context, audit.Entry) error
 
 func (f auditRecorderFunc) Record(ctx context.Context, entry audit.Entry) error {
@@ -41,8 +55,9 @@ func (f auditRecorderFunc) Record(ctx context.Context, entry audit.Entry) error 
 
 type eventPublisherFunc func(string, string, events.RuntimePhase, EventPayload)
 
-func (f eventPublisherFunc) PublishDiagnostic(ownerID, runID string, phase events.RuntimePhase, payload EventPayload) {
-	f(ownerID, runID, phase, payload)
+func (f eventPublisherFunc) PublishEvent(ownerID string, event events.Envelope) {
+	payload, _ := event.Payload.(EventPayload)
+	f(ownerID, event.ResourceID, event.Phase, payload)
 }
 
 type closeNotifyConn struct {
@@ -95,6 +110,35 @@ func TestServiceCreatesRunningSummaryBeforeDial(t *testing.T) {
 	finished := waitForRunStatus(t, service, owner.ID, run.ID, RunStatusSucceeded)
 	if finished.FinishedAt == nil || finished.LatencyMS == nil || finished.ErrorCode != "" {
 		t.Fatalf("finished run = %+v", finished)
+	}
+}
+
+func TestServicePersistsOnlyCorrelatedCurrentPath(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		path string
+		err  error
+		want string
+	}{
+		{name: "current path replaces stale history", path: "direct", want: "direct"},
+		{name: "probe failure omits stale history", err: errors.New("path unavailable")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			db, owner, client := newServiceTestData(t)
+			db.TailClient.UpdateOneID(client.ID).SetLastPath("derp").ExecX(t.Context())
+			runnerClosed := make(chan struct{})
+			dialer := &probingDialer{ClientDialer: successfulNotifyingDialer(runnerClosed), path: test.path, err: test.err}
+			service := newServiceForTest(t, db, dialer)
+			run, err := service.Start(t.Context(), owner.ID, client.ID, StartInput{Kind: RunKindPing, Duration: time.Second})
+			if err != nil {
+				t.Fatal(err)
+			}
+			<-runnerClosed
+			finished := waitForRunStatus(t, service, owner.ID, run.ID, RunStatusSucceeded)
+			if finished.Path != test.want {
+				t.Fatalf("diagnostic path = %q, want %q", finished.Path, test.want)
+			}
+		})
 	}
 }
 

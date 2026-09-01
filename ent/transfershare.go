@@ -27,6 +27,8 @@ type TransferShare struct {
 	Status transfershare.Status `json:"status,omitempty"`
 	// CapabilityHash holds the value of the "capability_hash" field.
 	CapabilityHash []byte `json:"-"`
+	// CapabilityGeneration holds the value of the "capability_generation" field.
+	CapabilityGeneration int `json:"capability_generation,omitempty"`
 	// TotalBytes holds the value of the "total_bytes" field.
 	TotalBytes int64 `json:"total_bytes,omitempty"`
 	// FileCount holds the value of the "file_count" field.
@@ -100,7 +102,7 @@ func (*TransferShare) scanValues(columns []string) ([]any, error) {
 		switch columns[i] {
 		case transfershare.FieldCapabilityHash:
 			values[i] = new([]byte)
-		case transfershare.FieldTotalBytes, transfershare.FieldFileCount:
+		case transfershare.FieldCapabilityGeneration, transfershare.FieldTotalBytes, transfershare.FieldFileCount:
 			values[i] = new(sql.NullInt64)
 		case transfershare.FieldID, transfershare.FieldUserID, transfershare.FieldServerID, transfershare.FieldStatus, transfershare.FieldErrorCode:
 			values[i] = new(sql.NullString)
@@ -150,6 +152,12 @@ func (_m *TransferShare) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field capability_hash", values[i])
 			} else if value != nil {
 				_m.CapabilityHash = *value
+			}
+		case transfershare.FieldCapabilityGeneration:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field capability_generation", values[i])
+			} else if value.Valid {
+				_m.CapabilityGeneration = int(value.Int64)
 			}
 		case transfershare.FieldTotalBytes:
 			if value, ok := values[i].(*sql.NullInt64); !ok {
@@ -262,6 +270,9 @@ func (_m *TransferShare) String() string {
 	builder.WriteString(fmt.Sprintf("%v", _m.Status))
 	builder.WriteString(", ")
 	builder.WriteString("capability_hash=<sensitive>")
+	builder.WriteString(", ")
+	builder.WriteString("capability_generation=")
+	builder.WriteString(fmt.Sprintf("%v", _m.CapabilityGeneration))
 	builder.WriteString(", ")
 	builder.WriteString("total_bytes=")
 	builder.WriteString(fmt.Sprintf("%v", _m.TotalBytes))

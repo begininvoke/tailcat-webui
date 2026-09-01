@@ -20,6 +20,8 @@ func (TransferJob) Fields() []ent.Field {
 		field.String("remote_share_id").NotEmpty().Immutable().Validate(validateUUIDv7),
 		field.Bytes("remote_capability_cipher").NotEmpty().Immutable().Sensitive(),
 		field.Enum("status").Values(transferStatuses...).Default("staging"),
+		field.Int("attempt").NonNegative().Default(0),
+		field.Enum("attempt_kind").Values("start", "retry", "resume").Optional(),
 		field.Int64("total_bytes").NonNegative().Default(0),
 		field.Int64("received_bytes").NonNegative().Default(0),
 		field.Time("started_at").Optional().Nillable(),

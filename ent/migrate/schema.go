@@ -512,6 +512,8 @@ var (
 		{Name: "remote_share_id", Type: field.TypeString},
 		{Name: "remote_capability_cipher", Type: field.TypeBytes},
 		{Name: "status", Type: field.TypeEnum, Enums: []string{"staging", "ready", "running", "completed", "failed", "canceled", "interrupted", "expired", "deleting"}, Default: "staging"},
+		{Name: "attempt", Type: field.TypeInt, Default: 0},
+		{Name: "attempt_kind", Type: field.TypeEnum, Nullable: true, Enums: []string{"start", "retry", "resume"}},
 		{Name: "total_bytes", Type: field.TypeInt64, Default: 0},
 		{Name: "received_bytes", Type: field.TypeInt64, Default: 0},
 		{Name: "started_at", Type: field.TypeTime, Nullable: true},
@@ -531,13 +533,13 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "transfer_jobs_tail_clients_transfer_jobs",
-				Columns:    []*schema.Column{TransferJobsColumns[12]},
+				Columns:    []*schema.Column{TransferJobsColumns[14]},
 				RefColumns: []*schema.Column{TailClientsColumns[0]},
 				OnDelete:   schema.Cascade,
 			},
 			{
 				Symbol:     "transfer_jobs_users_transfer_jobs",
-				Columns:    []*schema.Column{TransferJobsColumns[13]},
+				Columns:    []*schema.Column{TransferJobsColumns[15]},
 				RefColumns: []*schema.Column{UsersColumns[0]},
 				OnDelete:   schema.Cascade,
 			},
@@ -546,22 +548,22 @@ var (
 			{
 				Name:    "transferjob_user_id_created_at",
 				Unique:  false,
-				Columns: []*schema.Column{TransferJobsColumns[13], TransferJobsColumns[10]},
+				Columns: []*schema.Column{TransferJobsColumns[15], TransferJobsColumns[12]},
 			},
 			{
 				Name:    "transferjob_user_id_status_expires_at",
 				Unique:  false,
-				Columns: []*schema.Column{TransferJobsColumns[13], TransferJobsColumns[3], TransferJobsColumns[8]},
+				Columns: []*schema.Column{TransferJobsColumns[15], TransferJobsColumns[3], TransferJobsColumns[10]},
 			},
 			{
 				Name:    "transferjob_status_expires_at",
 				Unique:  false,
-				Columns: []*schema.Column{TransferJobsColumns[3], TransferJobsColumns[8]},
+				Columns: []*schema.Column{TransferJobsColumns[3], TransferJobsColumns[10]},
 			},
 			{
 				Name:    "transferjob_client_id_created_at",
 				Unique:  false,
-				Columns: []*schema.Column{TransferJobsColumns[12], TransferJobsColumns[10]},
+				Columns: []*schema.Column{TransferJobsColumns[14], TransferJobsColumns[12]},
 			},
 		},
 	}
@@ -570,6 +572,7 @@ var (
 		{Name: "id", Type: field.TypeString},
 		{Name: "status", Type: field.TypeEnum, Enums: []string{"staging", "ready", "running", "completed", "failed", "canceled", "interrupted", "expired", "deleting"}, Default: "staging"},
 		{Name: "capability_hash", Type: field.TypeBytes},
+		{Name: "capability_generation", Type: field.TypeInt, Default: 1},
 		{Name: "total_bytes", Type: field.TypeInt64, Default: 0},
 		{Name: "file_count", Type: field.TypeInt, Default: 0},
 		{Name: "ready_at", Type: field.TypeTime, Nullable: true},
@@ -589,13 +592,13 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "transfer_shares_tail_servers_transfer_shares",
-				Columns:    []*schema.Column{TransferSharesColumns[11]},
+				Columns:    []*schema.Column{TransferSharesColumns[12]},
 				RefColumns: []*schema.Column{TailServersColumns[0]},
 				OnDelete:   schema.Cascade,
 			},
 			{
 				Symbol:     "transfer_shares_users_transfer_shares",
-				Columns:    []*schema.Column{TransferSharesColumns[12]},
+				Columns:    []*schema.Column{TransferSharesColumns[13]},
 				RefColumns: []*schema.Column{UsersColumns[0]},
 				OnDelete:   schema.Cascade,
 			},
@@ -604,22 +607,22 @@ var (
 			{
 				Name:    "transfershare_user_id_created_at",
 				Unique:  false,
-				Columns: []*schema.Column{TransferSharesColumns[12], TransferSharesColumns[9]},
+				Columns: []*schema.Column{TransferSharesColumns[13], TransferSharesColumns[10]},
 			},
 			{
 				Name:    "transfershare_user_id_status_expires_at",
 				Unique:  false,
-				Columns: []*schema.Column{TransferSharesColumns[12], TransferSharesColumns[1], TransferSharesColumns[7]},
+				Columns: []*schema.Column{TransferSharesColumns[13], TransferSharesColumns[1], TransferSharesColumns[8]},
 			},
 			{
 				Name:    "transfershare_status_expires_at",
 				Unique:  false,
-				Columns: []*schema.Column{TransferSharesColumns[1], TransferSharesColumns[7]},
+				Columns: []*schema.Column{TransferSharesColumns[1], TransferSharesColumns[8]},
 			},
 			{
 				Name:    "transfershare_server_id_created_at",
 				Unique:  false,
-				Columns: []*schema.Column{TransferSharesColumns[11], TransferSharesColumns[9]},
+				Columns: []*schema.Column{TransferSharesColumns[12], TransferSharesColumns[10]},
 			},
 		},
 	}

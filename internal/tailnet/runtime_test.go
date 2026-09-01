@@ -19,7 +19,6 @@ import (
 	"github.com/ca-x/tailcat-webui/ent/enttest"
 	"github.com/ca-x/tailcat-webui/ent/exitrule"
 	"github.com/ca-x/tailcat-webui/ent/tailserver"
-	"github.com/ca-x/tailcat-webui/internal/diagnostics"
 	"github.com/ca-x/tailcat-webui/internal/secrets"
 
 	_ "github.com/lib-x/entsqlite"
@@ -29,6 +28,11 @@ import (
 
 var errFakeRuntime = errors.New("fake runtime failure")
 var runtimeTestDatabaseSequence atomic.Uint64
+
+const (
+	testDiagnosticPort uint16 = 41640
+	testTransferPort   uint16 = 41641
+)
 
 type fakeRuntimeFactory struct {
 	server      ServerRuntime
@@ -269,12 +273,15 @@ func TestManagerRegistersBoundedDiagnosticHandlerOnEveryServer(t *testing.T) {
 	runtime := &fakeServerRuntime{token: "fake-token", public: "nodekey:fake-server"}
 	factory := &fakeRuntimeFactory{server: runtime}
 	manager, db, ownerID := newRuntimeFactoryTestManager(t, factory)
+	if err := manager.RegisterReservedTCPHandler(testDiagnosticPort, func(string) TCPHandler { return func(context.Context, net.Conn) {} }); err != nil {
+		t.Fatal(err)
+	}
 	server := db.TailServer.Create().SetUserID(ownerID).SetName("diagnostic-server").SetRegion("tailcat.dev").SaveX(t.Context())
 
 	if _, err := manager.StartServer(t.Context(), ownerID, server.ID); err != nil {
 		t.Fatal(err)
 	}
-	if len(factory.serverSpecs) != 1 || factory.serverSpecs[0].ReservedTCPHandlers[diagnostics.ReservedPort] == nil {
+	if len(factory.serverSpecs) != 1 || factory.serverSpecs[0].ReservedTCPHandlers[testDiagnosticPort] == nil {
 		t.Fatalf("reserved handlers = %+v", factory.serverSpecs)
 	}
 }
@@ -283,13 +290,16 @@ func TestManagerRegistersReservedHandlerFactoriesBeforeStartAndBindsServerID(t *
 	factory := &fakeRuntimeFactory{}
 	manager, db, ownerID := newRuntimeFactoryTestManager(t, factory)
 	bound := make(chan string, 2)
-	if err := manager.RegisterReservedTCPHandler(ReservedTransferPort, func(serverID string) TCPHandler {
+	if err := manager.RegisterReservedTCPHandler(testTransferPort, func(serverID string) TCPHandler {
 		return func(_ context.Context, connection net.Conn) {
 			defer connection.Close()
 			bound <- serverID
 		}
 	}); err != nil {
 		t.Fatalf("RegisterReservedTCPHandler: %v", err)
+	}
+	if err := manager.RegisterReservedTCPHandler(testDiagnosticPort, func(string) TCPHandler { return func(context.Context, net.Conn) {} }); err != nil {
+		t.Fatalf("register diagnostic handler: %v", err)
 	}
 	servers := []*ent.TailServer{
 		db.TailServer.Create().SetUserID(ownerID).SetName("first").SetRegion("tailcat.dev").SaveX(t.Context()),
@@ -305,11 +315,11 @@ func TestManagerRegistersReservedHandlerFactoriesBeforeStartAndBindsServerID(t *
 		t.Fatalf("server specs = %d, want 2", len(factory.serverSpecs))
 	}
 	for index, spec := range factory.serverSpecs {
-		if spec.ReservedTCPHandlers[diagnostics.ReservedPort] == nil || spec.ReservedTCPHandlers[ReservedTransferPort] == nil {
+		if spec.ReservedTCPHandlers[testDiagnosticPort] == nil || spec.ReservedTCPHandlers[testTransferPort] == nil {
 			t.Fatalf("reserved handlers = %+v", spec.ReservedTCPHandlers)
 		}
 		client, peer := net.Pipe()
-		go spec.ReservedTCPHandlers[ReservedTransferPort](t.Context(), peer)
+		go spec.ReservedTCPHandlers[testTransferPort](t.Context(), peer)
 		_ = client.Close()
 		if got := <-bound; got != servers[index].ID {
 			t.Fatalf("bound server ID = %q, want %q", got, servers[index].ID)
@@ -319,33 +329,39 @@ func TestManagerRegistersReservedHandlerFactoriesBeforeStartAndBindsServerID(t *
 
 func TestManagerRejectsNilCollidingAndLateReservedRegistration(t *testing.T) {
 	manager, _, _ := newRuntimeFactoryTestManager(t, &fakeRuntimeFactory{server: &fakeServerRuntime{}})
-	if err := manager.RegisterReservedTCPHandler(ReservedTransferPort, nil); err == nil {
+	if err := manager.RegisterReservedTCPHandler(testTransferPort, nil); err == nil {
 		t.Fatal("nil reserved handler factory was accepted")
 	}
 	factory := func(string) TCPHandler { return func(context.Context, net.Conn) {} }
-	if err := manager.RegisterReservedTCPHandler(diagnostics.ReservedPort, factory); err == nil {
+	if err := manager.RegisterReservedTCPHandler(testDiagnosticPort, factory); err != nil {
+		t.Fatalf("initial diagnostic registration: %v", err)
+	}
+	if err := manager.RegisterReservedTCPHandler(testDiagnosticPort, factory); err == nil {
 		t.Fatal("diagnostic handler collision was accepted")
 	}
-	if err := manager.RegisterReservedTCPHandler(ReservedTransferPort, factory); err != nil {
+	if err := manager.RegisterReservedTCPHandler(testTransferPort, factory); err != nil {
 		t.Fatalf("initial transfer registration: %v", err)
 	}
-	if err := manager.RegisterReservedTCPHandler(ReservedTransferPort, factory); err == nil {
+	if err := manager.RegisterReservedTCPHandler(testTransferPort, factory); err == nil {
 		t.Fatal("transfer handler collision was accepted")
 	}
 
 	if err := manager.Restore(t.Context()); err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
-	if err := manager.RegisterReservedTCPHandler(ReservedTransferPort, factory); !errors.Is(err, ErrRegistrationClosed) {
+	if err := manager.RegisterReservedTCPHandler(testTransferPort, factory); !errors.Is(err, ErrRegistrationClosed) {
 		t.Fatal("post-Restore reserved registration was accepted")
 	}
 }
 
 func TestManagerRejectsReservedPortMappingsAtCreateAndRuntime(t *testing.T) {
-	for _, port := range []uint16{diagnostics.ReservedPort, ReservedTransferPort} {
+	for _, port := range []uint16{testDiagnosticPort, testTransferPort} {
 		t.Run(fmt.Sprintf("port-%d", port), func(t *testing.T) {
 			factory := &fakeRuntimeFactory{server: &fakeServerRuntime{}}
 			manager, db, ownerID := newRuntimeFactoryTestManager(t, factory)
+			if err := manager.RegisterReservedTCPHandler(port, func(string) TCPHandler { return func(context.Context, net.Conn) {} }); err != nil {
+				t.Fatal(err)
+			}
 			server := db.TailServer.Create().SetUserID(ownerID).SetName("reserved").SetRegion("tailcat.dev").SaveX(t.Context())
 			if _, err := manager.CreateMapping(t.Context(), ownerID, server.ID, CreateMappingInput{Name: "collision", Kind: "tcp", ListenPort: port, TargetHost: "127.0.0.1", TargetPort: 80}); !errors.Is(err, ErrInvalid) {
 				t.Fatalf("CreateMapping port %d error = %v, want invalid", port, err)
@@ -535,7 +551,8 @@ func TestManagerExitRuleCreateStopsRuntimeBeforePersistence(t *testing.T) {
 
 func TestManagerExitRuleDeleteStopsRuntimeBeforeRevocation(t *testing.T) {
 	runtime := &fakeServerRuntime{token: "fake-token", public: "nodekey:fake-server"}
-	manager, db, ownerID := newRuntimeFactoryTestManager(t, &fakeRuntimeFactory{server: runtime})
+	factory := &fakeRuntimeFactory{server: runtime}
+	manager, db, ownerID := newRuntimeFactoryTestManager(t, factory)
 	server := db.TailServer.Create().SetUserID(ownerID).SetName("exit-delete-order").SetRegion("tailcat.dev").SetExitNodeEnabled(true).SaveX(t.Context())
 	rule := db.ExitRule.Create().SetUserID(ownerID).SetServerID(server.ID).SetPrefix("10.0.0.0/8").SetStartPort(443).SetEndPort(443).SaveX(t.Context())
 	if _, err := manager.StartServer(t.Context(), ownerID, server.ID); err != nil {
@@ -551,6 +568,16 @@ func TestManagerExitRuleDeleteStopsRuntimeBeforeRevocation(t *testing.T) {
 	}
 	if db.ExitRule.Query().Where(exitrule.IDEQ(rule.ID)).ExistX(t.Context()) {
 		t.Fatal("exit rule still exists after deletion")
+	}
+	if db.TailServer.GetX(t.Context(), server.ID).ExitNodeEnabled {
+		t.Fatal("deleting the final enabled rule left exit-node mode enabled")
+	}
+	factory.server = &fakeServerRuntime{token: "fake-token", public: "nodekey:fake-server"}
+	if _, err := manager.StartServer(t.Context(), ownerID, server.ID); err != nil {
+		t.Fatal(err)
+	}
+	if spec := factory.serverSpecs[len(factory.serverSpecs)-1]; spec.AllowProxy != nil || spec.ForwardTCPHandler != nil {
+		t.Fatal("restart installed exit forwarding after deleting the final enabled rule")
 	}
 }
 

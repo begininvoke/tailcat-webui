@@ -278,7 +278,9 @@ func (a *API) publicConfig(c *echo.Context) error {
 		Transfers: publicTransferConfig{
 			MaxFileBytes: transferConfig.MaxFileBytes, MaxShareBytes: transferConfig.MaxShareBytes,
 			MaxJobBytes: transferConfig.MaxJobBytes, MaxOwnerBytes: transferConfig.MaxOwnerBytes,
-			MaxFilesPerShare: transferConfig.MaxFilesPerShare, Workers: transferConfig.Workers,
+			MaxFilesPerShare: transferConfig.MaxFilesPerShare, MaxOwnerFiles: transfer.MaxOwnerFiles,
+			MaxRetainedShares: transfer.MaxRetainedSharesPerOwner, MaxRetainedJobs: transfer.MaxRetainedJobsPerOwner,
+			Workers:         transferConfig.Workers,
 			MaxJobsPerOwner: transferConfig.MaxJobsPerOwner, ExpirySeconds: int64(transferConfig.Expiry.Seconds()),
 			RetentionSeconds: int64(transferConfig.Retention.Seconds()), UploadTimeoutSeconds: int64(transferConfig.UploadTimeout.Seconds()),
 		},
@@ -439,7 +441,11 @@ func (a *API) deleteServer(c *echo.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := a.tailnet.DeleteServer(c.Request().Context(), p.ID, c.Param("id")); err != nil {
+	serverID := c.Param("id")
+	if err := a.transfer.DeleteServerResources(c.Request().Context(), p.ID, serverID); err != nil {
+		return err
+	}
+	if err := a.tailnet.DeleteServer(c.Request().Context(), p.ID, serverID); err != nil {
 		return err
 	}
 	return c.NoContent(http.StatusNoContent)
@@ -714,6 +720,9 @@ func (a *API) deleteClient(c *echo.Context) error {
 		return err
 	}
 	clientID := c.Param("id")
+	if err := a.transfer.DeleteClientResources(c.Request().Context(), p.ID, clientID); err != nil {
+		return err
+	}
 	if err := a.publish.InvalidateClient(c.Request().Context(), p.ID, clientID); err != nil {
 		return err
 	}

@@ -24,6 +24,12 @@ func (s *Service) ReservedHandler(serverID string) func(context.Context, net.Con
 			return
 		}
 		defer connection.Close()
+		select {
+		case s.handlerSlots <- struct{}{}:
+			defer func() { <-s.handlerSlots }()
+		default:
+			return
+		}
 		if err := s.serveReserved(ctx, serverID, connection); err != nil {
 			s.logger.DebugContext(ctx, "Tailcat transfer request ended", "server_id", serverID, "error_code", protocolCode(err))
 		}
@@ -31,7 +37,7 @@ func (s *Service) ReservedHandler(serverID string) func(context.Context, net.Con
 }
 
 func (s *Service) serveReserved(ctx context.Context, serverID string, connection net.Conn) error {
-	requestCtx, cancel := context.WithTimeoutCause(ctx, protocolRequestTimeout, protocolError(CodeRemoteUnavailable, errors.New("transfer handler timed out")))
+	requestCtx, cancel := context.WithTimeoutCause(ctx, protocolHandshakeTimeout, protocolError(CodeRemoteUnavailable, errors.New("transfer handler handshake timed out")))
 	defer cancel()
 	stopRequest := context.AfterFunc(requestCtx, func() { _ = connection.Close() })
 	defer stopRequest()
@@ -47,14 +53,17 @@ func (s *Service) serveReserved(ctx context.Context, serverID string, connection
 	}
 	s.captureSecret("handler.request", request.Capability)
 	defer request.clear()
+	stopRequest()
+	cancel()
+	progress := &progressConn{Conn: connection, inactivity: protocolInactivityTimeout}
 	if validateEntityID(request.ShareID) != nil {
 		err := protocolError(CodeInvalidCapability, ErrInvalidCapability)
-		_ = writeErrorResponse(requestCtx, connection, responseCode(err))
+		_ = writeErrorResponse(ctx, progress, responseCode(err))
 		return err
 	}
-	admission, err := s.beginShareAdmission(requestCtx, request.ShareID)
+	admission, err := s.beginShareAdmission(ctx, request.ShareID)
 	if err != nil {
-		_ = writeErrorResponse(requestCtx, connection, responseCode(err))
+		_ = writeErrorResponse(ctx, progress, responseCode(err))
 		return err
 	}
 	reconcileAfterRequest := false
@@ -79,12 +88,12 @@ func (s *Service) serveReserved(ctx context.Context, serverID string, connection
 		if reconcileAfterRequest && share != nil {
 			reconcileOwnerID = share.UserID
 		}
-		_ = writeErrorResponse(requestCtx, connection, responseCode(err))
+		_ = writeErrorResponse(ctx, progress, responseCode(err))
 		return err
 	}
 	effectiveExpiry := s.effectiveExpiry(share.CreatedAt, share.ExpiresAt)
 	if err := s.armShareExpiry(admission, effectiveExpiry); err != nil {
-		_ = writeErrorResponse(requestCtx, connection, responseCode(err))
+		_ = writeErrorResponse(ctx, progress, responseCode(err))
 		return err
 	}
 	if s.handlerHooks.afterAuthorized != nil {
@@ -92,27 +101,21 @@ func (s *Service) serveReserved(ctx context.Context, serverID string, connection
 	}
 	streamCtx, err := s.commitShareAdmission(admission, effectiveExpiry)
 	if err != nil {
-		_ = writeErrorResponse(requestCtx, connection, responseCode(err))
+		_ = writeErrorResponse(ctx, progress, responseCode(err))
 		return err
 	}
 	stop := context.AfterFunc(streamCtx, func() { _ = connection.Close() })
 	defer stop()
-	if deadline, ok := streamCtx.Deadline(); ok {
-		if err := connection.SetDeadline(deadline); err != nil {
-			return protocolError(CodeRemoteUnavailable, err)
-		}
-	}
-
 	switch request.Operation {
 	case operationManifest:
-		err = s.serveManifest(streamCtx, connection, share)
+		err = s.serveManifest(streamCtx, progress, share)
 	case operationRange:
-		err = s.serveRange(streamCtx, connection, share, request)
+		err = s.serveRange(streamCtx, progress, share, request)
 	default:
 		err = protocolError(CodeProtocolInvalid, errors.New("unsupported operation"))
 	}
 	if err != nil {
-		_ = writeErrorResponse(streamCtx, connection, responseCode(err))
+		_ = writeErrorResponse(streamCtx, progress, responseCode(err))
 	}
 	return err
 }
@@ -212,18 +215,13 @@ func (s *Service) serveRange(ctx context.Context, connection net.Conn, share *en
 		return protocolError(CodeStorageFailed, errors.New("staged file unavailable"))
 	}
 	defer handle.Close()
-	data := make([]byte, int(request.Length))
-	read, err := handle.ReadAt(data, request.Offset)
-	if err != nil && !errors.Is(err, io.EOF) {
+	if _, err := handle.Seek(request.Offset, io.SeekStart); err != nil {
 		return protocolError(CodeStorageFailed, err)
-	}
-	if int64(read) != request.Length {
-		return protocolError(CodeStorageFailed, io.ErrUnexpectedEOF)
 	}
 	if err := context.Cause(ctx); err != nil {
 		return protocolError(CodeCanceled, err)
 	}
-	return writeSuccessResponse(ctx, connection, data, MaxRangeResponseBytes)
+	return writeSuccessStream(ctx, connection, request.Length, handle, int64(MaxRangeResponseBytes))
 }
 
 func validateManifestRange(fileSize, offset, length int64) error {

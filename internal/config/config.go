@@ -114,6 +114,11 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	for _, rule := range exitTargets {
+		if rule.Host != "" {
+			return Config{}, errors.New("TAILCAT_WEBUI_ALLOWED_EXIT_TARGETS must use CIDR rules because Tailcat exit forwarding supplies numeric addresses")
+		}
+	}
 	trustedProxies, err := parsePrefixes(strings.TrimSpace(os.Getenv("TAILCAT_WEBUI_TRUSTED_PROXIES")))
 	if err != nil {
 		return Config{}, err

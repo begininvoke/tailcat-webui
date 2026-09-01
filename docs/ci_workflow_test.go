@@ -35,4 +35,7 @@ func TestCIVerifiesCommittedWebdistBeforeBuilding(t *testing.T) {
 	if !strings.Contains(workflow, "target-compile:\n    name: Compile ${{ matrix.platform }}\n    needs: verify") {
 		t.Fatal("target compile matrix must depend on the parity-verifying job")
 	}
+	if !strings.Contains(workflow, "go test -count=1 ./internal/privatefs ./internal/transfer") {
+		t.Fatal("Windows runtime job must exercise private filesystem and transfer storage behavior")
+	}
 }

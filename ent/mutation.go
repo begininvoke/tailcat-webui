@@ -12155,6 +12155,9 @@ type TransferJobMutation struct {
 	remote_share_id          *string
 	remote_capability_cipher *[]byte
 	status                   *transferjob.Status
+	attempt                  *int
+	addattempt               *int
+	attempt_kind             *transferjob.AttemptKind
 	total_bytes              *int64
 	addtotal_bytes           *int64
 	received_bytes           *int64
@@ -12460,6 +12463,111 @@ func (m *TransferJobMutation) OldStatus(ctx context.Context) (v transferjob.Stat
 // ResetStatus resets all changes to the "status" field.
 func (m *TransferJobMutation) ResetStatus() {
 	m.status = nil
+}
+
+// SetAttempt sets the "attempt" field.
+func (m *TransferJobMutation) SetAttempt(i int) {
+	m.attempt = &i
+	m.addattempt = nil
+}
+
+// Attempt returns the value of the "attempt" field in the mutation.
+func (m *TransferJobMutation) Attempt() (r int, exists bool) {
+	v := m.attempt
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAttempt returns the old "attempt" field's value of the TransferJob entity.
+// If the TransferJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TransferJobMutation) OldAttempt(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAttempt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAttempt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAttempt: %w", err)
+	}
+	return oldValue.Attempt, nil
+}
+
+// AddAttempt adds i to the "attempt" field.
+func (m *TransferJobMutation) AddAttempt(i int) {
+	if m.addattempt != nil {
+		*m.addattempt += i
+	} else {
+		m.addattempt = &i
+	}
+}
+
+// AddedAttempt returns the value that was added to the "attempt" field in this mutation.
+func (m *TransferJobMutation) AddedAttempt() (r int, exists bool) {
+	v := m.addattempt
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetAttempt resets all changes to the "attempt" field.
+func (m *TransferJobMutation) ResetAttempt() {
+	m.attempt = nil
+	m.addattempt = nil
+}
+
+// SetAttemptKind sets the "attempt_kind" field.
+func (m *TransferJobMutation) SetAttemptKind(tk transferjob.AttemptKind) {
+	m.attempt_kind = &tk
+}
+
+// AttemptKind returns the value of the "attempt_kind" field in the mutation.
+func (m *TransferJobMutation) AttemptKind() (r transferjob.AttemptKind, exists bool) {
+	v := m.attempt_kind
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAttemptKind returns the old "attempt_kind" field's value of the TransferJob entity.
+// If the TransferJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TransferJobMutation) OldAttemptKind(ctx context.Context) (v transferjob.AttemptKind, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAttemptKind is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAttemptKind requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAttemptKind: %w", err)
+	}
+	return oldValue.AttemptKind, nil
+}
+
+// ClearAttemptKind clears the value of the "attempt_kind" field.
+func (m *TransferJobMutation) ClearAttemptKind() {
+	m.attempt_kind = nil
+	m.clearedFields[transferjob.FieldAttemptKind] = struct{}{}
+}
+
+// AttemptKindCleared returns if the "attempt_kind" field was cleared in this mutation.
+func (m *TransferJobMutation) AttemptKindCleared() bool {
+	_, ok := m.clearedFields[transferjob.FieldAttemptKind]
+	return ok
+}
+
+// ResetAttemptKind resets all changes to the "attempt_kind" field.
+func (m *TransferJobMutation) ResetAttemptKind() {
+	m.attempt_kind = nil
+	delete(m.clearedFields, transferjob.FieldAttemptKind)
 }
 
 // SetTotalBytes sets the "total_bytes" field.
@@ -12984,7 +13092,7 @@ func (m *TransferJobMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *TransferJobMutation) Fields() []string {
-	fields := make([]string, 0, 13)
+	fields := make([]string, 0, 15)
 	if m.owner != nil {
 		fields = append(fields, transferjob.FieldUserID)
 	}
@@ -12999,6 +13107,12 @@ func (m *TransferJobMutation) Fields() []string {
 	}
 	if m.status != nil {
 		fields = append(fields, transferjob.FieldStatus)
+	}
+	if m.attempt != nil {
+		fields = append(fields, transferjob.FieldAttempt)
+	}
+	if m.attempt_kind != nil {
+		fields = append(fields, transferjob.FieldAttemptKind)
 	}
 	if m.total_bytes != nil {
 		fields = append(fields, transferjob.FieldTotalBytes)
@@ -13042,6 +13156,10 @@ func (m *TransferJobMutation) Field(name string) (ent.Value, bool) {
 		return m.RemoteCapabilityCipher()
 	case transferjob.FieldStatus:
 		return m.Status()
+	case transferjob.FieldAttempt:
+		return m.Attempt()
+	case transferjob.FieldAttemptKind:
+		return m.AttemptKind()
 	case transferjob.FieldTotalBytes:
 		return m.TotalBytes()
 	case transferjob.FieldReceivedBytes:
@@ -13077,6 +13195,10 @@ func (m *TransferJobMutation) OldField(ctx context.Context, name string) (ent.Va
 		return m.OldRemoteCapabilityCipher(ctx)
 	case transferjob.FieldStatus:
 		return m.OldStatus(ctx)
+	case transferjob.FieldAttempt:
+		return m.OldAttempt(ctx)
+	case transferjob.FieldAttemptKind:
+		return m.OldAttemptKind(ctx)
 	case transferjob.FieldTotalBytes:
 		return m.OldTotalBytes(ctx)
 	case transferjob.FieldReceivedBytes:
@@ -13136,6 +13258,20 @@ func (m *TransferJobMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetStatus(v)
+		return nil
+	case transferjob.FieldAttempt:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAttempt(v)
+		return nil
+	case transferjob.FieldAttemptKind:
+		v, ok := value.(transferjob.AttemptKind)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAttemptKind(v)
 		return nil
 	case transferjob.FieldTotalBytes:
 		v, ok := value.(int64)
@@ -13201,6 +13337,9 @@ func (m *TransferJobMutation) SetField(name string, value ent.Value) error {
 // this mutation.
 func (m *TransferJobMutation) AddedFields() []string {
 	var fields []string
+	if m.addattempt != nil {
+		fields = append(fields, transferjob.FieldAttempt)
+	}
 	if m.addtotal_bytes != nil {
 		fields = append(fields, transferjob.FieldTotalBytes)
 	}
@@ -13215,6 +13354,8 @@ func (m *TransferJobMutation) AddedFields() []string {
 // was not set, or was not defined in the schema.
 func (m *TransferJobMutation) AddedField(name string) (ent.Value, bool) {
 	switch name {
+	case transferjob.FieldAttempt:
+		return m.AddedAttempt()
 	case transferjob.FieldTotalBytes:
 		return m.AddedTotalBytes()
 	case transferjob.FieldReceivedBytes:
@@ -13228,6 +13369,13 @@ func (m *TransferJobMutation) AddedField(name string) (ent.Value, bool) {
 // type.
 func (m *TransferJobMutation) AddField(name string, value ent.Value) error {
 	switch name {
+	case transferjob.FieldAttempt:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddAttempt(v)
+		return nil
 	case transferjob.FieldTotalBytes:
 		v, ok := value.(int64)
 		if !ok {
@@ -13250,6 +13398,9 @@ func (m *TransferJobMutation) AddField(name string, value ent.Value) error {
 // mutation.
 func (m *TransferJobMutation) ClearedFields() []string {
 	var fields []string
+	if m.FieldCleared(transferjob.FieldAttemptKind) {
+		fields = append(fields, transferjob.FieldAttemptKind)
+	}
 	if m.FieldCleared(transferjob.FieldStartedAt) {
 		fields = append(fields, transferjob.FieldStartedAt)
 	}
@@ -13273,6 +13424,9 @@ func (m *TransferJobMutation) FieldCleared(name string) bool {
 // error if the field is not defined in the schema.
 func (m *TransferJobMutation) ClearField(name string) error {
 	switch name {
+	case transferjob.FieldAttemptKind:
+		m.ClearAttemptKind()
+		return nil
 	case transferjob.FieldStartedAt:
 		m.ClearStartedAt()
 		return nil
@@ -13304,6 +13458,12 @@ func (m *TransferJobMutation) ResetField(name string) error {
 		return nil
 	case transferjob.FieldStatus:
 		m.ResetStatus()
+		return nil
+	case transferjob.FieldAttempt:
+		m.ResetAttempt()
+		return nil
+	case transferjob.FieldAttemptKind:
+		m.ResetAttemptKind()
 		return nil
 	case transferjob.FieldTotalBytes:
 		m.ResetTotalBytes()
@@ -13456,32 +13616,34 @@ func (m *TransferJobMutation) ResetEdge(name string) error {
 // TransferShareMutation represents an operation that mutates the TransferShare nodes in the graph.
 type TransferShareMutation struct {
 	config
-	op              Op
-	typ             string
-	id              *string
-	status          *transfershare.Status
-	capability_hash *[]byte
-	total_bytes     *int64
-	addtotal_bytes  *int64
-	file_count      *int
-	addfile_count   *int
-	ready_at        *time.Time
-	finished_at     *time.Time
-	expires_at      *time.Time
-	error_code      *transfershare.ErrorCode
-	created_at      *time.Time
-	updated_at      *time.Time
-	clearedFields   map[string]struct{}
-	owner           *string
-	clearedowner    bool
-	server          *string
-	clearedserver   bool
-	files           map[string]struct{}
-	removedfiles    map[string]struct{}
-	clearedfiles    bool
-	done            bool
-	oldValue        func(context.Context) (*TransferShare, error)
-	predicates      []predicate.TransferShare
+	op                       Op
+	typ                      string
+	id                       *string
+	status                   *transfershare.Status
+	capability_hash          *[]byte
+	capability_generation    *int
+	addcapability_generation *int
+	total_bytes              *int64
+	addtotal_bytes           *int64
+	file_count               *int
+	addfile_count            *int
+	ready_at                 *time.Time
+	finished_at              *time.Time
+	expires_at               *time.Time
+	error_code               *transfershare.ErrorCode
+	created_at               *time.Time
+	updated_at               *time.Time
+	clearedFields            map[string]struct{}
+	owner                    *string
+	clearedowner             bool
+	server                   *string
+	clearedserver            bool
+	files                    map[string]struct{}
+	removedfiles             map[string]struct{}
+	clearedfiles             bool
+	done                     bool
+	oldValue                 func(context.Context) (*TransferShare, error)
+	predicates               []predicate.TransferShare
 }
 
 var _ ent.Mutation = (*TransferShareMutation)(nil)
@@ -13730,6 +13892,62 @@ func (m *TransferShareMutation) OldCapabilityHash(ctx context.Context) (v []byte
 // ResetCapabilityHash resets all changes to the "capability_hash" field.
 func (m *TransferShareMutation) ResetCapabilityHash() {
 	m.capability_hash = nil
+}
+
+// SetCapabilityGeneration sets the "capability_generation" field.
+func (m *TransferShareMutation) SetCapabilityGeneration(i int) {
+	m.capability_generation = &i
+	m.addcapability_generation = nil
+}
+
+// CapabilityGeneration returns the value of the "capability_generation" field in the mutation.
+func (m *TransferShareMutation) CapabilityGeneration() (r int, exists bool) {
+	v := m.capability_generation
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCapabilityGeneration returns the old "capability_generation" field's value of the TransferShare entity.
+// If the TransferShare object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TransferShareMutation) OldCapabilityGeneration(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCapabilityGeneration is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCapabilityGeneration requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCapabilityGeneration: %w", err)
+	}
+	return oldValue.CapabilityGeneration, nil
+}
+
+// AddCapabilityGeneration adds i to the "capability_generation" field.
+func (m *TransferShareMutation) AddCapabilityGeneration(i int) {
+	if m.addcapability_generation != nil {
+		*m.addcapability_generation += i
+	} else {
+		m.addcapability_generation = &i
+	}
+}
+
+// AddedCapabilityGeneration returns the value that was added to the "capability_generation" field in this mutation.
+func (m *TransferShareMutation) AddedCapabilityGeneration() (r int, exists bool) {
+	v := m.addcapability_generation
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetCapabilityGeneration resets all changes to the "capability_generation" field.
+func (m *TransferShareMutation) ResetCapabilityGeneration() {
+	m.capability_generation = nil
+	m.addcapability_generation = nil
 }
 
 // SetTotalBytes sets the "total_bytes" field.
@@ -14254,7 +14472,7 @@ func (m *TransferShareMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *TransferShareMutation) Fields() []string {
-	fields := make([]string, 0, 12)
+	fields := make([]string, 0, 13)
 	if m.owner != nil {
 		fields = append(fields, transfershare.FieldUserID)
 	}
@@ -14266,6 +14484,9 @@ func (m *TransferShareMutation) Fields() []string {
 	}
 	if m.capability_hash != nil {
 		fields = append(fields, transfershare.FieldCapabilityHash)
+	}
+	if m.capability_generation != nil {
+		fields = append(fields, transfershare.FieldCapabilityGeneration)
 	}
 	if m.total_bytes != nil {
 		fields = append(fields, transfershare.FieldTotalBytes)
@@ -14307,6 +14528,8 @@ func (m *TransferShareMutation) Field(name string) (ent.Value, bool) {
 		return m.Status()
 	case transfershare.FieldCapabilityHash:
 		return m.CapabilityHash()
+	case transfershare.FieldCapabilityGeneration:
+		return m.CapabilityGeneration()
 	case transfershare.FieldTotalBytes:
 		return m.TotalBytes()
 	case transfershare.FieldFileCount:
@@ -14340,6 +14563,8 @@ func (m *TransferShareMutation) OldField(ctx context.Context, name string) (ent.
 		return m.OldStatus(ctx)
 	case transfershare.FieldCapabilityHash:
 		return m.OldCapabilityHash(ctx)
+	case transfershare.FieldCapabilityGeneration:
+		return m.OldCapabilityGeneration(ctx)
 	case transfershare.FieldTotalBytes:
 		return m.OldTotalBytes(ctx)
 	case transfershare.FieldFileCount:
@@ -14392,6 +14617,13 @@ func (m *TransferShareMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetCapabilityHash(v)
+		return nil
+	case transfershare.FieldCapabilityGeneration:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCapabilityGeneration(v)
 		return nil
 	case transfershare.FieldTotalBytes:
 		v, ok := value.(int64)
@@ -14457,6 +14689,9 @@ func (m *TransferShareMutation) SetField(name string, value ent.Value) error {
 // this mutation.
 func (m *TransferShareMutation) AddedFields() []string {
 	var fields []string
+	if m.addcapability_generation != nil {
+		fields = append(fields, transfershare.FieldCapabilityGeneration)
+	}
 	if m.addtotal_bytes != nil {
 		fields = append(fields, transfershare.FieldTotalBytes)
 	}
@@ -14471,6 +14706,8 @@ func (m *TransferShareMutation) AddedFields() []string {
 // was not set, or was not defined in the schema.
 func (m *TransferShareMutation) AddedField(name string) (ent.Value, bool) {
 	switch name {
+	case transfershare.FieldCapabilityGeneration:
+		return m.AddedCapabilityGeneration()
 	case transfershare.FieldTotalBytes:
 		return m.AddedTotalBytes()
 	case transfershare.FieldFileCount:
@@ -14484,6 +14721,13 @@ func (m *TransferShareMutation) AddedField(name string) (ent.Value, bool) {
 // type.
 func (m *TransferShareMutation) AddField(name string, value ent.Value) error {
 	switch name {
+	case transfershare.FieldCapabilityGeneration:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddCapabilityGeneration(v)
+		return nil
 	case transfershare.FieldTotalBytes:
 		v, ok := value.(int64)
 		if !ok {
@@ -14557,6 +14801,9 @@ func (m *TransferShareMutation) ResetField(name string) error {
 		return nil
 	case transfershare.FieldCapabilityHash:
 		m.ResetCapabilityHash()
+		return nil
+	case transfershare.FieldCapabilityGeneration:
+		m.ResetCapabilityGeneration()
 		return nil
 	case transfershare.FieldTotalBytes:
 		m.ResetTotalBytes()

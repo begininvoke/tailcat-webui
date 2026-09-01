@@ -36,6 +36,9 @@ type publicTransferConfig struct {
 	MaxJobBytes          int64 `json:"max_job_bytes"`
 	MaxOwnerBytes        int64 `json:"max_owner_bytes"`
 	MaxFilesPerShare     int   `json:"max_files_per_share"`
+	MaxOwnerFiles        int   `json:"max_owner_files"`
+	MaxRetainedShares    int   `json:"max_retained_shares_per_owner"`
+	MaxRetainedJobs      int   `json:"max_retained_jobs_per_owner"`
 	Workers              int   `json:"workers"`
 	MaxJobsPerOwner      int   `json:"max_jobs_per_owner"`
 	ExpirySeconds        int64 `json:"expiry_seconds"`

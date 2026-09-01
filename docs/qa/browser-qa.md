@@ -19,9 +19,9 @@ Windows filesystem runtime behavior is also separate. Local Linux tests cover
 root replacement, symlinks, modeled reparse paths, hard links, permissions,
 directory sync, and Windows cross-compilation. They cannot prove NTFS reparse,
 DACL, link-count, or directory-sync semantics. CI now has a dedicated
-`windows-latest`, `CGO_ENABLED=0 go test -count=1 ./internal/transfer` job. That
-remote result remains pending until the branch is pushed and GitHub Actions
-runs it.
+`windows-latest` job with `CGO_ENABLED=0` that runs
+`go test -count=1 ./internal/privatefs ./internal/transfer`. That remote result
+remains pending until the branch is pushed and GitHub Actions runs it.
 
 ## Local automated result
 

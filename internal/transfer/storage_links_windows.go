@@ -5,55 +5,12 @@ package transfer
 import (
 	"errors"
 	"os"
-	"runtime"
 	"syscall"
-	"unsafe"
+
+	"github.com/ca-x/tailcat-webui/internal/privatefs"
 )
 
-const (
-	windowsOwnerSecurityInformation = 0x00000001
-	windowsDACLInformation          = 0x00000004
-	windowsSEFileObject             = 1
-	windowsAccessAllowedACE         = 0
-	windowsAccessDeniedACE          = 1
-	windowsLocalSystemSID           = 22
-	windowsBuiltinAdministratorsSID = 26
-	windowsMaxSIDSize               = 68
-)
-
-var (
-	windowsAdvapi32           = syscall.NewLazyDLL("advapi32.dll")
-	windowsGetSecurityInfo    = windowsAdvapi32.NewProc("GetSecurityInfo")
-	windowsGetAce             = windowsAdvapi32.NewProc("GetAce")
-	windowsEqualSid           = windowsAdvapi32.NewProc("EqualSid")
-	windowsCreateWellKnownSid = windowsAdvapi32.NewProc("CreateWellKnownSid")
-	windowsKernel32           = syscall.NewLazyDLL("kernel32.dll")
-	windowsLocalFree          = windowsKernel32.NewProc("LocalFree")
-)
-
-type windowsACLHeader struct {
-	Revision byte
-	Sbz1     byte
-	Size     uint16
-	ACECount uint16
-	Sbz2     uint16
-}
-
-type windowsACEHeader struct {
-	Type  byte
-	Flags byte
-	Size  uint16
-}
-
-type windowsAllowedACE struct {
-	Header   windowsACEHeader
-	Mask     uint32
-	SIDStart uint32
-}
-
-func fileLinkCount(os.FileInfo) (uint64, bool) {
-	return 0, false
-}
+func fileLinkCount(os.FileInfo) (uint64, bool) { return 0, false }
 
 func rootedFileLinkCount(root *os.Root, name string, before os.FileInfo) (uint64, bool, error) {
 	if err := validatePlatformFileInfo(before); err != nil {
@@ -68,11 +25,8 @@ func rootedFileLinkCount(root *os.Root, name string, before os.FileInfo) (uint64
 	if err != nil {
 		return 0, false, err
 	}
-	if info.FileAttributes&syscall.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-		return 0, false, ErrSymlink
-	}
-	if info.FileAttributes&syscall.FILE_ATTRIBUTE_DIRECTORY != 0 {
-		return 0, false, ErrNotRegular
+	if err := validateWindowsHandleInformation(info, 0, false); err != nil && !errors.Is(err, ErrMultipleLinks) {
+		return 0, false, err
 	}
 	if err := validateWindowsPrivateDACL(file); err != nil {
 		return 0, false, err
@@ -143,7 +97,7 @@ func validateWindowsHandleInformation(info syscall.ByHandleFileInformation, expe
 	if info.FileAttributes&syscall.FILE_ATTRIBUTE_DIRECTORY != 0 {
 		return ErrNotRegular
 	}
-	if uint64(info.NumberOfLinks) != expectedLinks {
+	if expectedLinks != 0 && uint64(info.NumberOfLinks) != expectedLinks {
 		return ErrMultipleLinks
 	}
 	return nil
@@ -165,97 +119,15 @@ func windowsHandleInformation(file *os.File) (syscall.ByHandleFileInformation, e
 }
 
 func validateWindowsPrivateDACL(file *os.File) error {
-	raw, err := file.SyscallConn()
-	if err != nil {
-		return err
-	}
-	var owner, dacl, descriptor unsafe.Pointer
-	var callErr error
-	if err := raw.Control(func(handle uintptr) {
-		result, _, _ := windowsGetSecurityInfo.Call(
-			handle,
-			windowsSEFileObject,
-			windowsOwnerSecurityInformation|windowsDACLInformation,
-			uintptr(unsafe.Pointer(&owner)),
-			0,
-			uintptr(unsafe.Pointer(&dacl)),
-			0,
-			uintptr(unsafe.Pointer(&descriptor)),
-		)
-		if result != 0 {
-			callErr = syscall.Errno(result)
-		}
-	}); err != nil {
-		return err
-	}
-	if callErr != nil {
-		return callErr
-	}
-	if descriptor != nil {
-		defer windowsLocalFree.Call(uintptr(descriptor))
-	}
-	if owner == nil || dacl == nil {
-		return ErrPermissions
-	}
-	systemBuffer, systemSID, err := windowsWellKnownSID(windowsLocalSystemSID)
-	if err != nil {
-		return err
-	}
-	defer runtime.KeepAlive(systemBuffer)
-	administratorsBuffer, administratorsSID, err := windowsWellKnownSID(windowsBuiltinAdministratorsSID)
-	if err != nil {
-		return err
-	}
-	defer runtime.KeepAlive(administratorsBuffer)
-	header := (*windowsACLHeader)(dacl)
-	for index := uint32(0); index < uint32(header.ACECount); index++ {
-		var acePointer unsafe.Pointer
-		result, _, callError := windowsGetAce.Call(uintptr(dacl), uintptr(index), uintptr(unsafe.Pointer(&acePointer)))
-		if result == 0 {
-			if callError != syscall.Errno(0) {
-				return callError
-			}
-			return ErrPermissions
-		}
-		ace := (*windowsAllowedACE)(acePointer)
-		switch ace.Header.Type {
-		case windowsAccessDeniedACE:
-			continue
-		case windowsAccessAllowedACE:
-			sid := unsafe.Pointer(&ace.SIDStart)
-			if windowsSIDsEqual(sid, owner) || windowsSIDsEqual(sid, systemSID) || windowsSIDsEqual(sid, administratorsSID) {
-				continue
-			}
+	if err := privatefs.ValidatePrivateHandle(file); err != nil {
+		switch {
+		case errors.Is(err, privatefs.ErrReparse):
+			return ErrSymlink
+		case errors.Is(err, privatefs.ErrPermissions):
 			return ErrPermissions
 		default:
-			return ErrPermissions
+			return err
 		}
 	}
 	return nil
-}
-
-func windowsWellKnownSID(kind uintptr) ([]byte, unsafe.Pointer, error) {
-	buffer := make([]byte, windowsMaxSIDSize)
-	size := uint32(len(buffer))
-	result, _, callErr := windowsCreateWellKnownSid.Call(
-		kind,
-		0,
-		uintptr(unsafe.Pointer(&buffer[0])),
-		uintptr(unsafe.Pointer(&size)),
-	)
-	if result == 0 {
-		if callErr != syscall.Errno(0) {
-			return nil, nil, callErr
-		}
-		return nil, nil, ErrPermissions
-	}
-	return buffer, unsafe.Pointer(&buffer[0]), nil
-}
-
-func windowsSIDsEqual(first, second unsafe.Pointer) bool {
-	if first == nil || second == nil {
-		return false
-	}
-	result, _, _ := windowsEqualSid.Call(uintptr(first), uintptr(second))
-	return result != 0
 }

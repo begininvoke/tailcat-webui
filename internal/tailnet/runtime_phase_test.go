@@ -5,7 +5,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/ca-x/tailcat-webui/internal/diagnostics"
 	"github.com/ca-x/tailcat-webui/internal/events"
 )
 
@@ -38,8 +37,8 @@ func TestDiagnosticEventsShareOwnerRuntimeSequence(t *testing.T) {
 	stream, unsubscribe := manager.Events("owner-1").Subscribe(3)
 	defer unsubscribe()
 	manager.publish("owner-1", "client", "client-1", RuntimePhaseReady, "")
-	payload := diagnostics.EventPayload{ClientID: "client-1", Kind: diagnostics.RunKindPing, Status: diagnostics.RunStatusRunning, Progress: 40}
-	manager.PublishDiagnostic("owner-1", "run-1", RuntimePhaseRunning, payload)
+	payload := map[string]any{"client_id": "client-1", "kind": "ping", "status": "running", "progress": 40}
+	manager.PublishEvent("owner-1", events.Envelope{Type: "diagnostic", ResourceKind: "diagnostic", ResourceID: "run-1", OperationID: "run-1", Phase: RuntimePhaseRunning, Payload: payload})
 	transferPayload := map[string]any{"job_id": "job-1", "status": "running"}
 	manager.PublishEvent("owner-1", events.Envelope{Type: "transfer", ResourceKind: "transfer", ResourceID: "job-1", OperationID: "job-1", Phase: RuntimePhaseRunning, Payload: transferPayload})
 
@@ -79,5 +78,26 @@ func TestSameOwnerRuntimeEventsFollowSequenceOrder(t *testing.T) {
 		if got := (<-stream).Sequence; got != sequence {
 			t.Fatalf("event sequence = %d, want %d", got, sequence)
 		}
+	}
+}
+
+func TestOwnerEventSequenceSurvivesBrokerRelease(t *testing.T) {
+	manager := &Manager{
+		userEvents:     make(map[string]*events.Broker[events.Envelope]),
+		eventSequences: make(map[string]uint64),
+	}
+	firstStream, unsubscribeFirst := manager.Events("owner-1").Subscribe(1)
+	manager.PublishEvent("owner-1", events.Envelope{Type: "transfer", ResourceKind: "transfer", ResourceID: "job-1"})
+	if event := <-firstStream; event.Sequence != 1 {
+		t.Fatalf("first sequence = %d, want 1", event.Sequence)
+	}
+	unsubscribeFirst()
+	manager.ReleaseEvents("owner-1")
+
+	secondStream, unsubscribeSecond := manager.Events("owner-1").Subscribe(1)
+	defer unsubscribeSecond()
+	manager.PublishEvent("owner-1", events.Envelope{Type: "transfer", ResourceKind: "transfer", ResourceID: "job-1"})
+	if event := <-secondStream; event.Sequence != 2 {
+		t.Fatalf("reconnected sequence = %d, want 2", event.Sequence)
 	}
 }

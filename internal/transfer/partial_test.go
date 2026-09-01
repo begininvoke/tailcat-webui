@@ -40,7 +40,7 @@ func TestPartialFileSupportsBoundedSparseWriteSyncAndRestart(t *testing.T) {
 	if err := partial.Close(); err != nil {
 		t.Fatalf("Close partial: %v", err)
 	}
-	if got := requirePartialUsage(t, storage, ownerID, jobID); got != (QuotaUsage{OwnerBytes: size, ShareBytes: size, ShareFiles: 1}) {
+	if got := requirePartialUsage(t, storage, ownerID, jobID); got != (QuotaUsage{OwnerBytes: size, OwnerFiles: 1, ShareBytes: size, ShareFiles: 1}) {
 		t.Fatalf("partial quota = %+v", got)
 	}
 	if err := storage.Close(); err != nil {
@@ -65,7 +65,7 @@ func TestPartialFileSupportsBoundedSparseWriteSyncAndRestart(t *testing.T) {
 	if err := partial.Close(); err != nil {
 		t.Fatalf("Close repaired partial: %v", err)
 	}
-	if got := requirePartialUsage(t, reopened, ownerID, jobID); got != (QuotaUsage{OwnerBytes: size, ShareBytes: size, ShareFiles: 1}) {
+	if got := requirePartialUsage(t, reopened, ownerID, jobID); got != (QuotaUsage{OwnerBytes: size, OwnerFiles: 1, ShareBytes: size, ShareFiles: 1}) {
 		t.Fatalf("restart quota = %+v", got)
 	}
 	if err := reopened.Remove(t.Context(), ownerID, jobID, name); err != nil {
@@ -163,7 +163,7 @@ func TestCleanupOrphansKeepsMetadataIdentitiesAndRemovesUntrackedFinals(t *testi
 	if _, err := storage.Open(t.Context(), ownerID, jobID, orphanName); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("orphan file error = %v, want not exist", err)
 	}
-	if got := requirePartialUsage(t, storage, ownerID, jobID); got != (QuotaUsage{OwnerBytes: 2, ShareBytes: 2, ShareFiles: 1}) {
+	if got := requirePartialUsage(t, storage, ownerID, jobID); got != (QuotaUsage{OwnerBytes: 2, OwnerFiles: 1, ShareBytes: 2, ShareFiles: 1}) {
 		t.Fatalf("quota after orphan cleanup = %+v", got)
 	}
 }

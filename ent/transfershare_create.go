@@ -55,6 +55,20 @@ func (_c *TransferShareCreate) SetCapabilityHash(v []byte) *TransferShareCreate 
 	return _c
 }
 
+// SetCapabilityGeneration sets the "capability_generation" field.
+func (_c *TransferShareCreate) SetCapabilityGeneration(v int) *TransferShareCreate {
+	_c.mutation.SetCapabilityGeneration(v)
+	return _c
+}
+
+// SetNillableCapabilityGeneration sets the "capability_generation" field if the given value is not nil.
+func (_c *TransferShareCreate) SetNillableCapabilityGeneration(v *int) *TransferShareCreate {
+	if v != nil {
+		_c.SetCapabilityGeneration(*v)
+	}
+	return _c
+}
+
 // SetTotalBytes sets the "total_bytes" field.
 func (_c *TransferShareCreate) SetTotalBytes(v int64) *TransferShareCreate {
 	_c.mutation.SetTotalBytes(v)
@@ -243,6 +257,10 @@ func (_c *TransferShareCreate) defaults() {
 		v := transfershare.DefaultStatus
 		_c.mutation.SetStatus(v)
 	}
+	if _, ok := _c.mutation.CapabilityGeneration(); !ok {
+		v := transfershare.DefaultCapabilityGeneration
+		_c.mutation.SetCapabilityGeneration(v)
+	}
 	if _, ok := _c.mutation.TotalBytes(); !ok {
 		v := transfershare.DefaultTotalBytes
 		_c.mutation.SetTotalBytes(v)
@@ -287,6 +305,14 @@ func (_c *TransferShareCreate) check() error {
 	if v, ok := _c.mutation.CapabilityHash(); ok {
 		if err := transfershare.CapabilityHashValidator(v); err != nil {
 			return &ValidationError{Name: "capability_hash", err: fmt.Errorf(`ent: validator failed for field "TransferShare.capability_hash": %w`, err)}
+		}
+	}
+	if _, ok := _c.mutation.CapabilityGeneration(); !ok {
+		return &ValidationError{Name: "capability_generation", err: errors.New(`ent: missing required field "TransferShare.capability_generation"`)}
+	}
+	if v, ok := _c.mutation.CapabilityGeneration(); ok {
+		if err := transfershare.CapabilityGenerationValidator(v); err != nil {
+			return &ValidationError{Name: "capability_generation", err: fmt.Errorf(`ent: validator failed for field "TransferShare.capability_generation": %w`, err)}
 		}
 	}
 	if _, ok := _c.mutation.TotalBytes(); !ok {
@@ -367,6 +393,10 @@ func (_c *TransferShareCreate) createSpec() (*TransferShare, *sqlgraph.CreateSpe
 	if value, ok := _c.mutation.CapabilityHash(); ok {
 		_spec.SetField(transfershare.FieldCapabilityHash, field.TypeBytes, value)
 		_node.CapabilityHash = value
+	}
+	if value, ok := _c.mutation.CapabilityGeneration(); ok {
+		_spec.SetField(transfershare.FieldCapabilityGeneration, field.TypeInt, value)
+		_node.CapabilityGeneration = value
 	}
 	if value, ok := _c.mutation.TotalBytes(); ok {
 		_spec.SetField(transfershare.FieldTotalBytes, field.TypeInt64, value)

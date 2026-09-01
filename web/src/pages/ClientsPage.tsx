@@ -15,6 +15,7 @@ interface ClientFormValues { name: string; server: string; derp_map_url?: string
 interface DiagnosticFormValues { client_id: string; kind: 'ping' | 'throughput'; duration_ms: number; bytes: number }
 
 const diagnosticRefreshDelayMS = 100
+const diagnosticReconcileIntervalMS = 2000
 const diagnosticLiveUpdateLimit = 100
 
 function integerInRange(minimum: number, maximum: number, message: string) {
@@ -96,10 +97,16 @@ export default function ClientsPage() {
   const [form] = Form.useForm<ClientFormValues>()
   const [diagnosticForm] = Form.useForm<DiagnosticFormValues>()
   const resource = useAsyncResource(api.clients)
-  const diagnostics = useAsyncResource(api.diagnostics, { refreshOnRuntime: false })
+  const diagnostics = useAsyncResource(api.diagnostics, { refreshOnRuntime: false, refreshOnStreamOpen: true })
   const setDiagnosticsData = diagnostics.setData
   const diagnosticsRefresh = useRef(diagnostics.refresh)
   useEffect(() => { diagnosticsRefresh.current = diagnostics.refresh }, [diagnostics.refresh])
+  useEffect(() => {
+    const active = diagnostics.data?.some((run) => run.status === 'running') || Object.values(liveUpdates).some((update) => update.status === 'running')
+    if (!active) return
+    const timer = window.setInterval(() => diagnosticsRefresh.current({ silent: true }), diagnosticReconcileIntervalMS)
+    return () => window.clearInterval(timer)
+  }, [diagnostics.data, liveUpdates])
   useEffect(() => {
     const authoritativeTerminalIDs = diagnostics.data?.filter((run) => run.status !== 'running').map((run) => run.id) ?? []
     if (authoritativeTerminalIDs.length === 0) return

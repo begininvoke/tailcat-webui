@@ -32,9 +32,11 @@ const (
 	MaxManifestResponseBytes = 8 << 20
 	// A range response is exactly one manifest block, including the shorter
 	// final block, and can therefore never exceed eight MiB.
-	MaxRangeResponseBytes  = int(BlockSize)
-	maxErrorResponseBytes  = 512
-	protocolRequestTimeout = 30 * time.Second
+	MaxRangeResponseBytes     = int(BlockSize)
+	maxErrorResponseBytes     = 512
+	protocolHandshakeTimeout  = 10 * time.Second
+	protocolInactivityTimeout = 30 * time.Second
+	protocolStreamBufferBytes = 32 << 10
 
 	capabilityPrefix       = "tcs1."
 	capabilitySecretBytes  = 32
@@ -397,6 +399,26 @@ func writeSuccessResponse(ctx context.Context, conn net.Conn, payload []byte, ma
 	return writeResponseFrame(ctx, conn, responseStatusSuccess, payload)
 }
 
+func writeSuccessStream(ctx context.Context, writer io.Writer, payloadSize int64, reader io.Reader, maxPayload int64) error {
+	if payloadSize < 0 || payloadSize > maxPayload || payloadSize > int64(^uint32(0))-1 {
+		return protocolError(CodeLimitExceeded, errors.New("success response exceeds limit"))
+	}
+	var prefix [5]byte
+	binary.BigEndian.PutUint32(prefix[:4], uint32(payloadSize+1))
+	prefix[4] = responseStatusSuccess
+	if err := writeAll(ctx, writer, prefix[:]); err != nil {
+		return err
+	}
+	written, err := io.CopyBuffer(writer, io.LimitReader(reader, payloadSize), make([]byte, protocolStreamBufferBytes))
+	if err != nil {
+		return classifyProtocolIO(ctx, err)
+	}
+	if written != payloadSize {
+		return protocolError(CodeRemoteUnavailable, io.ErrUnexpectedEOF)
+	}
+	return nil
+}
+
 func writeErrorResponse(ctx context.Context, conn net.Conn, code ErrorCode) error {
 	if !code.valid() {
 		code = CodeProtocolInvalid
@@ -507,7 +529,38 @@ func classifyProtocolIO(ctx context.Context, err error) error {
 		}
 		return protocolError(CodeRemoteUnavailable, cause)
 	}
-	return protocolError(CodeProtocolInvalid, err)
+	return protocolError(CodeRemoteUnavailable, err)
+}
+
+type progressConn struct {
+	net.Conn
+	inactivity time.Duration
+}
+
+func (connection *progressConn) Read(buffer []byte) (int, error) {
+	if err := connection.refreshDeadline(); err != nil {
+		return 0, err
+	}
+	read, err := connection.Conn.Read(buffer)
+	if read > 0 {
+		_ = connection.refreshDeadline()
+	}
+	return read, err
+}
+
+func (connection *progressConn) Write(buffer []byte) (int, error) {
+	if err := connection.refreshDeadline(); err != nil {
+		return 0, err
+	}
+	written, err := connection.Conn.Write(buffer)
+	if written > 0 {
+		_ = connection.refreshDeadline()
+	}
+	return written, err
+}
+
+func (connection *progressConn) refreshDeadline() error {
+	return connection.Conn.SetDeadline(time.Now().Add(connection.inactivity))
 }
 
 type manifestWire struct {
@@ -634,25 +687,36 @@ func executeProtocolRequest(ctx context.Context, dial protocolDial, request wire
 	if dial == nil {
 		return nil, protocolError(CodeRemoteUnavailable, errors.New("nil transfer dialer"))
 	}
-	requestCtx, cancel := context.WithTimeoutCause(ctx, protocolRequestTimeout, protocolError(CodeRemoteUnavailable, errors.New("transfer request timed out")))
-	defer cancel()
-	conn, err := dial(requestCtx)
+	dialCtx, cancelDial := context.WithCancelCause(ctx)
+	dialTimer := time.AfterFunc(protocolHandshakeTimeout, func() {
+		cancelDial(protocolError(CodeRemoteUnavailable, errors.New("transfer dial timed out")))
+	})
+	conn, err := dial(dialCtx)
 	if err != nil {
+		dialTimer.Stop()
+		cancelDial(nil)
 		return nil, protocolError(CodeRemoteUnavailable, err)
 	}
+	if !dialTimer.Stop() && context.Cause(dialCtx) != nil {
+		cancelDial(nil)
+		if conn != nil {
+			_ = conn.Close()
+		}
+		return nil, protocolError(CodeRemoteUnavailable, context.Cause(dialCtx))
+	}
+	defer cancelDial(nil)
 	if conn == nil {
 		return nil, protocolError(CodeRemoteUnavailable, errors.New("transfer dialer returned nil connection"))
 	}
 	defer conn.Close()
-	stop := context.AfterFunc(requestCtx, func() { _ = conn.Close() })
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stop()
-	if deadline, ok := requestCtx.Deadline(); ok {
-		if err := conn.SetDeadline(deadline); err != nil {
-			return nil, protocolError(CodeRemoteUnavailable, err)
-		}
+	if err := conn.SetDeadline(time.Now().Add(protocolHandshakeTimeout)); err != nil {
+		return nil, protocolError(CodeRemoteUnavailable, err)
 	}
-	if err := writeRequest(requestCtx, conn, request); err != nil {
+	if err := writeRequest(ctx, conn, request); err != nil {
 		return nil, err
 	}
-	return readResponse(requestCtx, conn, maxResponse)
+	progress := &progressConn{Conn: conn, inactivity: protocolInactivityTimeout}
+	return readResponse(ctx, progress, maxResponse)
 }

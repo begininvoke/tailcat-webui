@@ -23,6 +23,8 @@ import (
 	"github.com/ca-x/tailcat-webui/ent"
 	"github.com/ca-x/tailcat-webui/ent/auditevent"
 	"github.com/ca-x/tailcat-webui/ent/enttest"
+	"github.com/ca-x/tailcat-webui/ent/tailclient"
+	"github.com/ca-x/tailcat-webui/ent/tailserver"
 	"github.com/ca-x/tailcat-webui/ent/transferitem"
 	"github.com/ca-x/tailcat-webui/ent/transferjob"
 	"github.com/ca-x/tailcat-webui/ent/transfershare"
@@ -112,6 +114,31 @@ func TestServiceRejectsNilDependencies(t *testing.T) {
 	}
 }
 
+func TestReservedHandlerHasIndependentBoundedAdmission(t *testing.T) {
+	db, storage, box, _, server, _ := newTransferServiceData(t)
+	service := newTransferServiceForTest(t, db, storage, box)
+	if cap(service.handlerSlots) != 16 {
+		t.Fatalf("transfer handler admission = %d, want 16", cap(service.handlerSlots))
+	}
+	for range cap(service.handlerSlots) {
+		service.handlerSlots <- struct{}{}
+	}
+	client, peer := net.Pipe()
+	done := make(chan struct{})
+	go func() {
+		service.ReservedHandler(server.ID)(t.Context(), peer)
+		close(done)
+	}()
+	if _, err := client.Read(make([]byte, 1)); err == nil {
+		t.Fatal("over-capacity transfer handler left its connection open")
+	}
+	<-done
+	for range cap(service.handlerSlots) {
+		<-service.handlerSlots
+	}
+	_ = client.Close()
+}
+
 func TestServiceRequiresExactlyFourWorkers(t *testing.T) {
 	db, storage, box, _, _, _ := newTransferServiceData(t)
 	dialer := transferDialerFunc(func(context.Context, string, string, uint16) (net.Conn, error) { return nil, errors.New("unused") })
@@ -125,6 +152,76 @@ func TestServiceRequiresExactlyFourWorkers(t *testing.T) {
 			_ = service.Close()
 			t.Errorf("NewServiceWithLimits accepted %d workers", workers)
 		}
+	}
+}
+
+func TestOwnerWideRetainedShareAndJobCapsAreAtomic(t *testing.T) {
+	db, storage, box, owner, server, _ := newTransferServiceData(t)
+	client := db.TailClient.Create().SetUserID(owner.ID).SetName("object-cap-client").SetServerTokenCipher([]byte("cipher")).SetTokenHint("hint").SaveX(t.Context())
+	limits := DefaultServiceLimits()
+	limits.MaxSharesPerOwner = 1
+	limits.MaxRetainedJobsPerOwner = 1
+	var service *Service
+	dialer := transferDialerFunc(func(ctx context.Context, gotOwnerID, gotClientID string, port uint16) (net.Conn, error) {
+		if gotOwnerID != owner.ID || gotClientID != client.ID || port != ReservedPort {
+			return nil, errors.New("unexpected transfer dial target")
+		}
+		return handlerDial(t, service.ReservedHandler(server.ID))(ctx)
+	})
+	var err error
+	service, err = NewServiceWithLimits(t.Context(), db, storage, box, dialer,
+		transferAuditFunc(func(context.Context, audit.Entry) error { return nil }),
+		transferPublisherFunc(func(string, events.Envelope) {}),
+		slog.New(slog.NewTextHandler(io.Discard, nil)), limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = service.Close() })
+
+	const attempts = 8
+	start := make(chan struct{})
+	errorsCh := make(chan error, attempts)
+	var wg sync.WaitGroup
+	for range attempts {
+		wg.Go(func() {
+			<-start
+			_, err := service.CreateShare(t.Context(), owner.ID, CreateShareInput{ServerID: server.ID})
+			errorsCh <- err
+		})
+	}
+	close(start)
+	wg.Wait()
+	close(errorsCh)
+	created, rejected := 0, 0
+	for err := range errorsCh {
+		switch {
+		case err == nil:
+			created++
+		case errors.Is(err, ErrOwnerCapacity):
+			rejected++
+		default:
+			t.Fatalf("CreateShare error = %v", err)
+		}
+	}
+	if created != 1 || rejected != attempts-1 {
+		t.Fatalf("concurrent shares created=%d rejected=%d", created, rejected)
+	}
+	share := db.TransferShare.Query().Where(transfershare.UserIDEQ(owner.ID)).OnlyX(t.Context())
+	if _, err := service.StageFile(t.Context(), owner.ID, share.ID, StageFileInput{VirtualPath: "cap.txt", Size: 1, Body: io.NopCloser(strings.NewReader("x"))}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.FinalizeShare(t.Context(), owner.ID, share.ID); err != nil {
+		t.Fatal(err)
+	}
+	capability, err := service.RotateShare(t.Context(), owner.ID, share.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.CreateIncomingJob(t.Context(), owner.ID, CreateIncomingJobInput{ClientID: client.ID, Capability: capability}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.CreateIncomingJob(t.Context(), owner.ID, CreateIncomingJobInput{ClientID: client.ID, Capability: capability}); !errors.Is(err, ErrOwnerCapacity) {
+		t.Fatalf("second retained job error = %v, want owner capacity", err)
 	}
 }
 
@@ -439,6 +536,228 @@ func TestServiceRejectsCrossOwnerShareServerFileClientAndJobIDs(t *testing.T) {
 		if err := call(); !errors.Is(err, ErrNotFound) {
 			t.Fatalf("cross-owner job %s error = %v, want not found", name, err)
 		}
+	}
+}
+
+func TestParentScopedCleanupHidesOwnersAndRemovesMetadataBytesAndQuota(t *testing.T) {
+	db, storage, box, owner, server, _ := newTransferServiceData(t)
+	client := db.TailClient.Create().SetUserID(owner.ID).SetName("cleanup-client").SetServerTokenCipher([]byte("cipher")).SetTokenHint("hint").SaveX(t.Context())
+	other := db.User.Create().SetIssuer("test").SetSubject(t.Name() + "-other-parent").SaveX(t.Context())
+	service := newLoopbackTransferService(t, db, storage, box, owner.ID, client.ID, server.ID)
+	share, err := service.CreateShare(t.Context(), owner.ID, CreateShareInput{ServerID: server.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.StageFile(t.Context(), owner.ID, share.ID, StageFileInput{VirtualPath: "parent.txt", Size: 3, Body: io.NopCloser(strings.NewReader("abc"))}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.FinalizeShare(t.Context(), owner.ID, share.ID); err != nil {
+		t.Fatal(err)
+	}
+	job, err := service.CreateIncomingJob(t.Context(), owner.ID, CreateIncomingJobInput{ClientID: client.ID, Capability: share.Capability})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.DeleteServerResources(t.Context(), other.ID, server.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cross-owner server cleanup error = %v, want not found", err)
+	}
+	if err := service.DeleteClientResources(t.Context(), other.ID, client.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cross-owner client cleanup error = %v, want not found", err)
+	}
+	if err := service.DeleteServerResources(t.Context(), owner.ID, server.ID); err != nil {
+		t.Fatalf("DeleteServerResources: %v", err)
+	}
+	if db.TransferShare.Query().Where(transfershare.IDEQ(share.ID)).ExistX(t.Context()) {
+		t.Fatal("server cleanup retained dependent share metadata")
+	}
+	if !db.TailServer.Query().Where(tailserver.IDEQ(server.ID)).ExistX(t.Context()) {
+		t.Fatal("server cleanup deleted the parent row")
+	}
+	if err := service.DeleteClientResources(t.Context(), owner.ID, client.ID); err != nil {
+		t.Fatalf("DeleteClientResources: %v", err)
+	}
+	if db.TransferJob.Query().Where(transferjob.IDEQ(job.ID)).ExistX(t.Context()) {
+		t.Fatal("client cleanup retained dependent job metadata")
+	}
+	if !db.TailClient.Query().Where(tailclient.IDEQ(client.ID)).ExistX(t.Context()) {
+		t.Fatal("client cleanup deleted the parent row")
+	}
+	usage, err := storage.Usage(t.Context(), owner.ID, share.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage.OwnerBytes != 0 || usage.ShareBytes != 0 {
+		t.Fatalf("usage after parent cleanup = %+v, want zero", usage)
+	}
+}
+
+func TestExpirySchedulerDeletesIdleShareAndCompletedJobWithoutAccessOrRestart(t *testing.T) {
+	db, storage, box, owner, server, _ := newTransferServiceData(t)
+	client := db.TailClient.Create().SetUserID(owner.ID).SetName("expiry-client").SetServerTokenCipher([]byte("cipher")).SetTokenHint("hint").SaveX(t.Context())
+	service := newLoopbackTransferService(t, db, storage, box, owner.ID, client.ID, server.ID)
+	expiresAt := time.Now().Add(250 * time.Millisecond)
+
+	idleShare, err := service.CreateShare(t.Context(), owner.ID, CreateShareInput{ServerID: server.ID, ExpiresAt: expiresAt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.StageFile(t.Context(), owner.ID, idleShare.ID, StageFileInput{VirtualPath: "idle.txt", Size: 3, Body: io.NopCloser(strings.NewReader("abc"))}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.FinalizeShare(t.Context(), owner.ID, idleShare.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	jobShare, err := service.CreateShare(t.Context(), owner.ID, CreateShareInput{ServerID: server.ID, ExpiresAt: expiresAt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.StageFile(t.Context(), owner.ID, jobShare.ID, StageFileInput{VirtualPath: "job.txt", Size: 3, Body: io.NopCloser(strings.NewReader("xyz"))}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.FinalizeShare(t.Context(), owner.ID, jobShare.ID); err != nil {
+		t.Fatal(err)
+	}
+	job, err := service.CreateIncomingJob(t.Context(), owner.ID, CreateIncomingJobInput{ClientID: client.ID, Capability: jobShare.Capability, ExpiresAt: expiresAt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.StartJob(t.Context(), owner.ID, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitForTransferJobStatus(t, db, job.ID, transferjob.StatusCompleted)
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		shareExists := db.TransferShare.Query().Where(transfershare.IDEQ(idleShare.ID)).ExistX(t.Context())
+		jobExists := db.TransferJob.Query().Where(transferjob.IDEQ(job.ID)).ExistX(t.Context())
+		if !shareExists && !jobExists {
+			usage, err := storage.Usage(t.Context(), owner.ID, idleShare.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if usage.OwnerBytes != 0 {
+				t.Fatalf("owner usage after expiry = %+v, want zero", usage)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("expiry scheduler retained idle share=%v completed job=%v", db.TransferShare.Query().Where(transfershare.IDEQ(idleShare.ID)).ExistX(t.Context()), db.TransferJob.Query().Where(transferjob.IDEQ(job.ID)).ExistX(t.Context()))
+}
+
+func TestExpirySchedulerUsesLowerConfiguredLifetimeWithoutRecoveryCall(t *testing.T) {
+	db, storage, box, owner, server, _ := newTransferServiceData(t)
+	client := db.TailClient.Create().SetUserID(owner.ID).SetName("lower-expiry-client").SetServerTokenCipher([]byte("cipher")).SetTokenHint("hint").SaveX(t.Context())
+	now := time.Now()
+	oldCreatedAt := now.Add(-time.Hour)
+	share := db.TransferShare.Create().
+		SetID(newEntityID()).
+		SetUserID(owner.ID).
+		SetServerID(server.ID).
+		SetCapabilityHash(bytes.Repeat([]byte{1}, 32)).
+		SetExpiresAt(now.Add(23 * time.Hour).UTC()).
+		SetCreatedAt(oldCreatedAt).
+		SaveX(t.Context())
+	job := db.TransferJob.Create().
+		SetID(newEntityID()).
+		SetUserID(owner.ID).
+		SetClientID(client.ID).
+		SetRemoteShareID(share.ID).
+		SetRemoteCapabilityCipher([]byte("cipher")).
+		SetExpiresAt(now.Add(23 * time.Hour).UTC()).
+		SetCreatedAt(oldCreatedAt).
+		SaveX(t.Context())
+	decoy := db.TransferShare.Create().
+		SetID(newEntityID()).
+		SetUserID(owner.ID).
+		SetServerID(server.ID).
+		SetCapabilityHash(bytes.Repeat([]byte{2}, 32)).
+		SetExpiresAt(now.Add(time.Hour).UTC()).
+		SetCreatedAt(now).
+		SaveX(t.Context())
+	decoyJob := db.TransferJob.Create().
+		SetID(newEntityID()).
+		SetUserID(owner.ID).
+		SetClientID(client.ID).
+		SetRemoteShareID(decoy.ID).
+		SetRemoteCapabilityCipher([]byte("cipher")).
+		SetExpiresAt(now.Add(time.Hour).UTC()).
+		SetCreatedAt(now).
+		SaveX(t.Context())
+
+	limits := DefaultServiceLimits()
+	limits.Expiry = 30 * time.Minute
+	restarted, err := NewServiceWithLimits(t.Context(), db, storage, box,
+		transferDialerFunc(func(context.Context, string, string, uint16) (net.Conn, error) { return nil, errors.New("unused") }),
+		transferAuditFunc(func(context.Context, audit.Entry) error { return nil }),
+		transferPublisherFunc(func(string, events.Envelope) {}),
+		slog.New(slog.NewTextHandler(io.Discard, nil)), limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = restarted.Close() })
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		shareExists := db.TransferShare.Query().Where(transfershare.IDEQ(share.ID)).ExistX(t.Context())
+		jobExists := db.TransferJob.Query().Where(transferjob.IDEQ(job.ID)).ExistX(t.Context())
+		if !shareExists && !jobExists {
+			if !db.TransferShare.Query().Where(transfershare.IDEQ(decoy.ID)).ExistX(t.Context()) {
+				t.Fatal("expiry scheduler removed later decoy share")
+			}
+			if !db.TransferJob.Query().Where(transferjob.IDEQ(decoyJob.ID)).ExistX(t.Context()) {
+				t.Fatal("expiry scheduler removed later decoy job")
+			}
+			usage, err := storage.Usage(t.Context(), owner.ID, share.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if usage != (QuotaUsage{}) {
+				t.Fatalf("owner usage after lower effective expiry = %+v, want zero", usage)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("lower effective expiry retained share=%v job=%v", db.TransferShare.Query().Where(transfershare.IDEQ(share.ID)).ExistX(t.Context()), db.TransferJob.Query().Where(transferjob.IDEQ(job.ID)).ExistX(t.Context()))
+}
+
+func TestDeleteJobClosesAndJoinsCompletedItemReadLease(t *testing.T) {
+	db, storage, box, owner, server, _ := newTransferServiceData(t)
+	client := db.TailClient.Create().SetUserID(owner.ID).SetName("lease-client").SetServerTokenCipher([]byte("cipher")).SetTokenHint("hint").SaveX(t.Context())
+	service := newLoopbackTransferService(t, db, storage, box, owner.ID, client.ID, server.ID)
+	share, err := service.CreateShare(t.Context(), owner.ID, CreateShareInput{ServerID: server.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.StageFile(t.Context(), owner.ID, share.ID, StageFileInput{VirtualPath: "lease.txt", Size: 3, Body: io.NopCloser(strings.NewReader("abc"))}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.FinalizeShare(t.Context(), owner.ID, share.ID); err != nil {
+		t.Fatal(err)
+	}
+	job, err := service.CreateIncomingJob(t.Context(), owner.ID, CreateIncomingJobInput{ClientID: client.ID, Capability: share.Capability})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.StartJob(t.Context(), owner.ID, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitForTransferJobStatus(t, db, job.ID, transferjob.StatusCompleted)
+	item := db.TransferItem.Query().Where(transferitem.JobIDEQ(job.ID)).OnlyX(t.Context())
+	opened, err := service.OpenCompletedItem(t.Context(), owner.ID, job.ID, item.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := service.DeleteJob(t.Context(), owner.ID, job.ID); err != nil {
+		t.Fatalf("DeleteJob: %v", err)
+	}
+	if _, err := opened.Handle.ReadAt(make([]byte, 1), 0); err == nil {
+		t.Fatal("completed read handle remained readable after successful deletion")
+	}
+	if err := opened.Handle.Close(); err != nil {
+		t.Fatalf("idempotent lease close: %v", err)
 	}
 }
 
@@ -876,6 +1195,105 @@ func TestRotationReopensCommittedGenerationAfterCallerCancellation(t *testing.T)
 	}
 }
 
+func TestFinalizeAndEachRotationHaveDistinctAtomicAuditOccurrences(t *testing.T) {
+	db, storage, box, owner, server, _ := newTransferServiceData(t)
+	auditor, err := audit.NewService(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewService(t.Context(), db, storage, box,
+		transferDialerFunc(func(context.Context, string, string, uint16) (net.Conn, error) { return nil, errors.New("unused") }),
+		auditor, transferPublisherFunc(func(string, events.Envelope) {}), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = service.Close() })
+	share, err := service.CreateShare(t.Context(), owner.ID, CreateShareInput{ServerID: server.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.StageFile(t.Context(), owner.ID, share.ID, StageFileInput{VirtualPath: "audit.txt", Size: 1, Body: io.NopCloser(strings.NewReader("x"))}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.FinalizeShare(t.Context(), owner.ID, share.ID); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if _, err := service.RotateShare(t.Context(), owner.ID, share.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if count := db.AuditEvent.Query().Where(auditevent.UserIDEQ(owner.ID), auditevent.ActionEQ("transfer.finalize")).CountX(t.Context()); count != 1 {
+		t.Fatalf("finalize audits = %d, want 1", count)
+	}
+	if count := db.AuditEvent.Query().Where(auditevent.UserIDEQ(owner.ID), auditevent.ActionEQ("transfer.rotate")).CountX(t.Context()); count != 2 {
+		t.Fatalf("rotation audits = %d, want 2", count)
+	}
+}
+
+func TestInitialRetryAndTerminalAuditsUseDurableAttemptOccurrences(t *testing.T) {
+	db, storage, box, owner, server, _ := newTransferServiceData(t)
+	client := db.TailClient.Create().SetUserID(owner.ID).SetName("attempt-client").SetServerTokenCipher([]byte("cipher")).SetTokenHint("hint").SaveX(t.Context())
+	auditor, err := audit.NewService(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var failDial atomic.Bool
+	var service *Service
+	dialer := transferDialerFunc(func(ctx context.Context, _, _ string, port uint16) (net.Conn, error) {
+		if port != ReservedPort {
+			return nil, errors.New("wrong port")
+		}
+		if failDial.Load() {
+			return nil, errors.New("offline")
+		}
+		return handlerDial(t, service.ReservedHandler(server.ID))(ctx)
+	})
+	service, err = NewService(t.Context(), db, storage, box, dialer, auditor, transferPublisherFunc(func(string, events.Envelope) {}), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = service.Close() })
+	share, err := service.CreateShare(t.Context(), owner.ID, CreateShareInput{ServerID: server.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.StageFile(t.Context(), owner.ID, share.ID, StageFileInput{VirtualPath: "attempt.txt", Size: 1, Body: io.NopCloser(strings.NewReader("x"))}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.FinalizeShare(t.Context(), owner.ID, share.ID); err != nil {
+		t.Fatal(err)
+	}
+	job, err := service.CreateIncomingJob(t.Context(), owner.ID, CreateIncomingJobInput{ClientID: client.ID, Capability: share.Capability})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failDial.Store(true)
+	if _, err := service.StartJob(t.Context(), owner.ID, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitForTransferJobStatus(t, db, job.ID, transferjob.StatusFailed)
+	failDial.Store(false)
+	if _, err := service.RetryJob(t.Context(), owner.ID, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitForTransferJobStatus(t, db, job.ID, transferjob.StatusCompleted)
+	for action, want := range map[string]int{
+		"transfer.start":    1,
+		"transfer.retry":    1,
+		"transfer.fail":     1,
+		"transfer.complete": 1,
+	} {
+		if count := db.AuditEvent.Query().Where(auditevent.UserIDEQ(owner.ID), auditevent.ResourceIDEQ(job.ID), auditevent.ActionEQ(action)).CountX(t.Context()); count != want {
+			t.Fatalf("%s audits = %d, want %d", action, count, want)
+		}
+	}
+	row := db.TransferJob.GetX(t.Context(), job.ID)
+	if row.Attempt != 2 || row.AttemptKind != transferjob.AttemptKindRetry {
+		t.Fatalf("durable attempt = %d/%s, want 2/retry", row.Attempt, row.AttemptKind)
+	}
+}
+
 func TestRotationDoesNotReopenOrReturnSecretAfterLaterGenerationWins(t *testing.T) {
 	db, storage, box, owner, server, _ := newTransferServiceData(t)
 	service := newTransferServiceForTest(t, db, storage, box)
@@ -1155,7 +1573,6 @@ func TestRecoveryExpiredShareAndJobAuditCommitFailuresRemainRetryable(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(time.Until(expiresAt) + 10*time.Millisecond)
 	commitFailure := errors.New("injected expiry audit commit failure")
 	service.lifecycleHooks.beforeCommit = func(operation string) error {
 		if operation == "share.expire" || operation == "job.expire" {
@@ -1163,6 +1580,7 @@ func TestRecoveryExpiredShareAndJobAuditCommitFailuresRemainRetryable(t *testing
 		}
 		return nil
 	}
+	time.Sleep(time.Until(expiresAt) + 10*time.Millisecond)
 	if err := service.RecoverAfterRestore(t.Context()); !errors.Is(err, commitFailure) {
 		t.Fatalf("RecoverAfterRestore error = %v, want commit failure", err)
 	}
@@ -1172,6 +1590,8 @@ func TestRecoveryExpiredShareAndJobAuditCommitFailuresRemainRetryable(t *testing
 	if status := db.TransferJob.GetX(t.Context(), job.ID).Status; status != transferjob.StatusDeleting {
 		t.Fatalf("expired job status = %s, want deleting", status)
 	}
+	service.cancelExpiry(errServiceClosed)
+	service.wg.Wait()
 	service.lifecycleHooks.beforeCommit = nil
 	if err := service.DeleteShare(t.Context(), owner.ID, share.ID); err != nil {
 		t.Fatalf("public retry DeleteShare: %v", err)
@@ -2084,6 +2504,41 @@ func TestRecoveryManagedDialFailureRequeuesAndCompletesWithoutManualRetry(t *tes
 	}
 	if runningEvents.Load() != 1 {
 		t.Fatalf("managed-retry running/progress events = %d, want 1 within one second", runningEvents.Load())
+	}
+}
+
+func TestManagedResumeBackoffGrowsAcrossRunCyclesAndResetsOnProgress(t *testing.T) {
+	now := time.Unix(1000, 0)
+	service := &Service{
+		closed:      true,
+		resumeQueue: make(map[string][]*queuedResume), resumeScheduling: make(map[string]bool),
+		resumeFailures: make(map[string]int), ownerJobs: make(map[string]int),
+		resumeNow: func() time.Time { return now }, resumeJitter: func(delay time.Duration) time.Duration { return delay },
+		queueWake: make(chan struct{}, 1),
+	}
+	const ownerID = "owner"
+	const jobID = "job"
+	service.requeueManagedResume(ownerID, jobID)
+	first := service.resumeQueue[ownerID][0]
+	if first.failures != 1 || first.nextAttempt.Sub(now) != time.Second {
+		t.Fatalf("first backoff = failures %d delay %s", first.failures, first.nextAttempt.Sub(now))
+	}
+	service.mu.Lock()
+	removeQueuedResumeLocked(service, ownerID, first)
+	service.mu.Unlock()
+	service.requeueManagedResume(ownerID, jobID)
+	second := service.resumeQueue[ownerID][0]
+	if second.failures != 2 || second.nextAttempt.Sub(now) != 2*time.Second {
+		t.Fatalf("second backoff = failures %d delay %s", second.failures, second.nextAttempt.Sub(now))
+	}
+	service.resetManagedResumeFailures(jobID)
+	service.mu.Lock()
+	removeQueuedResumeLocked(service, ownerID, second)
+	service.mu.Unlock()
+	service.requeueManagedResume(ownerID, jobID)
+	reset := service.resumeQueue[ownerID][0]
+	if reset.failures != 1 || reset.nextAttempt.Sub(now) != time.Second {
+		t.Fatalf("reset backoff = failures %d delay %s", reset.failures, reset.nextAttempt.Sub(now))
 	}
 }
 

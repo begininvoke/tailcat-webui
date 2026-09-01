@@ -2,10 +2,10 @@
 import { act, render, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { useAsyncResource } from './useAsyncResource'
-import { runtimeRefreshEvent } from './useRuntimeEvents'
+import { runtimeRefreshEvent, runtimeStreamOpenEvent } from './useRuntimeEvents'
 
-function Harness({ load, refreshOnRuntime }: { load: () => Promise<string>; refreshOnRuntime: boolean }) {
-  useAsyncResource(load, { refreshOnRuntime })
+function Harness({ load, refreshOnRuntime, refreshOnStreamOpen = false }: { load: () => Promise<string>; refreshOnRuntime: boolean; refreshOnStreamOpen?: boolean }) {
+  useAsyncResource(load, { refreshOnRuntime, refreshOnStreamOpen })
   return null
 }
 
@@ -31,6 +31,15 @@ describe('useAsyncResource', () => {
     act(() => window.dispatchEvent(new Event(runtimeRefreshEvent)))
     await waitFor(() => expect(defaultLoad).toHaveBeenCalledTimes(2))
     expect(focusedLoad).toHaveBeenCalledTimes(1)
+  })
+
+  it('lets focused resources reconcile from the API on every SSE open', async () => {
+    const load = vi.fn(async () => 'focused')
+    render(<Harness load={load} refreshOnRuntime={false} refreshOnStreamOpen />)
+    await waitFor(() => expect(load).toHaveBeenCalledTimes(1))
+
+    act(() => window.dispatchEvent(new Event(runtimeStreamOpenEvent)))
+    await waitFor(() => expect(load).toHaveBeenCalledTimes(2))
   })
 
   it('rejects a stale resource completion after a silent refresh', async () => {

@@ -43,6 +43,7 @@ var (
 // Tailcat service port. Service always passes ReservedPort.
 type ClientDialer interface {
 	DialPort(context.Context, string, string, uint16) (net.Conn, error)
+	CurrentPath(context.Context, string, string) (string, error)
 }
 
 type AuditRecorder interface {
@@ -50,7 +51,7 @@ type AuditRecorder interface {
 }
 
 type EventPublisher interface {
-	PublishDiagnostic(string, string, events.RuntimePhase, EventPayload)
+	PublishEvent(string, events.Envelope)
 }
 
 type StartInput struct {
@@ -197,7 +198,7 @@ func (s *Service) Start(ctx context.Context, ownerID, clientID string, input Sta
 		}
 	}()
 
-	client, err := s.db.TailClient.Query().Where(tailclient.IDEQ(clientID), tailclient.UserIDEQ(ownerID)).Only(ctx)
+	_, err := s.db.TailClient.Query().Where(tailclient.IDEQ(clientID), tailclient.UserIDEQ(ownerID)).Only(ctx)
 	if ent.IsNotFound(err) {
 		return RunView{}, ErrNotFound
 	}
@@ -239,9 +240,6 @@ func (s *Service) Start(ctx context.Context, ownerID, clientID string, input Sta
 		SetKind(diagnosticrun.Kind(input.Kind)).
 		SetStatus(diagnosticrun.StatusRunning).
 		SetStartedAt(time.Now())
-	if path, ok := diagnosticPath(client.LastPath); ok {
-		create.SetPath(path)
-	}
 	row, err := create.Save(ctx)
 	if err != nil {
 		cancel(errCanceledByOwner)
@@ -259,7 +257,7 @@ func (s *Service) Start(ctx context.Context, ownerID, clientID string, input Sta
 		s.release(runID)
 		return RunView{}, failure
 	}
-	s.publisher.PublishDiagnostic(ownerID, runID, events.RuntimePhaseRunning, eventPayload(view, 0))
+	s.publish(ownerID, runID, events.RuntimePhaseRunning, eventPayload(view, 0))
 
 	s.mu.Lock()
 	s.wg.Go(func() { s.execute(runCtx, runID, input) })
@@ -312,6 +310,7 @@ func (s *Service) Close() error {
 
 func (s *Service) execute(ctx context.Context, runID string, input StartInput) {
 	defer s.release(runID)
+	s.observeCurrentPath(ctx, runID)
 	progressDone := make(chan struct{})
 	var progressWG sync.WaitGroup
 	started := time.Now()
@@ -347,13 +346,39 @@ func (s *Service) execute(ctx context.Context, runID string, input StartInput) {
 	s.finish(runID, result, runErr)
 }
 
+func (s *Service) observeCurrentPath(ctx context.Context, runID string) {
+	s.mu.Lock()
+	active := s.active[runID]
+	s.mu.Unlock()
+	if active == nil {
+		return
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, MaxDuration)
+	defer cancel()
+	path, err := s.dialer.CurrentPath(probeCtx, active.ownerID, active.clientID)
+	if err != nil {
+		return
+	}
+	validated, ok := diagnosticPath(path)
+	if !ok {
+		return
+	}
+	if _, err := s.db.DiagnosticRun.Update().Where(
+		diagnosticrun.IDEQ(runID),
+		diagnosticrun.UserIDEQ(active.ownerID),
+		diagnosticrun.StatusEQ(diagnosticrun.StatusRunning),
+	).SetPath(validated).Save(ctx); err != nil {
+		s.logger.WarnContext(ctx, "Persist current diagnostic path failed", "run_id", runID, "error", err)
+	}
+}
+
 func (s *Service) publishProgress(runID string, progress int) {
 	s.mu.Lock()
 	active := s.active[runID]
 	if active != nil {
 		ownerID, clientID, kind := active.ownerID, active.clientID, active.kind
 		s.mu.Unlock()
-		s.publisher.PublishDiagnostic(ownerID, runID, events.RuntimePhaseRunning, EventPayload{
+		s.publish(ownerID, runID, events.RuntimePhaseRunning, EventPayload{
 			ClientID: clientID,
 			Kind:     kind,
 			Status:   RunStatusRunning,
@@ -415,7 +440,7 @@ func (s *Service) finish(runID string, result Result, runErr error) {
 		s.recordFailure(failure)
 		return
 	}
-	s.publisher.PublishDiagnostic(active.ownerID, runID, phase, terminalEventPayload(active, status, code, result, runErr))
+	s.publish(active.ownerID, runID, phase, terminalEventPayload(active, status, code, result, runErr))
 	if err := s.prune(terminalCtx, active.ownerID); err != nil {
 		s.logger.ErrorContext(terminalCtx, "Prune diagnostic history failed", "owner_id", active.ownerID, "error", err)
 	}
@@ -458,7 +483,7 @@ func (s *Service) recover(ctx context.Context) error {
 		row.ErrorCode = diagnosticrun.ErrorCodeDiagnosticIo
 		row.FinishedAt = new(finishedAt)
 		view := runView(row)
-		s.publisher.PublishDiagnostic(row.UserID, row.ID, events.RuntimePhaseInterrupted, eventPayload(view, 100))
+		s.publish(row.UserID, row.ID, events.RuntimePhaseInterrupted, eventPayload(view, 100))
 		owners[row.UserID] = struct{}{}
 	}
 	for ownerID := range owners {
@@ -467,6 +492,13 @@ func (s *Service) recover(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (s *Service) publish(ownerID, runID string, phase events.RuntimePhase, payload EventPayload) {
+	s.publisher.PublishEvent(ownerID, events.Envelope{
+		Version: 1, Type: "diagnostic", ResourceKind: "diagnostic", ResourceID: runID,
+		OperationID: runID, Phase: phase, Payload: payload,
+	})
 }
 
 func (s *Service) prune(ctx context.Context, ownerID string) error {

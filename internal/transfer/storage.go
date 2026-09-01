@@ -26,6 +26,7 @@ const (
 	MaxShareBytes    int64 = 1024 * 1024 * 1024
 	MaxOwnerBytes    int64 = 2 * 1024 * 1024 * 1024
 	MaxFilesPerShare       = 1000
+	MaxOwnerFiles          = 4096
 
 	maxBoundaryBytes         = 1024
 	maxBoundaryDepth         = 32
@@ -60,10 +61,12 @@ type StoredFile struct {
 }
 
 // ReadHandle is an independently owned, read-only staged-file handle. It
-// remains readable after Storage.Close and must be closed by its caller. Its
-// narrow API intentionally exposes no mutation or publication methods.
+// remains readable after Storage.Close and must be closed by its caller.
 type ReadHandle struct {
-	file *os.File
+	file      *os.File
+	onClose   func()
+	closeOnce sync.Once
+	closeErr  error
 }
 
 func (h *ReadHandle) Read(buffer []byte) (int, error) {
@@ -83,13 +86,25 @@ func (h *ReadHandle) Stat() (os.FileInfo, error) {
 }
 
 func (h *ReadHandle) Close() error {
-	return h.file.Close()
+	if h == nil {
+		return nil
+	}
+	h.closeOnce.Do(func() {
+		if h.file != nil {
+			h.closeErr = h.file.Close()
+		}
+		if h.onClose != nil {
+			h.onClose()
+		}
+	})
+	return h.closeErr
 }
 
 // QuotaUsage is a point-in-time view of owner and share quota consumption.
 // Reserved and committed files are both included until released or removed.
 type QuotaUsage struct {
 	OwnerBytes int64
+	OwnerFiles int
 	ShareBytes int64
 	ShareFiles int
 }
@@ -99,6 +114,7 @@ type StorageLimits struct {
 	MaxScopeBytes    int64
 	MaxOwnerBytes    int64
 	MaxFilesPerScope int
+	MaxOwnerFiles    int
 }
 
 // ScopeLimits atomically tightens the byte and file-count admission for one
@@ -110,7 +126,7 @@ type ScopeLimits struct {
 }
 
 func DefaultStorageLimits() StorageLimits {
-	return StorageLimits{MaxFileBytes: MaxFileBytes, MaxScopeBytes: MaxShareBytes, MaxOwnerBytes: MaxOwnerBytes, MaxFilesPerScope: MaxFilesPerShare}
+	return StorageLimits{MaxFileBytes: MaxFileBytes, MaxScopeBytes: MaxShareBytes, MaxOwnerBytes: MaxOwnerBytes, MaxFilesPerScope: MaxFilesPerShare, MaxOwnerFiles: MaxOwnerFiles}
 }
 
 // StoredIdentity identifies one metadata-retained file without exposing a host
@@ -174,6 +190,7 @@ type quotaKey struct {
 
 type ownerUsage struct {
 	bytes  int64
+	files  int
 	shares map[string]*shareUsage
 }
 
@@ -239,7 +256,10 @@ func newStorageWithLimits(rootPath string, constructorHooks constructorHooks, li
 	if rootPath == "" || strings.ContainsRune(rootPath, 0) {
 		return nil, fmt.Errorf("%w: staging root is required", ErrInvalidPath)
 	}
-	if limits.MaxFileBytes <= 0 || limits.MaxFileBytes > MaxFileBytes || limits.MaxScopeBytes < limits.MaxFileBytes || limits.MaxScopeBytes > MaxShareBytes || limits.MaxOwnerBytes < limits.MaxScopeBytes || limits.MaxOwnerBytes > MaxOwnerBytes || limits.MaxFilesPerScope <= 0 || limits.MaxFilesPerScope > MaxFilesPerShare {
+	if limits.MaxOwnerFiles == 0 {
+		limits.MaxOwnerFiles = MaxOwnerFiles
+	}
+	if limits.MaxFileBytes <= 0 || limits.MaxFileBytes > MaxFileBytes || limits.MaxScopeBytes < limits.MaxFileBytes || limits.MaxScopeBytes > MaxShareBytes || limits.MaxOwnerBytes < limits.MaxScopeBytes || limits.MaxOwnerBytes > MaxOwnerBytes || limits.MaxFilesPerScope <= 0 || limits.MaxFilesPerScope > MaxFilesPerShare || limits.MaxOwnerFiles <= 0 || limits.MaxOwnerFiles > MaxOwnerFiles {
 		return nil, fmt.Errorf("%w: invalid storage limits", ErrInvalidPath)
 	}
 	info, err := os.Lstat(rootPath)
@@ -566,7 +586,7 @@ func (s *Storage) reserve(ctx context.Context, ownerID, shareID string, size int
 	} else {
 		share.maxFiles = min(share.maxFiles, scopeLimits.MaxFiles)
 	}
-	if size > s.limits.MaxOwnerBytes-owner.bytes || size > share.maxBytes-share.bytes || share.files >= share.maxFiles {
+	if size > s.limits.MaxOwnerBytes-owner.bytes || owner.files >= s.limits.MaxOwnerFiles || size > share.maxBytes-share.bytes || share.files >= share.maxFiles {
 		if share.files == 0 {
 			delete(owner.shares, shareID)
 			if len(owner.shares) == 0 {
@@ -576,6 +596,7 @@ func (s *Storage) reserve(ctx context.Context, ownerID, shareID string, size int
 		return nil, ErrQuotaExceeded
 	}
 	owner.bytes += size
+	owner.files++
 	share.bytes += size
 	share.files++
 	reservation := &Reservation{storage: s, ownerID: ownerID, shareID: shareID, size: size, maxFileBytes: s.limits.MaxFileBytes}
@@ -620,7 +641,7 @@ func (s *Storage) Usage(ctx context.Context, ownerID, shareID string) (QuotaUsag
 	if owner == nil {
 		return QuotaUsage{}, nil
 	}
-	usage := QuotaUsage{OwnerBytes: owner.bytes}
+	usage := QuotaUsage{OwnerBytes: owner.bytes, OwnerFiles: owner.files}
 	if share := owner.shares[shareID]; share != nil {
 		usage.ShareBytes = share.bytes
 		usage.ShareFiles = share.files
@@ -1844,7 +1865,7 @@ func (q *quotaLedger) addCommitted(ownerID, shareID, storageName string, size in
 		share = &shareUsage{}
 		owner.shares[shareID] = share
 	}
-	if size > MaxOwnerBytes-owner.bytes || size > MaxShareBytes-share.bytes || share.files >= MaxFilesPerShare {
+	if size > MaxOwnerBytes-owner.bytes || owner.files >= MaxOwnerFiles || size > MaxShareBytes-share.bytes || share.files >= MaxFilesPerShare {
 		return ErrQuotaExceeded
 	}
 	if share.maxBytes == 0 {
@@ -1858,6 +1879,7 @@ func (q *quotaLedger) addCommitted(ownerID, shareID, storageName string, size in
 		share.maxFiles = min(share.maxFiles, limits.MaxFilesPerScope)
 	}
 	owner.bytes += size
+	owner.files++
 	share.bytes += size
 	share.files++
 	q.committed[quotaKey{ownerID: ownerID, shareID: shareID, storageName: storageName}] = size
@@ -1886,6 +1908,7 @@ func (q *quotaLedger) releaseLocked(ownerID, shareID string, size int64) {
 		return
 	}
 	owner.bytes -= size
+	owner.files--
 	share.bytes -= size
 	share.files--
 	if share.files == 0 {

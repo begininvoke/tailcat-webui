@@ -61,6 +61,34 @@ func (_c *TransferJobCreate) SetNillableStatus(v *transferjob.Status) *TransferJ
 	return _c
 }
 
+// SetAttempt sets the "attempt" field.
+func (_c *TransferJobCreate) SetAttempt(v int) *TransferJobCreate {
+	_c.mutation.SetAttempt(v)
+	return _c
+}
+
+// SetNillableAttempt sets the "attempt" field if the given value is not nil.
+func (_c *TransferJobCreate) SetNillableAttempt(v *int) *TransferJobCreate {
+	if v != nil {
+		_c.SetAttempt(*v)
+	}
+	return _c
+}
+
+// SetAttemptKind sets the "attempt_kind" field.
+func (_c *TransferJobCreate) SetAttemptKind(v transferjob.AttemptKind) *TransferJobCreate {
+	_c.mutation.SetAttemptKind(v)
+	return _c
+}
+
+// SetNillableAttemptKind sets the "attempt_kind" field if the given value is not nil.
+func (_c *TransferJobCreate) SetNillableAttemptKind(v *transferjob.AttemptKind) *TransferJobCreate {
+	if v != nil {
+		_c.SetAttemptKind(*v)
+	}
+	return _c
+}
+
 // SetTotalBytes sets the "total_bytes" field.
 func (_c *TransferJobCreate) SetTotalBytes(v int64) *TransferJobCreate {
 	_c.mutation.SetTotalBytes(v)
@@ -251,6 +279,10 @@ func (_c *TransferJobCreate) defaults() error {
 		v := transferjob.DefaultStatus
 		_c.mutation.SetStatus(v)
 	}
+	if _, ok := _c.mutation.Attempt(); !ok {
+		v := transferjob.DefaultAttempt
+		_c.mutation.SetAttempt(v)
+	}
 	if _, ok := _c.mutation.TotalBytes(); !ok {
 		v := transferjob.DefaultTotalBytes
 		_c.mutation.SetTotalBytes(v)
@@ -313,6 +345,19 @@ func (_c *TransferJobCreate) check() error {
 	if v, ok := _c.mutation.Status(); ok {
 		if err := transferjob.StatusValidator(v); err != nil {
 			return &ValidationError{Name: "status", err: fmt.Errorf(`ent: validator failed for field "TransferJob.status": %w`, err)}
+		}
+	}
+	if _, ok := _c.mutation.Attempt(); !ok {
+		return &ValidationError{Name: "attempt", err: errors.New(`ent: missing required field "TransferJob.attempt"`)}
+	}
+	if v, ok := _c.mutation.Attempt(); ok {
+		if err := transferjob.AttemptValidator(v); err != nil {
+			return &ValidationError{Name: "attempt", err: fmt.Errorf(`ent: validator failed for field "TransferJob.attempt": %w`, err)}
+		}
+	}
+	if v, ok := _c.mutation.AttemptKind(); ok {
+		if err := transferjob.AttemptKindValidator(v); err != nil {
+			return &ValidationError{Name: "attempt_kind", err: fmt.Errorf(`ent: validator failed for field "TransferJob.attempt_kind": %w`, err)}
 		}
 	}
 	if _, ok := _c.mutation.TotalBytes(); !ok {
@@ -397,6 +442,14 @@ func (_c *TransferJobCreate) createSpec() (*TransferJob, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.Status(); ok {
 		_spec.SetField(transferjob.FieldStatus, field.TypeEnum, value)
 		_node.Status = value
+	}
+	if value, ok := _c.mutation.Attempt(); ok {
+		_spec.SetField(transferjob.FieldAttempt, field.TypeInt, value)
+		_node.Attempt = value
+	}
+	if value, ok := _c.mutation.AttemptKind(); ok {
+		_spec.SetField(transferjob.FieldAttemptKind, field.TypeEnum, value)
+		_node.AttemptKind = value
 	}
 	if value, ok := _c.mutation.TotalBytes(); ok {
 		_spec.SetField(transferjob.FieldTotalBytes, field.TypeInt64, value)

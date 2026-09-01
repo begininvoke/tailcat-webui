@@ -80,6 +80,11 @@ func CapabilityHash(v []byte) predicate.TransferShare {
 	return predicate.TransferShare(sql.FieldEQ(FieldCapabilityHash, v))
 }
 
+// CapabilityGeneration applies equality check predicate on the "capability_generation" field. It's identical to CapabilityGenerationEQ.
+func CapabilityGeneration(v int) predicate.TransferShare {
+	return predicate.TransferShare(sql.FieldEQ(FieldCapabilityGeneration, v))
+}
+
 // TotalBytes applies equality check predicate on the "total_bytes" field. It's identical to TotalBytesEQ.
 func TotalBytes(v int64) predicate.TransferShare {
 	return predicate.TransferShare(sql.FieldEQ(FieldTotalBytes, v))
@@ -303,6 +308,46 @@ func CapabilityHashLT(v []byte) predicate.TransferShare {
 // CapabilityHashLTE applies the LTE predicate on the "capability_hash" field.
 func CapabilityHashLTE(v []byte) predicate.TransferShare {
 	return predicate.TransferShare(sql.FieldLTE(FieldCapabilityHash, v))
+}
+
+// CapabilityGenerationEQ applies the EQ predicate on the "capability_generation" field.
+func CapabilityGenerationEQ(v int) predicate.TransferShare {
+	return predicate.TransferShare(sql.FieldEQ(FieldCapabilityGeneration, v))
+}
+
+// CapabilityGenerationNEQ applies the NEQ predicate on the "capability_generation" field.
+func CapabilityGenerationNEQ(v int) predicate.TransferShare {
+	return predicate.TransferShare(sql.FieldNEQ(FieldCapabilityGeneration, v))
+}
+
+// CapabilityGenerationIn applies the In predicate on the "capability_generation" field.
+func CapabilityGenerationIn(vs ...int) predicate.TransferShare {
+	return predicate.TransferShare(sql.FieldIn(FieldCapabilityGeneration, vs...))
+}
+
+// CapabilityGenerationNotIn applies the NotIn predicate on the "capability_generation" field.
+func CapabilityGenerationNotIn(vs ...int) predicate.TransferShare {
+	return predicate.TransferShare(sql.FieldNotIn(FieldCapabilityGeneration, vs...))
+}
+
+// CapabilityGenerationGT applies the GT predicate on the "capability_generation" field.
+func CapabilityGenerationGT(v int) predicate.TransferShare {
+	return predicate.TransferShare(sql.FieldGT(FieldCapabilityGeneration, v))
+}
+
+// CapabilityGenerationGTE applies the GTE predicate on the "capability_generation" field.
+func CapabilityGenerationGTE(v int) predicate.TransferShare {
+	return predicate.TransferShare(sql.FieldGTE(FieldCapabilityGeneration, v))
+}
+
+// CapabilityGenerationLT applies the LT predicate on the "capability_generation" field.
+func CapabilityGenerationLT(v int) predicate.TransferShare {
+	return predicate.TransferShare(sql.FieldLT(FieldCapabilityGeneration, v))
+}
+
+// CapabilityGenerationLTE applies the LTE predicate on the "capability_generation" field.
+func CapabilityGenerationLTE(v int) predicate.TransferShare {
+	return predicate.TransferShare(sql.FieldLTE(FieldCapabilityGeneration, v))
 }
 
 // TotalBytesEQ applies the EQ predicate on the "total_bytes" field.

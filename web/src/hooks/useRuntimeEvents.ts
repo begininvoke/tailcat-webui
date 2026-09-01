@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { diagnosticErrorCodes, diagnosticKinds, diagnosticStatuses, runtimePhases, transferErrorCodes, transferEventStatuses, type DiagnosticErrorCode, type DiagnosticKind, type DiagnosticStatus, type RuntimeEvent, type TransferEventPayload } from '../services/api'
 
 export const runtimeRefreshEvent = 'tailcat:runtime-refresh'
+export const runtimeStreamOpenEvent = 'tailcat:runtime-stream-open'
 export const diagnosticEvent = 'tailcat:diagnostic'
 export const transferEvent = 'tailcat:transfer'
 
@@ -106,6 +107,10 @@ export function useRuntimeEvents() {
   useEffect(() => {
     const source = new EventSource('/api/v1/events', { withCredentials: true })
     const refresh = () => window.dispatchEvent(new Event(runtimeRefreshEvent))
+    const opened = () => {
+      refresh()
+      window.dispatchEvent(new Event(runtimeStreamOpenEvent))
+    }
     const diagnostic = (event: Event) => {
       if (!(event instanceof MessageEvent) || typeof event.data !== 'string') return
       try {
@@ -123,12 +128,12 @@ export function useRuntimeEvents() {
     source.addEventListener('runtime', refresh)
     source.addEventListener('diagnostic', diagnostic)
     source.addEventListener('transfer', transfer)
-    source.addEventListener('open', refresh)
+    source.addEventListener('open', opened)
     return () => {
       source.removeEventListener('runtime', refresh)
       source.removeEventListener('diagnostic', diagnostic)
       source.removeEventListener('transfer', transfer)
-      source.removeEventListener('open', refresh)
+      source.removeEventListener('open', opened)
       source.close()
     }
   }, [])

@@ -79,6 +79,11 @@ func (s *Service) CreateIncomingJob(ctx context.Context, ownerID string, input C
 	} else if err != nil {
 		return JobView{}, fmt.Errorf("validate transfer client ownership: %w", err)
 	}
+	releaseObject, err := s.reserveOwnerObject(ctx, ownerID, ownerObjectJob)
+	if err != nil {
+		return JobView{}, err
+	}
+	defer releaseObject()
 	capability := []byte(input.Capability)
 	s.captureSecret("incoming.capability", capability)
 	defer clearSecret(capability)
@@ -204,6 +209,7 @@ func (s *Service) CreateIncomingJob(ctx context.Context, ownerID string, input C
 	metadataLocked = false
 	s.metadataMu.Unlock()
 	cleanup = false
+	s.wakeExpiryScheduler()
 	s.publishTransfer(ownerID, jobID, events.RuntimePhaseReady, TransferEventPayload{JobID: jobID, Status: string(row.Status), TotalBytes: row.TotalBytes, TotalFiles: len(prepared)})
 	return jobView(row), nil
 }
@@ -295,6 +301,16 @@ func (s *Service) OpenCompletedItem(ctx context.Context, ownerID, jobID, itemID 
 	if err := s.ensureOpen(); err != nil {
 		return CompletedItemRead{}, err
 	}
+	lease, err := s.beginJobRead(ctx, jobID)
+	if err != nil {
+		return CompletedItemRead{}, err
+	}
+	attached := false
+	defer func() {
+		if !attached {
+			lease.finish()
+		}
+	}()
 	job, err := s.db.TransferJob.Query().Where(transferjob.IDEQ(jobID), transferjob.UserIDEQ(ownerID), transferjob.StatusEQ(transferjob.StatusCompleted)).Only(ctx)
 	if ent.IsNotFound(err) {
 		return CompletedItemRead{}, ErrNotFound
@@ -327,14 +343,18 @@ func (s *Service) OpenCompletedItem(ctx context.Context, ownerID, jobID, itemID 
 	if err != nil {
 		return CompletedItemRead{}, fmt.Errorf("open completed transfer item: %w", err)
 	}
+	if !lease.attach(handle) {
+		return CompletedItemRead{}, ErrNotFound
+	}
+	attached = true
 	return CompletedItemRead{Item: itemView(row), Handle: handle}, nil
 }
 
 func (s *Service) StartJob(ctx context.Context, ownerID, jobID string) (JobView, error) {
-	return s.startJob(ctx, ownerID, jobID, false)
+	return s.startJob(ctx, ownerID, jobID, false, transferjob.AttemptKindStart)
 }
 
-func (s *Service) startJob(ctx context.Context, ownerID, jobID string, resumeManaged bool) (_ JobView, retErr error) {
+func (s *Service) startJob(ctx context.Context, ownerID, jobID string, resumeManaged bool, attemptKind transferjob.AttemptKind) (_ JobView, retErr error) {
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -401,7 +421,7 @@ func (s *Service) startJob(ctx context.Context, ownerID, jobID string, resumeMan
 		}
 	}()
 
-	running, err := s.transitionJobToRunning(ctx, row)
+	running, err := s.transitionJobToRunning(ctx, row, attemptKind)
 	if err != nil {
 		return JobView{}, err
 	}
@@ -420,7 +440,7 @@ func (s *Service) startJob(ctx context.Context, ownerID, jobID string, resumeMan
 	return jobView(running), nil
 }
 
-func (s *Service) transitionJobToRunning(ctx context.Context, row *ent.TransferJob) (_ *ent.TransferJob, retErr error) {
+func (s *Service) transitionJobToRunning(ctx context.Context, row *ent.TransferJob, attemptKind transferjob.AttemptKind) (_ *ent.TransferJob, retErr error) {
 	s.metadataMu.Lock()
 	defer s.metadataMu.Unlock()
 	tx, err := s.db.Tx(ctx)
@@ -451,6 +471,8 @@ func (s *Service) transitionJobToRunning(ctx context.Context, row *ent.TransferJ
 	update := current.Update().
 		Where(transferjob.UserIDEQ(row.UserID), transferjob.StatusIn(transferjob.StatusReady, transferjob.StatusInterrupted, transferjob.StatusFailed, transferjob.StatusCanceled)).
 		SetStatus(transferjob.StatusRunning).
+		SetAttempt(current.Attempt + 1).
+		SetAttemptKind(attemptKind).
 		ClearFinishedAt().
 		ClearErrorCode()
 	if current.StartedAt == nil {
@@ -486,7 +508,7 @@ func (s *Service) transitionJobToRunning(ctx context.Context, row *ent.TransferJ
 			return nil, err
 		}
 	}
-	if err := s.recordLifecycleWithClient(ctx, tx.Client(), row.UserID, "transfer.start", "job", row.ID, "success"); err != nil {
+	if err := s.recordLifecycleOccurrenceWithClient(ctx, tx.Client(), row.UserID, attemptAuditAction(attemptKind), "job", row.ID, "success", current.Attempt+1); err != nil {
 		return nil, err
 	}
 	if err := s.commitLifecycle(tx, "job.start"); err != nil {
@@ -744,6 +766,7 @@ func (s *Service) flushProgress(ctx context.Context, job *ent.TransferJob, progr
 	committed = true
 	metadataLocked = false
 	s.metadataMu.Unlock()
+	s.resetManagedResumeFailures(job.ID)
 	completedFiles := 0
 	lastItemID := ""
 	for _, state := range progress {
@@ -789,6 +812,8 @@ func (s *Service) finishJob(jobID string, runErr error) {
 	s.releaseJob(jobID, retryManaged)
 	if retryManaged {
 		s.requeueManagedResume(active.ownerID, jobID)
+	} else {
+		s.resetManagedResumeFailures(jobID)
 	}
 	if terminalErr != nil {
 		s.logger.ErrorContext(ctx, "Load terminal transfer progress failed", "job_id", jobID, "error", terminalErr)
@@ -895,7 +920,7 @@ func (s *Service) persistJobTerminal(ctx context.Context, ownerID, jobID string,
 	if auditAction == "" {
 		return false, 0, ErrInvalidState
 	}
-	if err := s.recordLifecycleWithClient(ctx, tx.Client(), ownerID, auditAction, "job", jobID, auditOutcome); err != nil {
+	if err := s.recordLifecycleOccurrenceWithClient(ctx, tx.Client(), ownerID, auditAction, "job", jobID, auditOutcome, job.Attempt); err != nil {
 		return false, 0, err
 	}
 	if err := s.commitLifecycle(tx, "job.terminal"); err != nil {
@@ -953,9 +978,10 @@ func (s *Service) CancelJob(ctx context.Context, ownerID, jobID string) error {
 }
 
 func (s *Service) RetryJob(ctx context.Context, ownerID, jobID string) (JobView, error) {
-	return s.StartJob(ctx, ownerID, jobID)
+	s.resetManagedResumeFailures(jobID)
+	return s.startJob(ctx, ownerID, jobID, false, transferjob.AttemptKindRetry)
 }
 
 func (s *Service) ResumeJob(ctx context.Context, ownerID, jobID string) (JobView, error) {
-	return s.StartJob(ctx, ownerID, jobID)
+	return s.startJob(ctx, ownerID, jobID, false, transferjob.AttemptKindResume)
 }

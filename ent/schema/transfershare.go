@@ -74,6 +74,7 @@ func (TransferShare) Fields() []ent.Field {
 		field.String("server_id").Immutable(),
 		field.Enum("status").Values(transferStatuses...).Default("staging"),
 		field.Bytes("capability_hash").NotEmpty().Sensitive().Validate(validateSHA256Hash),
+		field.Int("capability_generation").Positive().Default(1),
 		field.Int64("total_bytes").NonNegative().Default(0),
 		field.Int("file_count").NonNegative().Default(0),
 		field.Time("ready_at").Optional().Nillable(),

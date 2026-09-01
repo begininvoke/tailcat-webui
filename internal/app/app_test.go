@@ -8,8 +8,33 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strings"
 	"testing"
 )
+
+func TestAppOwnsDiagnosticReservedHandlerRegistration(t *testing.T) {
+	source, err := os.ReadFile("app.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(source), "RegisterReservedTCPHandler(diagnostics.ReservedPort") {
+		t.Fatal("app.go does not register the diagnostics reserved handler")
+	}
+}
+
+func TestAppSecuresWindowsDataDirectoryBeforeLockAndDatabase(t *testing.T) {
+	source, err := os.ReadFile("app.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(source)
+	secure := strings.Index(text, "privatefs.SecureDataDirectory(cfg.DataDir)")
+	lock := strings.Index(text, "flock.New(")
+	database := strings.Index(text, "database.Open(")
+	if secure < 0 || lock < 0 || database < 0 || secure > lock || secure > database {
+		t.Fatalf("private data-directory hardening order secure=%d lock=%d database=%d", secure, lock, database)
+	}
+}
 
 func TestPublishedAndDiagnosticWorkExitBeforeTailcatRuntimeClose(t *testing.T) {
 	publishedExit := make(chan struct{})

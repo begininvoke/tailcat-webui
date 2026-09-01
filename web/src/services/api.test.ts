@@ -75,6 +75,7 @@ describe('API client', () => {
 
   it('uses every transfer management route with exact methods, JSON bodies and raw upload headers', async () => {
     const file = new File(['tailcat'], 'notes.txt', { type: 'text/plain' })
+    const uploadController = new AbortController()
     const fetchMock = vi.fn(async (path: string, init?: RequestInit) => {
       if (!init?.method || init.method === 'GET') return new Response(JSON.stringify({ items: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
       if (init.method === 'DELETE' || path.endsWith('/cancel')) return new Response(null, { status: 204 })
@@ -88,7 +89,7 @@ describe('API client', () => {
     await api.createTransferShare({ server_id: 'server-1' })
     await api.transferShare('share-1')
     await api.transferShareFiles('share-1')
-    await api.uploadTransferShareFile('share-1', file, 'folder/notes.txt')
+    await api.uploadTransferShareFile('share-1', file, 'folder/notes.txt', uploadController.signal)
     await api.finalizeTransferShare('share-1')
     await api.rotateTransferShare('share-1')
     await api.deleteTransferShare('share-1')
@@ -104,7 +105,8 @@ describe('API client', () => {
 
     expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/v1/transfers/shares', expect.objectContaining({ credentials: 'same-origin', method: 'POST', body: '{"server_id":"server-1"}' }))
     expect(fetchMock).toHaveBeenNthCalledWith(5, '/api/v1/transfers/shares/share-1/files', {
-      credentials: 'same-origin', method: 'POST', body: file, headers: { 'Content-Type': 'application/octet-stream', 'X-Tailcat-Virtual-Path': 'folder/notes.txt' },
+      credentials: 'same-origin', method: 'POST', body: file, signal: uploadController.signal,
+      headers: { 'Content-Type': 'application/octet-stream', 'X-Tailcat-Virtual-Path': 'folder/notes.txt' },
     })
     expect(fetchMock).toHaveBeenNthCalledWith(6, '/api/v1/transfers/shares/share-1/finalize', expect.objectContaining({ credentials: 'same-origin', method: 'POST' }))
     expect(fetchMock).toHaveBeenNthCalledWith(7, '/api/v1/transfers/shares/share-1/rotate', expect.objectContaining({ credentials: 'same-origin', method: 'POST' }))
