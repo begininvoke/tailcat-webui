@@ -80,6 +80,16 @@ type FileView struct {
 	MTime       time.Time `json:"mtime"`
 }
 
+type generatedCapability struct {
+	text capabilityText
+	hash []byte
+}
+
+func (capability *generatedCapability) clear() {
+	capability.text.clear()
+	capability.hash = nil
+}
+
 func (s *Service) ListShares(ctx context.Context, ownerID string) ([]ShareView, error) {
 	if err := s.ensureOpen(); err != nil {
 		return nil, err
@@ -153,13 +163,15 @@ type shareExpiryTask struct {
 }
 
 type handlerHooks struct {
-	afterAuthorized       func()
-	afterRevocationClosed func(string)
-	afterExpiryArmed      func(string, func())
+	afterAuthorized        func()
+	afterRevocationClosed  func(string)
+	afterExpiryArmed       func(string, func())
+	beforeGateExpiryCancel func(string)
 }
 
 type lifecycleHooks struct {
 	beforeCommit func(string) error
+	afterCommit  func(string)
 }
 
 type secretHooks struct {
@@ -176,10 +188,11 @@ type activeJob struct {
 }
 
 type runnerHooks struct {
-	workerStarted      func()
-	workerStopped      func()
-	afterBlockSync     func(string, int)
-	beforeProgressSave func(string, int)
+	workerStarted             func()
+	workerStopped             func()
+	afterBlockSync            func(string, int)
+	beforeProgressSave        func(string, int)
+	beforeResumeCapacityClear func()
 }
 
 type queuedResume struct {
@@ -276,10 +289,11 @@ func (s *Service) CreateShare(ctx context.Context, ownerID string, input CreateS
 		return ShareView{}, fmt.Errorf("%w: share expiry", ErrInvalidState)
 	}
 	shareID := newEntityID()
-	capability, hash, err := newCapability(shareID)
+	capability, err := s.generateCapability(shareID)
 	if err != nil {
 		return ShareView{}, err
 	}
+	defer capability.clear()
 	tx, err := s.db.Tx(ctx)
 	if err != nil {
 		return ShareView{}, fmt.Errorf("begin transfer-share create transaction: %w", err)
@@ -295,7 +309,7 @@ func (s *Service) CreateShare(ctx context.Context, ownerID string, input CreateS
 		SetUserID(ownerID).
 		SetServerID(input.ServerID).
 		SetStatus(transfershare.StatusStaging).
-		SetCapabilityHash(hash).
+		SetCapabilityHash(capability.hash).
 		SetExpiresAt(expiresAt.UTC()).
 		Save(ctx)
 	if err != nil {
@@ -310,7 +324,7 @@ func (s *Service) CreateShare(ctx context.Context, ownerID string, input CreateS
 	committed = true
 	s.publishTransfer(ownerID, row.ID, events.RuntimePhaseIdle, TransferEventPayload{ShareID: row.ID, Status: string(row.Status)})
 	view := shareView(row)
-	view.Capability = capability
+	view.Capability = string(capability.text)
 	return view, nil
 }
 
@@ -470,11 +484,14 @@ func (s *Service) RotateShare(ctx context.Context, ownerID, shareID string) (str
 	}
 	capability, err := s.rotateCapability(ctx, ownerID, shareID)
 	if err != nil {
-		s.reopenShareAdmissionIfLegal(ctx, ownerID, shareID, generation)
+		s.reopenShareAdmissionIfLegal(context.WithoutCancel(ctx), ownerID, shareID, generation)
 		return "", err
 	}
-	s.reopenShareAdmissionIfLegal(ctx, ownerID, shareID, generation)
-	return capability, nil
+	defer capability.clear()
+	if !s.reopenShareAdmission(shareID, generation) {
+		return "", fmt.Errorf("%w: capability rotated but a later revocation kept admission closed", ErrInvalidState)
+	}
+	return string(capability.text), nil
 }
 
 func (s *Service) reopenShareAdmissionIfLegal(ctx context.Context, ownerID, shareID string, generation uint64) {
@@ -488,12 +505,12 @@ func (s *Service) reopenShareAdmissionIfLegal(ctx context.Context, ownerID, shar
 	}
 }
 
-func (s *Service) rotateCapability(ctx context.Context, ownerID, shareID string) (_ string, retErr error) {
+func (s *Service) rotateCapability(ctx context.Context, ownerID, shareID string) (_ generatedCapability, retErr error) {
 	s.metadataMu.Lock()
 	defer s.metadataMu.Unlock()
 	tx, err := s.db.Tx(ctx)
 	if err != nil {
-		return "", fmt.Errorf("begin capability rotation: %w", err)
+		return generatedCapability{}, fmt.Errorf("begin capability rotation: %w", err)
 	}
 	committed := false
 	defer func() {
@@ -503,37 +520,44 @@ func (s *Service) rotateCapability(ctx context.Context, ownerID, shareID string)
 	}()
 	row, err := tx.Client().TransferShare.Query().Where(transfershare.IDEQ(shareID), transfershare.UserIDEQ(ownerID)).Only(ctx)
 	if ent.IsNotFound(err) {
-		return "", ErrNotFound
+		return generatedCapability{}, ErrNotFound
 	}
 	if err != nil {
-		return "", fmt.Errorf("load transfer share for rotation: %w", err)
+		return generatedCapability{}, fmt.Errorf("load transfer share for rotation: %w", err)
 	}
 	if row.Status != transfershare.StatusStaging && row.Status != transfershare.StatusReady {
-		return "", ErrInvalidState
+		return generatedCapability{}, ErrInvalidState
 	}
 	now := time.Now().UTC()
 	if !row.ExpiresAt.After(now) {
-		return "", fmt.Errorf("%w: share expired before rotation", ErrInvalidState)
+		return generatedCapability{}, fmt.Errorf("%w: share expired before rotation", ErrInvalidState)
 	}
-	capability, hash, err := newCapability(row.ID)
+	capability, err := s.generateCapability(row.ID)
 	if err != nil {
-		return "", err
+		return generatedCapability{}, err
 	}
+	owned := true
+	defer func() {
+		if owned {
+			capability.clear()
+		}
+	}()
 	if _, err := row.Update().
 		Where(transfershare.UserIDEQ(ownerID), transfershare.StatusIn(transfershare.StatusStaging, transfershare.StatusReady), transfershare.ExpiresAtGT(now)).
-		SetCapabilityHash(hash).
+		SetCapabilityHash(capability.hash).
 		Save(ctx); ent.IsNotFound(err) {
-		return "", fmt.Errorf("%w: rotation compare-and-swap lost", ErrInvalidState)
+		return generatedCapability{}, fmt.Errorf("%w: rotation compare-and-swap lost", ErrInvalidState)
 	} else if err != nil {
-		return "", fmt.Errorf("rotate transfer capability: %w", err)
+		return generatedCapability{}, fmt.Errorf("rotate transfer capability: %w", err)
 	}
 	if err := s.recordLifecycleWithClient(ctx, tx.Client(), ownerID, "transfer.rotate", "share", shareID, "success"); err != nil {
-		return "", err
+		return generatedCapability{}, err
 	}
 	if err := s.commitLifecycle(tx, "share.rotate"); err != nil {
-		return "", fmt.Errorf("commit capability rotation: %w", err)
+		return generatedCapability{}, fmt.Errorf("commit capability rotation: %w", err)
 	}
 	committed = true
+	owned = false
 	return capability, nil
 }
 
@@ -608,13 +632,18 @@ func (s *Service) ensureOpen() error {
 	return nil
 }
 
-func newCapability(shareID string) (string, []byte, error) {
+func (s *Service) generateCapability(shareID string) (generatedCapability, error) {
 	var secret [capabilitySecretBytes]byte
 	defer clearSecret(secret[:])
 	if _, err := rand.Read(secret[:]); err != nil {
-		return "", nil, fmt.Errorf("generate transfer capability: %w", err)
+		return generatedCapability{}, fmt.Errorf("generate transfer capability: %w", err)
 	}
-	return encodeCapability(shareID, &secret)
+	text, hash, err := encodeCapabilityBytes(shareID, &secret)
+	if err != nil {
+		return generatedCapability{}, err
+	}
+	s.captureSecret("generated.capability", text)
+	return generatedCapability{text: text, hash: hash}, nil
 }
 
 func newEntityID() string { return uuid.NewV7().String() }
@@ -710,7 +739,13 @@ func (s *Service) commitLifecycle(tx *ent.Tx, operation string) error {
 			return err
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if s.lifecycleHooks.afterCommit != nil {
+		s.lifecycleHooks.afterCommit(operation)
+	}
+	return nil
 }
 
 func (s *Service) captureSecret(kind string, secret []byte) {

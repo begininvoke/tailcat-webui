@@ -22,10 +22,12 @@ func TestCapabilityCanonicalEncodingAndHash(t *testing.T) {
 	}
 	defer clearSecret(secret[:])
 	wantHash := sha256.Sum256(secret[:])
-	code, hash, err := encodeCapability(shareID, &secret)
+	encoded, hash, err := encodeCapabilityBytes(shareID, &secret)
 	if err != nil {
-		t.Fatalf("encodeCapability: %v", err)
+		t.Fatalf("encodeCapabilityBytes: %v", err)
 	}
+	defer encoded.clear()
+	code := string(encoded)
 	if !strings.HasPrefix(code, capabilityPrefix) || len(code) != len(capabilityPrefix)+base64.RawURLEncoding.EncodedLen(capabilityPayloadBytes) {
 		t.Fatal("capability shape is not canonical")
 	}
@@ -212,17 +214,36 @@ func TestManifestWireValidationBindsImmutableFieldsAndLimits(t *testing.T) {
 
 func TestRequestMarshalAndCapabilityParseBuffersAreCleared(t *testing.T) {
 	shareID := uuid.NewV7().String()
-	code, _, err := newCapability(shareID)
+	code, _, err := newTestCapability(shareID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	connection := new(retainingConn)
 	request := wireRequest{Version: protocolVersion, ShareID: shareID, Capability: capabilityText(code), Operation: operationManifest}
+	defer request.clear()
 	if err := writeRequest(t.Context(), connection, request); err != nil {
 		t.Fatalf("writeRequest: %v", err)
 	}
 	if len(connection.writes) != 2 || !allZeroBytes(connection.writes[1]) {
 		t.Fatal("encoded request body retained capability plaintext")
+	}
+	body, err := encodeRequestBody(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body[len(body)-1] = ','
+	body = append(body, `"unknown":1}`...)
+	var unmarshalReference []byte
+	if _, err := decodeRequestFrameWithCapture(body, func(kind string, secret []byte) {
+		if kind == "request.unmarshal" {
+			unmarshalReference = secret
+		}
+	}); protocolCode(err) != CodeProtocolInvalid {
+		t.Fatalf("unknown-member decode error = %v", err)
+	}
+	clearSecret(body)
+	if len(unmarshalReference) == 0 || !allZeroBytes(unmarshalReference) {
+		t.Fatal("failed request unmarshal retained capability plaintext")
 	}
 	parsed, err := parseCapability(code)
 	if err != nil {

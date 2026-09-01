@@ -318,7 +318,7 @@ func (s *Service) startJob(ctx context.Context, ownerID, jobID string, resumeMan
 	reserved := true
 	defer func() {
 		if reserved {
-			s.releaseJob(jobID)
+			s.releaseJob(jobID, resumeManaged)
 		}
 	}()
 
@@ -694,17 +694,17 @@ func (s *Service) finishJob(jobID string, runErr error) {
 	if err != nil {
 		s.recordFailure(fmt.Errorf("persist transfer terminal state for %s: %w", jobID, err))
 		s.logger.ErrorContext(ctx, "Persist transfer terminal state failed", "job_id", jobID, "error", err)
-		s.releaseJob(jobID)
+		s.releaseJob(jobID, false)
 		return
 	}
 	if !updated {
-		s.releaseJob(jobID)
+		s.releaseJob(jobID, false)
 		return
 	}
 	terminal, terminalErr := s.db.TransferJob.Query().Where(transferjob.IDEQ(jobID), transferjob.UserIDEQ(active.ownerID)).Only(ctx)
 	totalFiles, countErr := s.db.TransferItem.Query().Where(transferitem.UserIDEQ(active.ownerID), transferitem.JobIDEQ(jobID)).Count(ctx)
 	retryManaged := active.resumeManaged && status == transferjob.StatusFailed && code == transferjob.ErrorCodeTransferRemoteUnavailable
-	s.releaseJob(jobID)
+	s.releaseJob(jobID, retryManaged)
 	if retryManaged {
 		s.requeueManagedResume(active.ownerID, jobID)
 	}
@@ -885,7 +885,7 @@ func (s *Service) leavePending() {
 	s.mu.Unlock()
 }
 
-func (s *Service) releaseJob(jobID string) {
+func (s *Service) releaseJob(jobID string, preserveProgress bool) {
 	s.mu.Lock()
 	active := s.activeJobs[jobID]
 	if active == nil {
@@ -895,7 +895,9 @@ func (s *Service) releaseJob(jobID string) {
 	active.cancel(nil)
 	active.stopExpiry()
 	delete(s.activeJobs, jobID)
-	delete(s.progressPublished, jobID)
+	if !preserveProgress {
+		delete(s.progressPublished, jobID)
+	}
 	s.ownerJobs[active.ownerID]--
 	if s.ownerJobs[active.ownerID] == 0 {
 		delete(s.ownerJobs, active.ownerID)
@@ -950,9 +952,9 @@ func (s *Service) runQueuedResumes(ownerID string) {
 
 		if _, err := s.startJob(s.queueCtx, ownerID, queued.jobID, true); err != nil {
 			if errors.Is(err, ErrOwnerCapacity) {
-				s.mu.Lock()
-				delete(s.resumeScheduling, ownerID)
-				s.mu.Unlock()
+				if s.finishResumeSchedulerForCapacity(ownerID) {
+					continue
+				}
 				return
 			}
 			if errors.Is(err, ErrServiceClosed) || errors.Is(err, context.Canceled) {
@@ -981,6 +983,19 @@ func (s *Service) runQueuedResumes(ownerID string) {
 		}
 		s.mu.Unlock()
 	}
+}
+
+func (s *Service) finishResumeSchedulerForCapacity(ownerID string) bool {
+	if s.runnerHooks.beforeResumeCapacityClear != nil {
+		s.runnerHooks.beforeResumeCapacityClear()
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.closed && context.Cause(s.queueCtx) == nil && len(s.resumeQueue[ownerID]) > 0 && s.ownerJobs[ownerID] < maxActiveJobsPerOwner {
+		return true
+	}
+	delete(s.resumeScheduling, ownerID)
+	return false
 }
 
 func (s *Service) requeueManagedResume(ownerID, jobID string) {

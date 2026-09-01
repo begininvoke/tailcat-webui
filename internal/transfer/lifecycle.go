@@ -107,6 +107,9 @@ func (s *Service) deleteShare(ctx context.Context, ownerID, shareID, action stri
 	if err != nil {
 		return fmt.Errorf("recheck transfer share for deletion: %w", err)
 	}
+	if row.Status == transfershare.StatusDeleting && row.ErrorCode == transfershare.ErrorCodeTransferExpired {
+		action = "transfer.expire"
+	}
 	generation, err := s.closeShareAdmission(ctx, shareID, ErrInvalidCapability)
 	if err != nil {
 		return err
@@ -193,6 +196,9 @@ func (s *Service) deleteJob(ctx context.Context, ownerID, jobID, action string) 
 	}
 	if err != nil {
 		return fmt.Errorf("load transfer job for deletion: %w", err)
+	}
+	if row.Status == transferjob.StatusDeleting && row.ErrorCode == transferjob.ErrorCodeTransferExpired {
+		action = "transfer.expire"
 	}
 	if row.Status != transferjob.StatusDeleting {
 		if !legalTransferTransition(string(row.Status), string(transferjob.StatusDeleting)) {

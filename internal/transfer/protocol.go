@@ -14,6 +14,7 @@ import (
 	"io"
 	"net"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 	"uuid"
@@ -107,20 +108,6 @@ func (parsed *parsedCapability) clear() {
 
 type capabilityText []byte
 
-func (text capabilityText) MarshalJSON() ([]byte, error) {
-	return jsontext.AppendQuote(nil, text)
-}
-
-func (text *capabilityText) UnmarshalJSON(data []byte) error {
-	clearSecret(*text)
-	decoded, err := jsontext.AppendUnquote((*text)[:0], data)
-	if err != nil {
-		return err
-	}
-	*text = decoded
-	return nil
-}
-
 func (text *capabilityText) clear() {
 	clearSecret(*text)
 	*text = nil
@@ -131,21 +118,24 @@ func clearSecret(secret []byte) {
 	runtime.KeepAlive(secret)
 }
 
-func encodeCapability(shareID string, secret *[capabilitySecretBytes]byte) (string, []byte, error) {
+func encodeCapabilityBytes(shareID string, secret *[capabilitySecretBytes]byte) (capabilityText, []byte, error) {
 	if err := validateEntityID(shareID); err != nil {
-		return "", nil, fmt.Errorf("%w: share ID", ErrInvalidCapability)
+		return nil, nil, fmt.Errorf("%w: share ID", ErrInvalidCapability)
 	}
 	parsed, err := uuid.Parse(shareID)
 	if err != nil {
-		return "", nil, fmt.Errorf("%w: share ID", ErrInvalidCapability)
+		return nil, nil, fmt.Errorf("%w: share ID", ErrInvalidCapability)
 	}
 	payload := make([]byte, capabilityPayloadBytes)
 	defer clearSecret(payload)
 	copy(payload, parsed[:])
 	copy(payload[16:], secret[:])
-	encoded := base64.RawURLEncoding.EncodeToString(payload)
+	encodedLength := base64.RawURLEncoding.EncodedLen(len(payload))
+	encoded := make(capabilityText, len(capabilityPrefix)+encodedLength)
+	copy(encoded, capabilityPrefix)
+	base64.RawURLEncoding.Encode(encoded[len(capabilityPrefix):], payload)
 	hash := sha256.Sum256(secret[:])
-	return capabilityPrefix + encoded, hash[:], nil
+	return encoded, hash[:], nil
 }
 
 func parseCapability(code string) (parsedCapability, error) {
@@ -217,16 +207,41 @@ func (request wireRequest) validate() error {
 }
 
 func decodeRequestFrame(body []byte) (wireRequest, error) {
+	return decodeRequestFrameWithCapture(body, nil)
+}
+
+func decodeRequestFrameWithCapture(body []byte, capture func(string, []byte)) (wireRequest, error) {
 	if len(body) == 0 {
 		return wireRequest{}, protocolError(CodeProtocolInvalid, errors.New("empty request frame"))
 	}
 	if len(body) > MaxRequestFrameBytes {
 		return wireRequest{}, protocolError(CodeLimitExceeded, errors.New("request frame exceeds limit"))
 	}
-	var request wireRequest
-	if err := json.Unmarshal(body, &request, json.RejectUnknownMembers(true)); err != nil {
-		request.clear()
+	var decoded struct {
+		Version    int            `json:"version"`
+		ShareID    string         `json:"share_id"`
+		Capability jsontext.Value `json:"capability"`
+		Operation  string         `json:"operation"`
+		FileID     string         `json:"file_id"`
+		Offset     int64          `json:"offset"`
+		Length     int64          `json:"length"`
+	}
+	defer func() {
+		if capture != nil && len(decoded.Capability) > 0 {
+			capture("request.unmarshal", decoded.Capability)
+		}
+		clearSecret(decoded.Capability)
+	}()
+	if err := json.Unmarshal(body, &decoded, json.RejectUnknownMembers(true)); err != nil {
 		return wireRequest{}, protocolError(CodeProtocolInvalid, err)
+	}
+	capability, err := decodeCapabilityJSONString(decoded.Capability)
+	if err != nil {
+		return wireRequest{}, err
+	}
+	request := wireRequest{
+		Version: decoded.Version, ShareID: decoded.ShareID, Capability: capability,
+		Operation: decoded.Operation, FileID: decoded.FileID, Offset: decoded.Offset, Length: decoded.Length,
 	}
 	if err := request.validate(); err != nil {
 		request.clear()
@@ -235,7 +250,18 @@ func decodeRequestFrame(body []byte) (wireRequest, error) {
 	return request, nil
 }
 
+func decodeCapabilityJSONString(raw []byte) (capabilityText, error) {
+	if len(raw) < 2 || raw[0] != '"' || raw[len(raw)-1] != '"' || bytes.ContainsRune(raw, '\\') {
+		return nil, protocolError(CodeProtocolInvalid, errors.New("capability must be an unescaped JSON string"))
+	}
+	return capabilityText(bytes.Clone(raw[1 : len(raw)-1])), nil
+}
+
 func readRequest(ctx context.Context, conn net.Conn) (wireRequest, error) {
+	return readRequestWithCapture(ctx, conn, nil)
+}
+
+func readRequestWithCapture(ctx context.Context, conn net.Conn, capture func(string, []byte)) (wireRequest, error) {
 	length, err := readFrameLength(ctx, conn)
 	if err != nil {
 		return wireRequest{}, err
@@ -251,14 +277,14 @@ func readRequest(ctx context.Context, conn net.Conn) (wireRequest, error) {
 	if err := readFull(ctx, conn, body); err != nil {
 		return wireRequest{}, err
 	}
-	return decodeRequestFrame(body)
+	return decodeRequestFrameWithCapture(body, capture)
 }
 
 func writeRequest(ctx context.Context, conn net.Conn, request wireRequest) error {
 	if err := request.validate(); err != nil {
 		return err
 	}
-	body, err := json.Marshal(&request)
+	body, err := encodeRequestBody(request)
 	if err != nil {
 		return protocolError(CodeProtocolInvalid, err)
 	}
@@ -268,6 +294,31 @@ func writeRequest(ctx context.Context, conn net.Conn, request wireRequest) error
 	}
 	defer clearSecret(body)
 	return writeFrame(ctx, conn, body)
+}
+
+func encodeRequestBody(request wireRequest) ([]byte, error) {
+	parsed, err := parseCapabilityBytes(request.Capability)
+	if err != nil {
+		return nil, protocolError(CodeInvalidCapability, ErrInvalidCapability)
+	}
+	parsed.clear()
+	body := make([]byte, 0, 192+len(request.Capability))
+	body = append(body, `{"version":`...)
+	body = strconv.AppendInt(body, int64(request.Version), 10)
+	body = append(body, `,"share_id":`...)
+	body = strconv.AppendQuote(body, request.ShareID)
+	body = append(body, `,"capability":"`...)
+	body = append(body, request.Capability...)
+	body = append(body, `","operation":`...)
+	body = strconv.AppendQuote(body, request.Operation)
+	body = append(body, `,"file_id":`...)
+	body = strconv.AppendQuote(body, request.FileID)
+	body = append(body, `,"offset":`...)
+	body = strconv.AppendInt(body, request.Offset, 10)
+	body = append(body, `,"length":`...)
+	body = strconv.AppendInt(body, request.Length, 10)
+	body = append(body, '}')
+	return body, nil
 }
 
 type protocolErrorWire struct {

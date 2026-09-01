@@ -87,17 +87,17 @@ func (s *Service) armShareExpiry(stream *activeStream, expiresAt time.Time) erro
 		defer close(task.done)
 		<-expiryCtx.Done()
 		if errors.Is(context.Cause(expiryCtx), errShareExpired) {
-			s.expireShareAdmission(stream.shareID)
+			s.expireShareAdmission(stream.shareID, gate)
 		}
 	}()
 	if hook != nil {
-		hook(stream.shareID, func() { s.expireShareAdmission(stream.shareID) })
+		hook(stream.shareID, func() { s.expireShareAdmission(stream.shareID, gate) })
 	}
 	return nil
 }
 
-func (s *Service) expireShareAdmission(shareID string) {
-	_, _ = s.closeShareAdmission(context.Background(), shareID, protocolError(CodeExpired, errShareExpired))
+func (s *Service) expireShareAdmission(shareID string, gate *shareGate) {
+	_, _ = s.closeInstalledShareAdmission(context.Background(), shareID, gate, protocolError(CodeExpired, errShareExpired), true)
 }
 
 func (s *Service) commitShareAdmission(stream *activeStream, expiresAt time.Time) (context.Context, error) {
@@ -148,9 +148,21 @@ func (s *Service) finishShareAdmission(stream *activeStream) {
 }
 
 func (s *Service) closeShareAdmission(ctx context.Context, shareID string, cause error) (uint64, error) {
+	return s.closeInstalledShareAdmission(ctx, shareID, nil, cause, false)
+}
+
+func (s *Service) closeInstalledShareAdmission(ctx context.Context, shareID string, expected *shareGate, cause error, onlyIfAccepting bool) (uint64, error) {
 	s.mu.Lock()
 	gate := s.shareGates[shareID]
+	if expected != nil && gate != expected {
+		s.mu.Unlock()
+		return 0, nil
+	}
 	if gate == nil {
+		if expected != nil {
+			s.mu.Unlock()
+			return 0, nil
+		}
 		gate = &shareGate{
 			accepting:   false,
 			provisional: make(map[*activeStream]struct{}),
@@ -158,6 +170,11 @@ func (s *Service) closeShareAdmission(ctx context.Context, shareID string, cause
 		}
 		s.shareGates[shareID] = gate
 	} else {
+		if onlyIfAccepting && !gate.accepting {
+			generation := gate.generation
+			s.mu.Unlock()
+			return generation, nil
+		}
 		gate.accepting = false
 	}
 	gate.generation++
@@ -187,14 +204,15 @@ func (s *Service) closeShareAdmission(ctx context.Context, shareID string, cause
 	return generation, nil
 }
 
-func (s *Service) reopenShareAdmission(shareID string, generation uint64) {
+func (s *Service) reopenShareAdmission(shareID string, generation uint64) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	gate := s.shareGates[shareID]
 	if gate == nil || s.closed || gate.generation != generation {
-		return
+		return false
 	}
 	gate.accepting = true
+	return true
 }
 
 func (s *Service) removeShareGate(shareID string) {
@@ -204,13 +222,22 @@ func (s *Service) removeShareGate(shareID string) {
 		s.mu.Unlock()
 		return
 	}
-	delete(s.shareGates, shareID)
+	gate.accepting = false
+	generation := gate.generation
 	expiry := gate.expiry
 	s.mu.Unlock()
 	if expiry != nil {
+		if s.handlerHooks.beforeGateExpiryCancel != nil {
+			s.handlerHooks.beforeGateExpiryCancel(shareID)
+		}
 		expiry.cancel()
 		<-expiry.done
 	}
+	s.mu.Lock()
+	if current := s.shareGates[shareID]; current == gate && current.generation == generation && len(current.provisional) == 0 && len(current.active) == 0 {
+		delete(s.shareGates, shareID)
+	}
+	s.mu.Unlock()
 }
 
 func (s *Service) activeShareStreamsLocked(shareID string) int {

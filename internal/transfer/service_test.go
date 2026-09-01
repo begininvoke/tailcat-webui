@@ -109,6 +109,12 @@ func TestCreateShareCommitFailureLeavesMetadataAndAuditAbsent(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = service.Close() })
+	var generated []byte
+	service.secretHooks.capture = func(kind string, secret []byte) {
+		if kind == "generated.capability" {
+			generated = secret
+		}
+	}
 	commitFailure := errors.New("injected share-create commit failure")
 	service.lifecycleHooks.beforeCommit = func(operation string) error {
 		if operation == "share.create" {
@@ -124,6 +130,9 @@ func TestCreateShareCommitFailureLeavesMetadataAndAuditAbsent(t *testing.T) {
 	}
 	if got := db.AuditEvent.Query().CountX(t.Context()); got != 0 {
 		t.Fatalf("audit rows after failed commit = %d, want 0", got)
+	}
+	if len(generated) == 0 || !allZeroBytes(generated) {
+		t.Fatal("failed share create retained mutable capability plaintext")
 	}
 }
 
@@ -719,6 +728,66 @@ func TestRotationRevokesRequestAuthorizedBeforeStreamRegistration(t *testing.T) 
 	}
 }
 
+func TestRotationReopensCommittedGenerationAfterCallerCancellation(t *testing.T) {
+	db, storage, box, owner, server, _ := newTransferServiceData(t)
+	service := newTransferServiceForTest(t, db, storage, box)
+	share, err := service.CreateShare(t.Context(), owner.ID, CreateShareInput{ServerID: server.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.StageFile(t.Context(), owner.ID, share.ID, StageFileInput{VirtualPath: "file.txt", Size: 3, Body: io.NopCloser(bytes.NewBufferString("abc"))}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.FinalizeShare(t.Context(), owner.ID, share.ID); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	service.lifecycleHooks.afterCommit = func(operation string) {
+		if operation == "share.rotate" {
+			cancel()
+		}
+	}
+	capability, err := service.RotateShare(ctx, owner.ID, share.ID)
+	if err != nil || capability == "" {
+		t.Fatalf("RotateShare capability-present=%v error=%v", capability != "", err)
+	}
+	if _, err := fetchManifest(t.Context(), handlerDial(t, service.ReservedHandler(server.ID)), share.ID, capability); err != nil {
+		t.Fatalf("committed capability after caller cancellation: %v", err)
+	}
+}
+
+func TestRotationDoesNotReopenOrReturnSecretAfterLaterGenerationWins(t *testing.T) {
+	db, storage, box, owner, server, _ := newTransferServiceData(t)
+	service := newTransferServiceForTest(t, db, storage, box)
+	share, err := service.CreateShare(t.Context(), owner.ID, CreateShareInput{ServerID: server.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.StageFile(t.Context(), owner.ID, share.ID, StageFileInput{VirtualPath: "file.txt", Size: 3, Body: io.NopCloser(bytes.NewBufferString("abc"))}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.FinalizeShare(t.Context(), owner.ID, share.ID); err != nil {
+		t.Fatal(err)
+	}
+	service.lifecycleHooks.afterCommit = func(operation string) {
+		if operation == "share.rotate" {
+			_, _ = service.closeShareAdmission(context.Background(), share.ID, ErrInvalidCapability)
+		}
+	}
+	capability, err := service.RotateShare(t.Context(), owner.ID, share.ID)
+	if capability != "" || !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("RotateShare capability-present=%v error=%v, want closed-generation error", capability != "", err)
+	}
+	if _, err := service.beginShareAdmission(t.Context(), share.ID); protocolCode(err) != CodeInvalidCapability {
+		t.Fatalf("later-generation admission error = %v, want invalid capability", err)
+	}
+	service.lifecycleHooks.afterCommit = nil
+	capability, err = service.RotateShare(t.Context(), owner.ID, share.ID)
+	if err != nil || capability == "" {
+		t.Fatalf("repair rotation capability-present=%v error=%v", capability != "", err)
+	}
+}
+
 func TestDeleteRevokesRequestAuthorizedBeforeStreamRegistration(t *testing.T) {
 	db, storage, box, owner, server, _ := newTransferServiceData(t)
 	service := newTransferServiceForTest(t, db, storage, box)
@@ -857,6 +926,12 @@ func TestRotationIncomingCreateAndJobStartCommitFailuresRollbackStateAndAudit(t 
 	if _, err := service.FinalizeShare(t.Context(), owner.ID, share.ID); err != nil {
 		t.Fatal(err)
 	}
+	var failedRotationSecret []byte
+	service.secretHooks.capture = func(kind string, secret []byte) {
+		if kind == "generated.capability" {
+			failedRotationSecret = secret
+		}
+	}
 	commitFailure := errors.New("injected lifecycle commit failure")
 	service.lifecycleHooks.beforeCommit = func(operation string) error {
 		if operation == "share.rotate" {
@@ -864,8 +939,11 @@ func TestRotationIncomingCreateAndJobStartCommitFailuresRollbackStateAndAudit(t 
 		}
 		return nil
 	}
-	if _, err := service.RotateShare(t.Context(), owner.ID, share.ID); !errors.Is(err, commitFailure) {
+	if capability, err := service.RotateShare(t.Context(), owner.ID, share.ID); capability != "" || !errors.Is(err, commitFailure) {
 		t.Fatalf("RotateShare error = %v, want commit failure", err)
+	}
+	if len(failedRotationSecret) == 0 || !allZeroBytes(failedRotationSecret) {
+		t.Fatal("failed rotation retained mutable capability plaintext")
 	}
 	if _, err := fetchManifest(t.Context(), handlerDial(t, service.ReservedHandler(server.ID)), share.ID, share.Capability); err != nil {
 		t.Fatalf("old capability after failed rotation: %v", err)
@@ -975,8 +1053,11 @@ func TestRecoveryExpiredShareAndJobAuditCommitFailuresRemainRetryable(t *testing
 		t.Fatalf("expired job status = %s, want deleting", status)
 	}
 	service.lifecycleHooks.beforeCommit = nil
-	if err := service.RecoverAfterRestore(t.Context()); err != nil {
-		t.Fatalf("retry RecoverAfterRestore: %v", err)
+	if err := service.DeleteShare(t.Context(), owner.ID, share.ID); err != nil {
+		t.Fatalf("public retry DeleteShare: %v", err)
+	}
+	if err := service.DeleteJob(t.Context(), owner.ID, job.ID); err != nil {
+		t.Fatalf("public retry DeleteJob: %v", err)
 	}
 	if _, err := db.TransferShare.Get(t.Context(), share.ID); !ent.IsNotFound(err) {
 		t.Fatalf("expired share lookup = %v, want not found", err)
@@ -987,6 +1068,11 @@ func TestRecoveryExpiredShareAndJobAuditCommitFailuresRemainRetryable(t *testing
 	for _, auditID := range []string{"share:" + share.ID + ":transfer.expire", "job:" + job.ID + ":transfer.expire"} {
 		if count := db.AuditEvent.Query().Where(auditevent.IDEQ(auditID)).CountX(t.Context()); count != 1 {
 			t.Fatalf("expiry audit %q count = %d, want 1", auditID, count)
+		}
+	}
+	for _, auditID := range []string{"share:" + share.ID + ":transfer.delete", "job:" + job.ID + ":transfer.delete"} {
+		if exists := db.AuditEvent.Query().Where(auditevent.IDEQ(auditID)).ExistX(t.Context()); exists {
+			t.Fatalf("public expiry retry wrote delete audit %q", auditID)
 		}
 	}
 }
@@ -1042,6 +1128,51 @@ func TestExpiryRevokesRequestAuthorizedBeforeStreamRegistration(t *testing.T) {
 	}
 	if _, err := fetchManifest(t.Context(), handlerDial(t, service.ReservedHandler(server.ID)), share.ID, share.Capability); protocolCode(err) != CodeInvalidCapability {
 		t.Fatalf("post-expiry request error = %v, want invalid capability", err)
+	}
+}
+
+func TestExpiryCallbackCannotRecreateGateWhileDeleteRemovesIt(t *testing.T) {
+	db, storage, box, _, _, _ := newTransferServiceData(t)
+	service := newTransferServiceForTest(t, db, storage, box)
+	shareID := newEntityID()
+	expiryTrigger := make(chan func(), 1)
+	service.handlerHooks.afterExpiryArmed = func(_ string, trigger func()) { expiryTrigger <- trigger }
+	admission, err := service.beginShareAdmission(t.Context(), shareID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.armShareExpiry(admission, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.commitShareAdmission(admission, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	service.finishShareAdmission(admission)
+	beforeCancel := make(chan struct{})
+	releaseCancel := make(chan struct{})
+	service.handlerHooks.beforeGateExpiryCancel = func(string) {
+		close(beforeCancel)
+		<-releaseCancel
+	}
+	removeDone := make(chan struct{})
+	go func() {
+		service.removeShareGate(shareID)
+		close(removeDone)
+	}()
+	<-beforeCancel
+	triggerDone := make(chan struct{})
+	go func() {
+		(<-expiryTrigger)()
+		close(triggerDone)
+	}()
+	<-triggerDone
+	close(releaseCancel)
+	<-removeDone
+	service.mu.Lock()
+	_, ghost := service.shareGates[shareID]
+	service.mu.Unlock()
+	if ghost {
+		t.Fatal("expiry callback recreated a ghost gate during deletion")
 	}
 }
 
@@ -1182,7 +1313,7 @@ func TestRunnerRejectsBadBlockBeforeWriteAndWholeHashBeforeCompletion(t *testing
 			client := db.TailClient.Create().SetUserID(owner.ID).SetName("integrity").SetServerTokenCipher([]byte("cipher")).SetTokenHint("hint").SaveX(t.Context())
 			remoteShareID := newEntityID()
 			remoteFileID := newEntityID()
-			capability, _, err := newCapability(remoteShareID)
+			capability, _, err := newTestCapability(remoteShareID)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1394,6 +1525,69 @@ func TestRecoveryQueuesThirdJobDeduplicatesAndStartsAfterRelease(t *testing.T) {
 	}
 }
 
+func TestRecoveryCapacityReleaseBeforeSchedulerClearKeepsWakeup(t *testing.T) {
+	queueCtx, cancelQueue := context.WithCancelCause(context.Background())
+	defer cancelQueue(nil)
+	service := &Service{
+		ownerJobs: make(map[string]int), resumeQueue: make(map[string][]*queuedResume),
+		resumeScheduling: make(map[string]bool), queueCtx: queueCtx,
+	}
+	const ownerID = "owner"
+	service.ownerJobs[ownerID] = maxActiveJobsPerOwner
+	service.resumeQueue[ownerID] = []*queuedResume{{jobID: "queued"}}
+	service.resumeScheduling[ownerID] = true
+	beforeClear := make(chan struct{})
+	releaseClear := make(chan struct{})
+	service.runnerHooks.beforeResumeCapacityClear = func() {
+		close(beforeClear)
+		<-releaseClear
+	}
+	continueResult := make(chan bool, 1)
+	go func() { continueResult <- service.finishResumeSchedulerForCapacity(ownerID) }()
+	<-beforeClear
+	service.mu.Lock()
+	service.ownerJobs[ownerID]--
+	service.scheduleQueuedResumesLocked(ownerID)
+	service.mu.Unlock()
+	close(releaseClear)
+	if shouldContinue := <-continueResult; !shouldContinue {
+		t.Fatal("scheduler cleared after capacity was released")
+	}
+	service.mu.Lock()
+	scheduling := service.resumeScheduling[ownerID]
+	queued := len(service.resumeQueue[ownerID])
+	service.mu.Unlock()
+	if !scheduling || queued != 1 {
+		t.Fatalf("scheduler state scheduling=%v queued=%d, want true/1", scheduling, queued)
+	}
+}
+
+func TestCloseCancelsAndJoinsBackoffResumeScheduler(t *testing.T) {
+	db, storage, box, _, _, _ := newTransferServiceData(t)
+	service := newTransferServiceForTest(t, db, storage, box)
+	const ownerID = "queued-owner"
+	service.mu.Lock()
+	service.resumeQueue[ownerID] = []*queuedResume{{jobID: "queued-job", nextAttempt: time.Now().Add(time.Hour)}}
+	service.scheduleQueuedResumesLocked(ownerID)
+	service.mu.Unlock()
+	done := make(chan error, 1)
+	go func() { done <- service.Close() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Service.Close: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Service.Close did not cancel resume backoff")
+	}
+	service.mu.Lock()
+	scheduling := service.resumeScheduling[ownerID]
+	service.mu.Unlock()
+	if scheduling {
+		t.Fatal("resume scheduler remained registered after Close")
+	}
+}
+
 func TestRecoveryTransientStartFailureStaysQueuedAndRetriesAutomatically(t *testing.T) {
 	db, storage, box, owner, server, _ := newTransferServiceData(t)
 	client := db.TailClient.Create().SetUserID(owner.ID).SetName("queue-retry").SetServerTokenCipher([]byte("cipher")).SetTokenHint("hint").SaveX(t.Context())
@@ -1460,6 +1654,14 @@ func TestRecoveryManagedDialFailureRequeuesAndCompletesWithoutManualRetry(t *tes
 	originalDialer := service.dialer
 	dialFailure := errors.New("transient range dial failure")
 	var attempts atomic.Int64
+	var runningEvents atomic.Int64
+	service.progressNow = func() time.Time { return time.Unix(500, 0) }
+	service.publisher = transferPublisherFunc(func(_ string, event events.Envelope) {
+		payload, ok := event.Payload.(TransferEventPayload)
+		if ok && payload.Status == string(transferjob.StatusRunning) {
+			runningEvents.Add(1)
+		}
+	})
 	service.dialer = transferDialerFunc(func(ctx context.Context, ownerID, clientID string, port uint16) (net.Conn, error) {
 		if attempts.Add(1) == 1 {
 			return nil, dialFailure
@@ -1472,6 +1674,9 @@ func TestRecoveryManagedDialFailureRequeuesAndCompletesWithoutManualRetry(t *tes
 	waitForTransferJobStatus(t, db, job.ID, transferjob.StatusCompleted)
 	if attempts.Load() < 2 {
 		t.Fatalf("dial attempts = %d, want automatic retry", attempts.Load())
+	}
+	if runningEvents.Load() != 1 {
+		t.Fatalf("managed-retry running/progress events = %d, want 1 within one second", runningEvents.Load())
 	}
 }
 
@@ -1505,7 +1710,7 @@ func createTerminalTestJob(t *testing.T, db *ent.Client, box *secrets.Box, owner
 	t.Helper()
 	jobID := newEntityID()
 	remoteShareID := newEntityID()
-	capability, _, err := newCapability(remoteShareID)
+	capability, _, err := newTestCapability(remoteShareID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1557,6 +1762,20 @@ func waitForTransferJobStatus(t *testing.T, db *ent.Client, jobID string, want t
 func blake3Hex(value string) string {
 	hash := blake3.Sum256([]byte(value))
 	return hex.EncodeToString(hash[:])
+}
+
+func newTestCapability(shareID string) (string, []byte, error) {
+	var secret [capabilitySecretBytes]byte
+	for index := range secret {
+		secret[index] = byte(index + 1)
+	}
+	defer clearSecret(secret[:])
+	encoded, hash, err := encodeCapabilityBytes(shareID, &secret)
+	if err != nil {
+		return "", nil, err
+	}
+	defer encoded.clear()
+	return string(encoded), hash, nil
 }
 
 func newTransferServiceData(t *testing.T) (*ent.Client, *Storage, *secrets.Box, *ent.User, *ent.TailServer, *ent.TailServer) {

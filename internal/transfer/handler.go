@@ -40,7 +40,7 @@ func (s *Service) serveReserved(ctx context.Context, serverID string, connection
 			return protocolError(CodeRemoteUnavailable, err)
 		}
 	}
-	request, err := readRequest(requestCtx, connection)
+	request, err := readRequestWithCapture(requestCtx, connection, s.captureSecret)
 	if err != nil {
 		_ = writeErrorResponse(requestCtx, connection, responseCode(err))
 		return err
