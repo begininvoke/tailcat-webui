@@ -12,25 +12,23 @@ if (( ${#scan_paths[@]} == 0 )); then
 fi
 
 set +e
-matches=$(LC_ALL=C rg \
+matches=$(LC_ALL=C grep \
+  --recursive \
   --files-with-matches \
-  --hidden \
-  --no-ignore \
-  --no-messages \
-  -I \
-  -e "$pattern" \
-  --glob '!.git/**' \
-  --glob '!.superpowers/**' \
-  --glob '!web/node_modules/**' \
-  --glob '!web/dist/**' \
-  --glob '!bin/**' \
-  --glob '!coverage.out' \
-  --glob '!*.png' \
-  --glob '!*.jpg' \
-  --glob '!*.jpeg' \
-  --glob '!*.gif' \
-  --glob '!*.webm' \
-  -- "${scan_paths[@]}" | LC_ALL=C sort -u)
+  --extended-regexp \
+  --binary-files=without-match \
+  --exclude-dir='.git' \
+  --exclude-dir='.superpowers' \
+  --exclude-dir='node_modules' \
+  --exclude-dir='dist' \
+  --exclude-dir='bin' \
+  --exclude='coverage.out' \
+  --exclude='*.png' \
+  --exclude='*.jpg' \
+  --exclude='*.jpeg' \
+  --exclude='*.gif' \
+  --exclude='*.webm' \
+  -- "$pattern" "${scan_paths[@]}" 2>/dev/null | LC_ALL=C sort -u)
 status=$?
 set -e
 

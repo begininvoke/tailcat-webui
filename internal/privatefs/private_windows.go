@@ -132,6 +132,10 @@ func validateHandle(handle windows.Handle) error {
 	if err != nil {
 		return err
 	}
+	currentUser, err := currentUserSID()
+	if err != nil {
+		return err
+	}
 	for index := uint32(0); index < uint32(dacl.AceCount); index++ {
 		var ace *windows.ACCESS_ALLOWED_ACE
 		if err := windows.GetAce(dacl, index, &ace); err != nil {
@@ -142,7 +146,7 @@ func validateHandle(handle windows.Handle) error {
 			continue
 		case windows.ACCESS_ALLOWED_ACE_TYPE:
 			sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
-			if sid.Equals(owner) || sid.Equals(system) || sid.Equals(administrators) {
+			if sid.Equals(owner) || sid.Equals(currentUser) || sid.Equals(system) || sid.Equals(administrators) {
 				continue
 			}
 		}
