@@ -511,11 +511,12 @@ describe('RoutesPage transfers', () => {
     expect(await screen.findByText('retry.txt')).not.toBeNull()
   })
 
-  it('keeps an open Drawer isolated from a stale terminal item success across Retry', async () => {
+  it('refreshes the final selected lifecycle when SSE running arrives before the Retry response', async () => {
     const runningAfterRetry = { ...failedJob, status: 'running' as const, error_code: undefined }
     const terminalItem = { id: 'terminal-item', job_id: failedJob.id, virtual_path: 'terminal.txt', size: 4, status: 'completed' as const, received_bytes: 4, completed_blocks: 1, mtime: timestamp, created_at: timestamp, updated_at: timestamp, finished_at: timestamp }
-    const currentItem = { ...terminalItem, id: 'current-item', virtual_path: 'current.txt', status: 'running' as const, received_bytes: 1, completed_blocks: 0, finished_at: undefined }
-    const staleItems = deferred<typeof terminalItem[]>()
+    const currentItem = { ...terminalItem, id: 'sse-first-current-item', virtual_path: 'sse-first-current.txt', status: 'running' as const, received_bytes: 1, completed_blocks: 0, finished_at: undefined }
+    const retryResponse = deferred<typeof runningAfterRetry>()
+    const staleItems = deferred<typeof currentItem[]>()
     const currentItems = deferred<typeof currentItem[]>()
     let failedJobCalls = 0
     const items = vi.mocked(api.transferJobItems).mockImplementation(async (jobID) => {
@@ -526,7 +527,7 @@ describe('RoutesPage transfers', () => {
       return currentItems.promise
     })
     vi.mocked(api.transferJobs).mockResolvedValue([failedJob])
-    vi.spyOn(api, 'retryTransferJob').mockResolvedValue(runningAfterRetry)
+    const retry = vi.spyOn(api, 'retryTransferJob').mockReturnValue(retryResponse.promise)
     renderPage()
     const user = userEvent.setup()
     await user.click(await screen.findByText('File details'))
@@ -534,84 +535,111 @@ describe('RoutesPage transfers', () => {
     expect(await within(drawer).findByText('terminal.txt')).not.toBeNull()
     expect(drawer.textContent).toContain('1 / 1 files')
 
-    vi.useFakeTimers()
-    act(() => window.dispatchEvent(new CustomEvent(transferEvent, { detail: { version: 1, type: 'transfer', resource_kind: 'transfer', resource_id: failedJob.id, operation_id: failedJob.id, phase: 'error', sequence: 1, at: timestamp, payload: { job_id: failedJob.id, status: 'failed', received_bytes: 2, total_bytes: 4 } } })))
-    await act(async () => { vi.advanceTimersByTime(100); await Promise.resolve(); await Promise.resolve() })
-    expect(items).toHaveBeenCalledTimes(2)
-    vi.useRealTimers()
-
-    vi.mocked(api.transferJobs).mockResolvedValue([runningAfterRetry])
     await user.click(within(drawer).getByText('Retry transfer'))
-    await waitFor(() => expect(drawer.textContent).toContain('Running'))
+    expect(retry).toHaveBeenCalledTimes(1)
+    vi.mocked(api.transferJobs).mockResolvedValue([runningAfterRetry])
+    vi.useFakeTimers()
+    act(() => {
+      window.dispatchEvent(new CustomEvent(transferEvent, { detail: { version: 1, type: 'transfer', resource_kind: 'transfer', resource_id: failedJob.id, operation_id: failedJob.id, phase: 'running', sequence: 1, at: timestamp, payload: { job_id: failedJob.id, status: 'running', received_bytes: 2, total_bytes: 4 } } }))
+      window.dispatchEvent(new CustomEvent(transferEvent, { detail: { version: 1, type: 'transfer', resource_kind: 'transfer', resource_id: failedJob.id, operation_id: failedJob.id, phase: 'running', sequence: 2, at: timestamp, payload: { job_id: failedJob.id, status: 'running', received_bytes: 3, total_bytes: 4 } } }))
+    })
+    expect(items).toHaveBeenCalledTimes(1)
+    await act(async () => { vi.advanceTimersByTime(100); await Promise.resolve(); await Promise.resolve() })
     expect(items).toHaveBeenCalledTimes(2)
     expect(drawer.textContent).toContain('Running')
-    expect(drawer.textContent).toContain('File progress unavailable')
-    expect(document.body.textContent).not.toContain('1 / 1 files')
-    expect(within(drawer).queryByText('terminal.txt')).toBeNull()
-    expect(within(drawer).queryByText('Download')).toBeNull()
-    expect(within(drawer).queryByText('Loading')).toBeNull()
+    expect(within(drawer).getByText('Loading')).not.toBeNull()
 
-    await act(async () => { staleItems.resolve([terminalItem]); await Promise.resolve(); await Promise.resolve() })
-    expect(within(drawer).queryByText('terminal.txt')).toBeNull()
-    expect(drawer.textContent).toContain('File progress unavailable')
-    expect(document.body.textContent).not.toContain('1 / 1 files')
-    expect(within(drawer).queryByText('Download')).toBeNull()
+    await act(async () => { retryResponse.resolve(runningAfterRetry); await Promise.resolve(); await Promise.resolve() })
     expect(within(drawer).queryByText('Loading')).toBeNull()
+    expect(drawer.textContent).toContain('File progress unavailable')
+    await act(async () => { staleItems.reject(new Error('stale offline')); await Promise.resolve(); await Promise.resolve() })
+    expect(within(drawer).queryByText('Could not load the files for this job.')).toBeNull()
 
-    vi.useFakeTimers()
-    act(() => window.dispatchEvent(new CustomEvent(transferEvent, { detail: { version: 1, type: 'transfer', resource_kind: 'transfer', resource_id: failedJob.id, operation_id: failedJob.id, phase: 'running', sequence: 2, at: timestamp, payload: { job_id: failedJob.id, status: 'running', received_bytes: 2, total_bytes: 4 } } })))
-    await act(async () => { vi.advanceTimersByTime(100); await Promise.resolve(); await Promise.resolve() })
+    act(() => vi.advanceTimersByTime(99))
+    expect(items).toHaveBeenCalledTimes(2)
+    await act(async () => { vi.advanceTimersByTime(1); await Promise.resolve(); await Promise.resolve() })
     expect(items).toHaveBeenCalledTimes(3)
-    vi.useRealTimers()
+    expect(within(drawer).getByText('Loading')).not.toBeNull()
 
-    currentItems.resolve([currentItem])
-    expect(await within(drawer).findByText('current.txt')).not.toBeNull()
+    await act(async () => { currentItems.resolve([currentItem]); await Promise.resolve(); await Promise.resolve() })
+    expect(within(drawer).getByText('sse-first-current.txt')).not.toBeNull()
     expect(within(drawer).queryByText('terminal.txt')).toBeNull()
     expect(drawer.textContent).toContain('0 / 1 files')
+    expect(items).toHaveBeenCalledTimes(3)
   })
 
-  it('keeps stale selected-item failure and finally writes out of a running lifecycle event', async () => {
-    const runningAfterEvent = { ...failedJob, status: 'running' as const, error_code: undefined }
-    const currentItem = { id: 'event-current-item', job_id: failedJob.id, virtual_path: 'event-current.txt', size: 4, status: 'running' as const, received_bytes: 1, completed_blocks: 0, mtime: timestamp, created_at: timestamp, updated_at: timestamp }
-    const staleItems = deferred<typeof currentItem[]>()
+  it('refreshes the selected lifecycle when the Retry response arrives before duplicate SSE running events', async () => {
+    const runningAfterRetry = { ...failedJob, status: 'running' as const, error_code: undefined }
+    const terminalItem = { id: 'terminal-item', job_id: failedJob.id, virtual_path: 'terminal.txt', size: 4, status: 'completed' as const, received_bytes: 4, completed_blocks: 1, mtime: timestamp, created_at: timestamp, updated_at: timestamp, finished_at: timestamp }
+    const staleItem = { ...terminalItem, id: 'api-first-stale-item', virtual_path: 'api-first-stale.txt' }
+    const currentItem = { ...terminalItem, id: 'api-first-current-item', virtual_path: 'api-first-current.txt', status: 'running' as const, received_bytes: 1, completed_blocks: 0, finished_at: undefined }
+    const retryResponse = deferred<typeof runningAfterRetry>()
+    const staleItems = deferred<typeof staleItem[]>()
     const currentItems = deferred<typeof currentItem[]>()
     let failedJobCalls = 0
     const items = vi.mocked(api.transferJobItems).mockImplementation(async (jobID) => {
       if (jobID !== failedJob.id) return []
       failedJobCalls += 1
-      return failedJobCalls === 1 ? staleItems.promise : currentItems.promise
+      if (failedJobCalls === 1) return [terminalItem]
+      if (failedJobCalls === 2) return staleItems.promise
+      return currentItems.promise
     })
-    vi.mocked(api.transferJobs).mockResolvedValue([failedJob, readyJob])
+    vi.mocked(api.transferJobs).mockResolvedValue([failedJob])
+    vi.spyOn(api, 'retryTransferJob').mockReturnValue(retryResponse.promise)
     renderPage()
     const user = userEvent.setup()
-    await user.click((await screen.findAllByText('File details'))[0]!)
+    await user.click(await screen.findByText('File details'))
     const drawer = document.querySelector('.ant-drawer-open') as HTMLElement
-    expect(within(drawer).getByText('Loading')).not.toBeNull()
+    expect(await within(drawer).findByText('terminal.txt')).not.toBeNull()
 
-    vi.mocked(api.transferJobs).mockResolvedValue([runningAfterEvent, readyJob])
+    await user.click(within(drawer).getByText('Retry transfer'))
+    vi.mocked(api.transferJobs).mockResolvedValue([runningAfterRetry])
     vi.useFakeTimers()
-    act(() => {
-      window.dispatchEvent(new CustomEvent(transferEvent, { detail: { version: 1, type: 'transfer', resource_kind: 'transfer', resource_id: failedJob.id, operation_id: failedJob.id, phase: 'running', sequence: 1, at: timestamp, payload: { job_id: failedJob.id, status: 'running', received_bytes: 2, total_bytes: 4 } } }))
-      window.dispatchEvent(new CustomEvent(transferEvent, { detail: { version: 1, type: 'transfer', resource_kind: 'transfer', resource_id: readyJob.id, operation_id: readyJob.id, phase: 'running', sequence: 1, at: timestamp, payload: { job_id: readyJob.id, status: 'running', received_bytes: 1, total_bytes: 4 } } }))
-    })
-    expect(items).toHaveBeenCalledTimes(1)
+    await act(async () => { retryResponse.resolve(runningAfterRetry); await Promise.resolve(); await Promise.resolve() })
     expect(drawer.textContent).toContain('Running')
     expect(drawer.textContent).toContain('File progress unavailable')
-    expect(within(drawer).queryByText('Download')).toBeNull()
-    expect(within(drawer).queryByText('Loading')).toBeNull()
-
-    await act(async () => { staleItems.reject(new Error('stale offline')); await Promise.resolve(); await Promise.resolve() })
-    expect(within(drawer).queryByText('Could not load the files for this job.')).toBeNull()
-    expect(within(drawer).queryByText('Loading')).toBeNull()
-
+    expect(items).toHaveBeenCalledTimes(1)
     await act(async () => { vi.advanceTimersByTime(100); await Promise.resolve(); await Promise.resolve() })
     expect(items).toHaveBeenCalledTimes(2)
     expect(within(drawer).getByText('Loading')).not.toBeNull()
 
-    await act(async () => { currentItems.resolve([currentItem]); await Promise.resolve(); await Promise.resolve() })
-    expect(within(drawer).getByText('event-current.txt')).not.toBeNull()
-    expect(drawer.textContent).toContain('0 / 1 files')
+    act(() => {
+      window.dispatchEvent(new CustomEvent(transferEvent, { detail: { version: 1, type: 'transfer', resource_kind: 'transfer', resource_id: failedJob.id, operation_id: failedJob.id, phase: 'running', sequence: 1, at: timestamp, payload: { job_id: failedJob.id, status: 'running', received_bytes: 2, total_bytes: 4 } } }))
+      window.dispatchEvent(new CustomEvent(transferEvent, { detail: { version: 1, type: 'transfer', resource_kind: 'transfer', resource_id: failedJob.id, operation_id: failedJob.id, phase: 'running', sequence: 2, at: timestamp, payload: { job_id: failedJob.id, status: 'running', received_bytes: 3, total_bytes: 4 } } }))
+    })
+    act(() => vi.advanceTimersByTime(99))
     expect(items).toHaveBeenCalledTimes(2)
+    await act(async () => { vi.advanceTimersByTime(1); await Promise.resolve(); await Promise.resolve() })
+    expect(items).toHaveBeenCalledTimes(3)
+    expect(within(drawer).getByText('Loading')).not.toBeNull()
+
+    await act(async () => { staleItems.resolve([staleItem]); await Promise.resolve(); await Promise.resolve() })
+    expect(within(drawer).queryByText('api-first-stale.txt')).toBeNull()
+    expect(within(drawer).getByText('Loading')).not.toBeNull()
+    await act(async () => { currentItems.resolve([currentItem]); await Promise.resolve(); await Promise.resolve() })
+    expect(within(drawer).getByText('api-first-current.txt')).not.toBeNull()
+    expect(within(drawer).queryByText('terminal.txt')).toBeNull()
+    expect(drawer.textContent).toContain('0 / 1 files')
+    expect(items).toHaveBeenCalledTimes(3)
+  })
+
+  it.each(['Drawer close', 'job deletion', 'unmount'] as const)('cancels a pending lifecycle item refresh on %s', async (ending) => {
+    const terminalItem = { id: 'terminal-item', job_id: failedJob.id, virtual_path: 'terminal.txt', size: 4, status: 'completed' as const, received_bytes: 4, completed_blocks: 1, mtime: timestamp, created_at: timestamp, updated_at: timestamp, finished_at: timestamp }
+    const items = vi.mocked(api.transferJobItems).mockResolvedValue([terminalItem])
+    vi.mocked(api.transferJobs).mockResolvedValue([failedJob])
+    const view = renderPage()
+    await userEvent.click(await screen.findByText('File details'))
+    const drawer = document.querySelector('.ant-drawer-open') as HTMLElement
+    expect(await within(drawer).findByText('terminal.txt')).not.toBeNull()
+
+    vi.useFakeTimers()
+    act(() => window.dispatchEvent(new CustomEvent(transferEvent, { detail: { version: 1, type: 'transfer', resource_kind: 'transfer', resource_id: failedJob.id, operation_id: failedJob.id, phase: 'running', sequence: 1, at: timestamp, payload: { job_id: failedJob.id, status: 'running', received_bytes: 2, total_bytes: 4 } } })))
+    expect(items).toHaveBeenCalledTimes(1)
+    if (ending === 'Drawer close') fireEvent.click(within(drawer).getByRole('button', { name: 'Close' }))
+    if (ending === 'job deletion') act(() => window.dispatchEvent(new CustomEvent(transferEvent, { detail: { version: 1, type: 'transfer', resource_kind: 'transfer', resource_id: failedJob.id, operation_id: failedJob.id, phase: 'stopped', sequence: 2, at: timestamp, payload: { job_id: failedJob.id, status: 'deleted' } } })))
+    if (ending === 'unmount') view.unmount()
+    await act(async () => { vi.advanceTimersByTime(100); await Promise.resolve(); await Promise.resolve() })
+    expect(items).toHaveBeenCalledTimes(1)
   })
 
   it('keeps route cards visible when client or transfer-server references fail independently', async () => {
