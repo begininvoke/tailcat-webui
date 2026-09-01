@@ -803,7 +803,7 @@ describe('RoutesPage transfers', () => {
     vi.mocked(api.transferJobs).mockResolvedValue([runningAfterRetry])
     await user.click(within(document.querySelector('.ant-drawer') as HTMLElement).getByText('Retry transfer'))
     await waitFor(() => expect(document.querySelector('.ant-drawer')?.textContent).toContain('Running'))
-    expect(document.querySelector('.ant-drawer')?.textContent).toContain('File progress unavailable')
+    await waitFor(() => expect(document.querySelector('.ant-drawer')?.textContent).toContain('File progress unavailable'))
     await user.keyboard('{Escape}')
     staleItems.resolve([terminalItem])
     await act(async () => { await Promise.resolve(); await Promise.resolve() })
