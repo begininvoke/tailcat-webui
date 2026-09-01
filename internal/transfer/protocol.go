@@ -280,44 +280,104 @@ func readRequestWithCapture(ctx context.Context, conn net.Conn, capture func(str
 	return decodeRequestFrameWithCapture(body, capture)
 }
 
+type requestWriteHooks struct {
+	afterCapabilityCopy func([]byte)
+}
+
 func writeRequest(ctx context.Context, conn net.Conn, request wireRequest) error {
+	return writeRequestWithHooks(ctx, conn, request, requestWriteHooks{})
+}
+
+func writeRequestWithHooks(ctx context.Context, conn net.Conn, request wireRequest, hooks requestWriteHooks) error {
 	if err := request.validate(); err != nil {
 		return err
 	}
-	body, err := encodeRequestBody(request)
+	body, err := encodeRequestBodyWithHooks(request, hooks)
 	if err != nil {
+		if protocolCode(err) == CodeLimitExceeded {
+			return err
+		}
 		return protocolError(CodeProtocolInvalid, err)
 	}
-	if len(body) > MaxRequestFrameBytes {
-		clearSecret(body)
-		return protocolError(CodeLimitExceeded, errors.New("encoded request frame exceeds limit"))
-	}
-	defer clearSecret(body)
+	defer clearSecret(body[:cap(body)])
 	return writeFrame(ctx, conn, body)
 }
 
 func encodeRequestBody(request wireRequest) ([]byte, error) {
+	return encodeRequestBodyWithHooks(request, requestWriteHooks{})
+}
+
+func encodeRequestBodyWithHooks(request wireRequest, hooks requestWriteHooks) ([]byte, error) {
 	parsed, err := parseCapabilityBytes(request.Capability)
 	if err != nil {
 		return nil, protocolError(CodeInvalidCapability, ErrInvalidCapability)
 	}
 	parsed.clear()
-	body := make([]byte, 0, 192+len(request.Capability))
-	body = append(body, `{"version":`...)
-	body = strconv.AppendInt(body, int64(request.Version), 10)
-	body = append(body, `,"share_id":`...)
-	body = strconv.AppendQuote(body, request.ShareID)
-	body = append(body, `,"capability":"`...)
-	body = append(body, request.Capability...)
-	body = append(body, `","operation":`...)
-	body = strconv.AppendQuote(body, request.Operation)
-	body = append(body, `,"file_id":`...)
-	body = strconv.AppendQuote(body, request.FileID)
-	body = append(body, `,"offset":`...)
-	body = strconv.AppendInt(body, request.Offset, 10)
-	body = append(body, `,"length":`...)
-	body = strconv.AppendInt(body, request.Length, 10)
-	body = append(body, '}')
+
+	const capabilityInsertionIndex = 5
+	parts := [...]string{
+		`{"version":`, strconv.FormatInt(int64(request.Version), 10),
+		`,"share_id":`, strconv.Quote(request.ShareID),
+		`,"capability":"`,
+		`","operation":`, strconv.Quote(request.Operation),
+		`,"file_id":`, strconv.Quote(request.FileID),
+		`,"offset":`, strconv.FormatInt(request.Offset, 10),
+		`,"length":`, strconv.FormatInt(request.Length, 10),
+		`}`,
+	}
+	bodyLength := len(request.Capability)
+	if bodyLength > MaxRequestFrameBytes {
+		return nil, protocolError(CodeLimitExceeded, errors.New("encoded request frame exceeds limit"))
+	}
+	for _, part := range parts {
+		if len(part) > MaxRequestFrameBytes-bodyLength {
+			return nil, protocolError(CodeLimitExceeded, errors.New("encoded request frame exceeds limit"))
+		}
+		bodyLength += len(part)
+	}
+
+	body := make([]byte, 0, bodyLength)
+	appendString := func(value string) bool {
+		if len(value) > cap(body)-len(body) {
+			return false
+		}
+		start := len(body)
+		body = body[:start+len(value)]
+		copy(body[start:], value)
+		return true
+	}
+	appendBytes := func(value []byte) bool {
+		if len(value) > cap(body)-len(body) {
+			return false
+		}
+		start := len(body)
+		body = body[:start+len(value)]
+		copy(body[start:], value)
+		return true
+	}
+	failEncoding := func() ([]byte, error) {
+		clearSecret(body[:cap(body)])
+		return nil, protocolError(CodeProtocolInvalid, errors.New("encoded request frame length mismatch"))
+	}
+	for _, part := range parts[:capabilityInsertionIndex] {
+		if !appendString(part) {
+			return failEncoding()
+		}
+	}
+	if !appendBytes(request.Capability) {
+		return failEncoding()
+	}
+	if hooks.afterCapabilityCopy != nil {
+		hooks.afterCapabilityCopy(body[:cap(body)])
+	}
+	for _, part := range parts[capabilityInsertionIndex:] {
+		if !appendString(part) {
+			return failEncoding()
+		}
+	}
+	if len(body) != bodyLength {
+		return failEncoding()
+	}
 	return body, nil
 }
 

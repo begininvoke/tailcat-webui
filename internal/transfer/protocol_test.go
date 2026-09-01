@@ -231,8 +231,11 @@ func TestRequestMarshalAndCapabilityParseBuffersAreCleared(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body[len(body)-1] = ','
-	body = append(body, `"unknown":1}`...)
+	encodedBody := body
+	body = make([]byte, 0, len(encodedBody)+len(`,"unknown":1`))
+	body = append(body, encodedBody[:len(encodedBody)-1]...)
+	clearSecret(encodedBody)
+	body = append(body, `,"unknown":1}`...)
 	var unmarshalReference []byte
 	if _, err := decodeRequestFrameWithCapture(body, func(kind string, secret []byte) {
 		if kind == "request.unmarshal" {
@@ -253,6 +256,67 @@ func TestRequestMarshalAndCapabilityParseBuffersAreCleared(t *testing.T) {
 	parsed.clear()
 	if !allZeroBytes(secretReference) {
 		t.Fatal("parsed capability secret was not cleared")
+	}
+}
+
+func TestWriteRequestUsesOneClearedBodyBackingAndPreflightsLimit(t *testing.T) {
+	shareID := uuid.NewV7().String()
+	code, _, err := newTestCapability(shareID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fileID := strings.Repeat(`"`, 512)
+	request := wireRequest{
+		Version: protocolVersion, ShareID: shareID, Capability: capabilityText(code),
+		Operation: operationRange, FileID: fileID, Length: 1,
+	}
+	defer request.clear()
+	expected := []byte(`{"version":2,"share_id":"` + shareID + `","capability":"` + code +
+		`","operation":"range","file_id":"` + strings.Repeat(`\"`, 512) + `","offset":0,"length":1}`)
+	defer clearSecret(expected)
+
+	var originalBacking []byte
+	var wroteBody, sameBacking, wireMatches bool
+	connection := &retainingConn{onWrite: func(index int, data []byte) {
+		if index != 1 {
+			return
+		}
+		wroteBody = true
+		sameBacking = len(originalBacking) > 0 && &originalBacking[0] == &data[0]
+		wireMatches = bytes.Equal(data, expected)
+	}}
+	err = writeRequestWithHooks(t.Context(), connection, request, requestWriteHooks{
+		afterCapabilityCopy: func(body []byte) {
+			originalBacking = body
+		},
+	})
+	if err != nil {
+		t.Fatalf("writeRequestWithHooks: %v", err)
+	}
+	if !wroteBody || !wireMatches {
+		t.Fatal("encoded request wire bytes changed")
+	}
+	if !sameBacking || len(originalBacking) != len(expected) {
+		t.Fatal("request body changed backing storage after copying the capability")
+	}
+	if len(connection.writes) != 2 || !allZeroBytes(originalBacking) || !allZeroBytes(connection.writes[1]) {
+		t.Fatal("request body backing storage retained capability plaintext")
+	}
+
+	oversized := request
+	oversized.FileID = strings.Repeat(`"`, MaxRequestFrameBytes)
+	capabilityCopied := false
+	connection = new(retainingConn)
+	err = writeRequestWithHooks(t.Context(), connection, oversized, requestWriteHooks{
+		afterCapabilityCopy: func([]byte) {
+			capabilityCopied = true
+		},
+	})
+	if protocolCode(err) != CodeLimitExceeded {
+		t.Fatalf("oversized write error = %v, want %s", err, CodeLimitExceeded)
+	}
+	if capabilityCopied || len(connection.writes) != 0 {
+		t.Fatal("oversized request copied the capability or reached the connection")
 	}
 }
 
@@ -285,7 +349,8 @@ func uint32Bytes(value uint32) []byte {
 }
 
 type retainingConn struct {
-	writes [][]byte
+	writes  [][]byte
+	onWrite func(int, []byte)
 }
 
 func (connection *retainingConn) Read([]byte) (int, error)         { return 0, io.EOF }
@@ -296,6 +361,9 @@ func (connection *retainingConn) SetDeadline(time.Time) error      { return nil 
 func (connection *retainingConn) SetReadDeadline(time.Time) error  { return nil }
 func (connection *retainingConn) SetWriteDeadline(time.Time) error { return nil }
 func (connection *retainingConn) Write(data []byte) (int, error) {
+	if connection.onWrite != nil {
+		connection.onWrite(len(connection.writes), data)
+	}
 	connection.writes = append(connection.writes, data)
 	return len(data), nil
 }
