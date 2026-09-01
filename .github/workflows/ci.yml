@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: ['**']
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -19,6 +19,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Scan source for high-confidence secret patterns
+        run: make check-secrets
 
       - uses: pnpm/action-setup@v4
         with:
@@ -42,6 +45,8 @@ jobs:
           pnpm lint
           pnpm test
           pnpm build
+      - name: Verify committed embedded web assets
+        run: diff -qr web/dist webdist/dist
 
       - uses: actions/setup-go@v6
         with:
@@ -60,10 +65,7 @@ jobs:
       - name: Build embedded pure-Go binary
         env:
           CGO_ENABLED: '0'
-        run: |
-          rm -rf webdist/dist
-          cp -R web/dist webdist/dist
-          go build -trimpath -o /tmp/tailcat-webui ./cmd/tailcat-webui
+        run: go build -trimpath -o /tmp/tailcat-webui ./cmd/tailcat-webui
 
       - uses: docker/setup-buildx-action@v3
       - name: Verify container build

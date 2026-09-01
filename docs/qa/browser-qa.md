@@ -27,7 +27,12 @@ runs it.
 
 - `make verify`, `go mod verify`, `go vet ./...`, fresh race tests, and fresh
   non-race tests pass with Go 1.27.0.
-- Vitest passes 10 test files and 75 tests. ESLint and the production Vite
+- `make verify` runs `./scripts/check-secrets_test.sh` and
+  `./scripts/check-secrets.sh`. Scanner v1 rejects its synthetic GitHub-token
+  fixture, prints only the fixture path, and reports `secret scan v1: ok` on
+  the repository. This is a high-confidence pattern scan, not an
+  entropy-complete credential audit.
+- Vitest passes 10 test files and 76 tests. ESLint and the production Vite
   build pass.
 - `pnpm peers check` reports no peer issues. The configured npm mirror has no
   advisory endpoint, so the exact default audit command reports a registry
@@ -39,6 +44,9 @@ runs it.
 - Actionlint v1.7.7 accepts both workflows. Five explicit `CGO_ENABLED=0`
   builds produce nonempty Linux amd64/arm64, Windows amd64, and Darwin
   amd64/arm64 executables.
+- The CI workflow contract test proves that `pnpm build` is followed by
+  committed `webdist` parity before the embedded binary build. CI never copies
+  newly built assets over the tracked tree.
 - The final `govulncheck ./...` equivalent reports zero reachable
   vulnerabilities after the `x/crypto` update.
 - This Linux host has no Docker, Podman, nerdctl, Buildah, Docker socket, or

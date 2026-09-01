@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import '../i18n'
 import type { DiagnosticRuntimeEvent } from '../hooks/useRuntimeEvents'
 import { api, type DiagnosticRun } from '../services/api'
-import ClientsPage, { reduceDiagnosticLiveUpdates } from './ClientsPage'
+import ClientsPage, { pruneAuthoritativeDiagnosticUpdates, reduceDiagnosticLiveUpdates } from './ClientsPage'
 
 const { useAsyncResource, useDiagnosticEvents } = vi.hoisted(() => ({ useAsyncResource: vi.fn(), useDiagnosticEvents: vi.fn() }))
 vi.mock('../hooks/useAsyncResource', () => ({ useAsyncResource }))
@@ -24,6 +24,39 @@ function renderPage() {
   return render(<ConfigProvider><App><MemoryRouter><ClientsPage /></MemoryRouter></App></ConfigProvider>)
 }
 
+async function renderDiagnosticRace() {
+  let setDiagnosticData: Dispatch<SetStateAction<DiagnosticRun[]>> | undefined
+  useAsyncResource.mockImplementation((load: unknown) => {
+    const [data, setData] = useState<unknown>(load === api.clients ? [client] : [])
+    if (load === api.clients) return { data, loading: false, error: null, refresh: vi.fn(), setData }
+    setDiagnosticData = setData as unknown as Dispatch<SetStateAction<DiagnosticRun[]>>
+    return { data, loading: false, error: null, refresh: vi.fn(), setData }
+  })
+  const started: DiagnosticRun = { id: 'run-late', client_id: 'client-1', kind: 'ping', status: 'running', upload_bytes: 0, download_bytes: 0, upload_bps: 0, download_bps: 0, started_at: '2026-09-01T12:00:00Z' }
+  const completed: DiagnosticRun = { ...started, status: 'succeeded', path: 'derp', latency_ms: 1, finished_at: '2026-09-01T12:00:01Z' }
+  let resolveStart: ((value: DiagnosticRun) => void) | undefined
+  vi.spyOn(api, 'startDiagnostic').mockReturnValue(new Promise((resolve) => { resolveStart = resolve }))
+  const user = userEvent.setup()
+  renderPage()
+  await user.click(screen.getByRole('tab', { name: 'Diagnostics' }))
+  const startButton = screen.getAllByRole('button', { name: 'Start diagnostic' })[0]
+  if (!startButton) throw new Error('Start diagnostic button was not rendered')
+  await user.click(startButton)
+  await user.click(screen.getByRole('button', { name: 'Start' }))
+  await waitFor(() => expect(api.startDiagnostic).toHaveBeenCalledTimes(1))
+  const listener = useDiagnosticEvents.mock.calls[0]?.[0] as ((event: DiagnosticRuntimeEvent) => void) | undefined
+  const resolve = resolveStart
+  if (!listener || !resolve || !setDiagnosticData) throw new Error('diagnostic race harness was not initialized')
+  const runningEvent: DiagnosticRuntimeEvent = { version: 1, type: 'diagnostic', resource_kind: 'diagnostic', resource_id: started.id, operation_id: started.id, phase: 'running', sequence: 1, at: started.started_at, payload: { client_id: started.client_id, kind: started.kind, status: 'running', progress: 0 } }
+  const terminalEvent: DiagnosticRuntimeEvent = { ...runningEvent, phase: 'ready', sequence: 2, payload: { ...runningEvent.payload, status: 'succeeded', progress: 100, latency_ms: 1 } }
+  return {
+    completed,
+    emitTerminal: () => act(() => { listener(runningEvent); listener(terminalEvent) }),
+    refreshCompleted: () => act(() => setDiagnosticData?.([completed])),
+    resolveStarted: async () => act(async () => { resolve(started); await Promise.resolve() }),
+  }
+}
+
 describe('ClientsPage diagnostics', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -31,46 +64,39 @@ describe('ClientsPage diagnostics', () => {
   })
   afterEach(() => vi.useRealTimers())
 
-  it('drops terminal payloads from the live-update map', () => {
+  it('retains terminal payloads until authoritative data arrives and bounds live state', () => {
     const running: DiagnosticRuntimeEvent = { version: 1, type: 'diagnostic', resource_kind: 'diagnostic', resource_id: 'run-1', operation_id: 'run-1', phase: 'running', sequence: 1, at: '2026-08-31T12:00:00Z', payload: { client_id: 'client-1', kind: 'throughput', status: 'running', progress: 40 } }
     const current = reduceDiagnosticLiveUpdates({}, running)
     expect(current['run-1']?.progress).toBe(40)
     const terminal: DiagnosticRuntimeEvent = { ...running, phase: 'ready', sequence: 2, payload: { ...running.payload, status: 'succeeded', progress: 100 } }
-    expect(reduceDiagnosticLiveUpdates(current, terminal)).toEqual({})
+    const pending = reduceDiagnosticLiveUpdates(current, terminal)
+    expect(pending['run-1']?.status).toBe('succeeded')
+    expect(pruneAuthoritativeDiagnosticUpdates(pending, [{ ...run, status: 'succeeded' }])).toEqual({})
+    let bounded = pending
+    for (let index = 0; index < 101; index += 1) bounded = reduceDiagnosticLiveUpdates(bounded, { ...running, resource_id: `run-${index + 2}`, operation_id: `run-${index + 2}` })
+    expect(Object.keys(bounded)).toHaveLength(100)
+    expect(bounded['run-1']).toBeUndefined()
   })
 
-  it('does not let a late start response overlay a terminal event', async () => {
-    let setDiagnosticData: Dispatch<SetStateAction<DiagnosticRun[]>> | undefined
-    useAsyncResource.mockImplementation((load: unknown) => {
-      const [data, setData] = useState<unknown>(load === api.clients ? [client] : [])
-      if (load === api.clients) return { data, loading: false, error: null, refresh: vi.fn(), setData }
-      setDiagnosticData = setData as unknown as Dispatch<SetStateAction<DiagnosticRun[]>>
-      return { data, loading: false, error: null, refresh: vi.fn(), setData }
-    })
-    const started: DiagnosticRun = { id: 'run-late', client_id: 'client-1', kind: 'ping', status: 'running', upload_bytes: 0, download_bytes: 0, upload_bps: 0, download_bps: 0, started_at: '2026-09-01T12:00:00Z' }
-    const completed: DiagnosticRun = { ...started, status: 'succeeded', path: 'derp', latency_ms: 1, finished_at: '2026-09-01T12:00:01Z' }
-    let resolveStart: ((value: DiagnosticRun) => void) | undefined
-    vi.spyOn(api, 'startDiagnostic').mockReturnValue(new Promise((resolve) => { resolveStart = resolve }))
-    const user = userEvent.setup()
-    renderPage()
-    await user.click(screen.getByRole('tab', { name: 'Diagnostics' }))
-    const startButton = screen.getAllByRole('button', { name: 'Start diagnostic' })[0]
-    if (!startButton) throw new Error('Start diagnostic button was not rendered')
-    await user.click(startButton)
-    await user.click(screen.getByRole('button', { name: 'Start' }))
-    await waitFor(() => expect(api.startDiagnostic).toHaveBeenCalledTimes(1))
-    const listener = useDiagnosticEvents.mock.calls[0]?.[0] as ((event: DiagnosticRuntimeEvent) => void) | undefined
-    const resolve = resolveStart
-    if (!listener || !resolve) throw new Error('diagnostic race harness was not initialized')
-    const runningEvent: DiagnosticRuntimeEvent = { version: 1, type: 'diagnostic', resource_kind: 'diagnostic', resource_id: started.id, operation_id: started.id, phase: 'running', sequence: 1, at: started.started_at, payload: { client_id: started.client_id, kind: started.kind, status: 'running', progress: 0 } }
-    act(() => {
-      listener(runningEvent)
-      listener({ ...runningEvent, phase: 'ready', sequence: 2, payload: { ...runningEvent.payload, status: 'succeeded', progress: 100, latency_ms: 1 } })
-    })
-    await act(async () => { resolve(started); await Promise.resolve() })
-    act(() => setDiagnosticData?.([completed]))
-
+  it('keeps terminal UI when a late start response arrives before the completed refresh', async () => {
+    const race = await renderDiagnosticRace()
+    race.emitTerminal()
+    await race.resolveStarted()
+    expect(screen.queryByText('Running')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Cancel diagnostic' })).toBeNull()
+    race.refreshCompleted()
     await waitFor(() => expect(screen.getByText('Succeeded')).not.toBeNull())
+    expect(screen.queryByRole('button', { name: 'Cancel diagnostic' })).toBeNull()
+  })
+
+  it('keeps a completed refresh when the stale start response arrives last', async () => {
+    const race = await renderDiagnosticRace()
+    race.emitTerminal()
+    race.refreshCompleted()
+    expect(await screen.findByText('Succeeded')).not.toBeNull()
+    await race.resolveStarted()
+    expect(screen.getByText('Succeeded')).not.toBeNull()
+    expect(screen.queryByText('Running')).toBeNull()
     expect(screen.queryByRole('button', { name: 'Cancel diagnostic' })).toBeNull()
   })
 

@@ -15,6 +15,7 @@ interface ClientFormValues { name: string; server: string; derp_map_url?: string
 interface DiagnosticFormValues { client_id: string; kind: 'ping' | 'throughput'; duration_ms: number; bytes: number }
 
 const diagnosticRefreshDelayMS = 100
+const diagnosticLiveUpdateLimit = 100
 
 function integerInRange(minimum: number, maximum: number, message: string) {
   return (_: unknown, value: unknown) => typeof value === 'number' && Number.isInteger(value) && value >= minimum && value <= maximum ? Promise.resolve() : Promise.reject(new Error(message))
@@ -40,11 +41,30 @@ function patchRun(run: DiagnosticRun, payload: DiagnosticEventPayload): Diagnost
 }
 
 export function reduceDiagnosticLiveUpdates(current: Record<string, DiagnosticEventPayload>, event: DiagnosticRuntimeEvent) {
-  if (event.payload.status === 'running') return { ...current, [event.resource_id]: event.payload }
-  if (current[event.resource_id] === undefined) return current
   const next = { ...current }
   delete next[event.resource_id]
+  next[event.resource_id] = event.payload
+  const keys = Object.keys(next)
+  for (let index = 0; index < keys.length - diagnosticLiveUpdateLimit; index += 1) delete next[keys[index]!]
   return next
+}
+
+export function pruneAuthoritativeDiagnosticUpdates(current: Record<string, DiagnosticEventPayload>, runs: DiagnosticRun[] | null) {
+  const terminalIDs = new Set(runs?.filter((run) => run.status !== 'running').map((run) => run.id) ?? [])
+  if (terminalIDs.size === 0) return current
+  let next: Record<string, DiagnosticEventPayload> | undefined
+  for (const id of terminalIDs) {
+    if (current[id]?.status === 'running' || current[id] === undefined) continue
+    next ??= { ...current }
+    delete next[id]
+  }
+  return next ?? current
+}
+
+function rememberBounded<T>(items: Map<string, T>, id: string, value: T) {
+  items.delete(id)
+  items.set(id, value)
+  while (items.size > diagnosticLiveUpdateLimit) items.delete(items.keys().next().value!)
 }
 
 export default function ClientsPage() {
@@ -60,6 +80,7 @@ export default function ClientsPage() {
   const [diagnosticError, setDiagnosticError] = useState('')
   const [liveUpdates, setLiveUpdates] = useState<Record<string, DiagnosticEventPayload>>({})
   const diagnosticSequences = useRef(new Map<string, number>())
+  const pendingDiagnosticTerminals = useRef(new Map<string, DiagnosticRuntimeEvent>())
   const diagnosticRefreshTimer = useRef<number | null>(null)
   const [toolsOpen, setToolsOpen] = useState(false)
   const [submitting, setSubmitting] = useState(false)
@@ -79,6 +100,13 @@ export default function ClientsPage() {
   const setDiagnosticsData = diagnostics.setData
   const diagnosticsRefresh = useRef(diagnostics.refresh)
   useEffect(() => { diagnosticsRefresh.current = diagnostics.refresh }, [diagnostics.refresh])
+  useEffect(() => {
+    const authoritativeTerminalIDs = diagnostics.data?.filter((run) => run.status !== 'running').map((run) => run.id) ?? []
+    if (authoritativeTerminalIDs.length === 0) return
+    for (const id of authoritativeTerminalIDs) pendingDiagnosticTerminals.current.delete(id)
+    const timer = window.setTimeout(() => setLiveUpdates((current) => pruneAuthoritativeDiagnosticUpdates(current, diagnostics.data)), 0)
+    return () => window.clearTimeout(timer)
+  }, [diagnostics.data])
   useEffect(() => () => {
     if (diagnosticRefreshTimer.current !== null) window.clearTimeout(diagnosticRefreshTimer.current)
   }, [])
@@ -147,9 +175,10 @@ export default function ClientsPage() {
   const onDiagnostic = useCallback((event: DiagnosticRuntimeEvent) => {
     const previousSequence = diagnosticSequences.current.get(event.resource_id)
     if (previousSequence !== undefined && event.sequence <= previousSequence) return
-    diagnosticSequences.current.set(event.resource_id, event.sequence)
+    rememberBounded(diagnosticSequences.current, event.resource_id, event.sequence)
+    if (event.payload.status !== 'running') rememberBounded(pendingDiagnosticTerminals.current, event.resource_id, event)
     setLiveUpdates((current) => reduceDiagnosticLiveUpdates(current, event))
-    setDiagnosticsData((current) => current?.map((run) => run.id === event.resource_id && run.client_id === event.payload.client_id ? patchRun(run, event.payload) : run) ?? current)
+    if (event.payload.status === 'running') setDiagnosticsData((current) => current?.map((run) => run.id === event.resource_id && run.client_id === event.payload.client_id ? patchRun(run, event.payload) : run) ?? current)
     queueDiagnosticRefresh()
   }, [queueDiagnosticRefresh, setDiagnosticsData])
   useDiagnosticEvents(onDiagnostic)
@@ -161,7 +190,11 @@ export default function ClientsPage() {
     setDiagnosticSubmitting(true); setDiagnosticError('')
     try {
       const run = await api.startDiagnostic(values.client_id, input)
-      diagnostics.setData((current) => [run, ...(current ?? []).filter((item) => item.id !== run.id)])
+      diagnostics.setData((current) => {
+        if (pendingDiagnosticTerminals.current.has(run.id) || current?.some((item) => item.id === run.id && item.status !== 'running')) return current
+        if (current?.some((item) => item.id === run.id)) return current
+        return [run, ...(current ?? [])]
+      })
       setDiagnosticOpen(false); diagnosticForm.resetFields()
     } catch (error) {
       const code = error instanceof APIError ? error.code : 'REQUEST_FAILED'

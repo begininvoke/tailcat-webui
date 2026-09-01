@@ -86,8 +86,9 @@ TCP `41640` 上的 WebUI 诊断历史协议和 TCP `41641` 上的分块传输协
 
 内置上限为单文件 512 MiB、每个发送共享或接收任务 1 GiB、每位用户暂存总量
 2 GiB，以及每个共享 1,000 个文件。每项任务固定使用 4 个范围读取工作线程，
-每位用户最多同时运行 2 项任务。共享和任务默认 24 小时后过期。BLAKE3 清单按
-8 MiB 分块，文件完成前还会执行一次整文件哈希校验。
+每位用户最多同时运行 2 项任务。共享和任务默认 24 小时后过期，运维方可以在
+1 秒到 24 小时的范围内收紧生命周期。BLAKE3 清单按 8 MiB 分块，文件完成前
+还会执行一次整文件哈希校验。
 
 传输存储按用户、共享和任务建立有根目录，并使用随机磁盘文件名。虚拟路径必须是
 规范化相对路径，不能作为主机路径使用。存储层拒绝绝对路径、点路径段、控制字符、
@@ -183,11 +184,11 @@ docker run --rm -p 8080:8080 \
 | `TAILCAT_WEBUI_DEMO_MODE` | `false` | 仅限回环地址的演示登录 |
 | `TAILCAT_WEBUI_DEMO_UNSAFE_SSH` | `false` | 仅在回环演示模式启用 Tailcat 进程内 Shell |
 
-目标规则使用逗号分隔，可写成 `CIDR@port`、`CIDR@start-end` 或
-`domain@port`。兼容旧配置的裸 CIDR 表示允许全部端口，域名规则必须指定端口。
-端口子句使用 `@` 分隔，因此 IPv6 CIDR 不会产生歧义。映射规则定义部署级上限。
-用户级出口规则只能继续收紧 `TAILCAT_WEBUI_ALLOWED_EXIT_TARGETS`，空规则集会拒绝
-全部出口流量。
+目标规则使用逗号分隔。每条规则可写成 `CIDR`、`CIDR@port`、
+`CIDR@start-end`、`domain@port` 或 `domain@start-end`。兼容旧配置的裸 CIDR
+表示允许全部端口，域名规则必须指定单一端口或端口范围。端口子句使用 `@` 分隔，
+因此 IPv6 CIDR 不会产生歧义。映射规则定义部署级上限。用户级出口规则只能继续
+收紧 `TAILCAT_WEBUI_ALLOWED_EXIT_TARGETS`，空规则集会拒绝全部出口流量。
 
 ## 开发验证
 
@@ -198,6 +199,10 @@ make test
 make build
 make verify
 ```
+
+`make verify` 是本地核心门禁，覆盖构建、测试、生成文件一致性与高置信度密钥模式
+扫描。完整发布门禁还会分别运行 actionlint、依赖与漏洞审计、五目标交叉编译、
+归档检查，并在主机具备容器引擎时执行本地 Docker 构建。
 
 SQLite 默认启用外键、WAL、`synchronous=NORMAL`、5 秒 busy timeout、mmap 和
 有界连接池。出于 WAL 并发读性能考虑，不启用 shared-cache。

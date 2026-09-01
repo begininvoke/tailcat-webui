@@ -1,10 +1,14 @@
-.PHONY: generate verify-generated web-install web-build test lint build verify dev
+.PHONY: generate verify-generated check-secrets web-install web-build test lint build verify dev
 
 generate:
 	go generate ./ent
 
 verify-generated: generate
 	git diff --exit-code -- ent
+
+check-secrets:
+	./scripts/check-secrets_test.sh
+	./scripts/check-secrets.sh
 
 web-install:
 	cd web && pnpm install --frozen-lockfile
@@ -25,7 +29,7 @@ lint:
 build: web-build
 	CGO_ENABLED=0 go build -trimpath -o bin/tailcat-webui ./cmd/tailcat-webui
 
-verify: verify-generated lint test build
+verify: verify-generated check-secrets lint test build
 	diff -qr web/dist webdist/dist
 
 dev:

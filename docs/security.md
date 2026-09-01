@@ -29,14 +29,19 @@ correlation.
 Every durable query for servers, clients, mappings, allowlist keys, exit rules,
 diagnostics, shares, files, jobs, and downloads includes the authenticated
 owner ID. A cross-owner identifier returns not-found instead of revealing
-whether the resource exists. Account deletion cascades owned configuration,
-sessions, transfer metadata, encrypted key material, and staged bytes.
+whether the resource exists. Account deletion immediately cascades database
+configuration, sessions, transfer metadata, and encrypted key material. That
+database cascade does not directly traverse the transfer filesystem. Explicit
+share/job deletion removes bytes through `Storage`; otherwise startup orphan
+reconciliation eventually removes staged bytes that no metadata row references.
 
-Deployment target rules are the maximum authority. Mapping and exit targets
-support CIDR and exact IDNA domain rules with an optional exact port or port
-range. All DNS answers must satisfy policy, and the checked numeric address is
-pinned for the dial. Owner-scoped exit rules can only narrow the deployment
-rules. Empty deployment or owner exit rules deny exit traffic.
+Deployment target rules are the maximum authority. Their grammar is `CIDR`,
+`CIDR@port`, `CIDR@start-end`, `domain@port`, or `domain@start-end`. A bare CIDR
+allows all ports for compatibility. An exact IDNA domain always requires an
+exact or ranged port clause. All DNS answers must satisfy policy, and the
+checked numeric address is pinned for the dial. Owner-scoped exit rules can
+only narrow the deployment rules. Empty deployment or owner exit rules deny
+exit traffic.
 
 ## Network diagnostics
 
@@ -110,13 +115,14 @@ Unix permission and link-count checks are enforced directly. Windows ACL,
 reparse-point, hard-link, and directory-sync behavior requires the dedicated
 `windows-latest` runtime test; a Linux cross-build cannot prove NTFS semantics.
 
-Shares and jobs expire after at most 24 hours. Expiry or explicit deletion
-revokes active streams, cancels jobs, removes staged bytes, and cascades the
-matching metadata. Configured lifetime and retention describe the same
-boundary. Audit records cover share create, rotate, finalize, delete, job start,
-cancel, retry, complete, fail, and delete. Audit data contains owner-scoped IDs,
-counts, outcome, and stable error codes, never capability text, private keys,
-file bodies, or whole virtual paths.
+Shares and jobs default to a 24-hour lifetime. Operators may tighten the value
+from 1 second up to the 24-hour ceiling. Expiry or explicit deletion revokes
+active streams, cancels jobs, removes staged bytes, and cascades the matching
+metadata. Configured lifetime and retention describe the same boundary. Audit
+records cover share create, rotate, finalize, delete, job start, cancel, retry,
+complete, fail, and delete. Audit data contains owner-scoped IDs, counts,
+outcome, and stable error codes, never capability text, private keys, file
+bodies, or whole virtual paths.
 
 ## Resource and deployment controls
 
