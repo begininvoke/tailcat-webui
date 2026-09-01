@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 	"uuid"
 )
@@ -43,7 +44,7 @@ func validateStorageName(name string) error {
 }
 
 func validateVirtualPath(path string) error {
-	if path == "" || len(path) > maxTransferVirtualPathBytes || !utf8.ValidString(path) || strings.ContainsAny(path, "\\:") || strings.ContainsRune(path, 0) || strings.HasPrefix(path, "/") {
+	if path == "" || len(path) > maxTransferVirtualPathBytes || !utf8.ValidString(path) || strings.ContainsAny(path, "\\:") || strings.IndexFunc(path, unicode.IsControl) >= 0 || strings.HasPrefix(path, "/") {
 		return fmt.Errorf("virtual path must be a canonical relative slash path")
 	}
 	segments := strings.Split(path, "/")

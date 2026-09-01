@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	json "encoding/json/v2"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"maps"
@@ -13,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -90,6 +92,107 @@ func TestServiceRejectsNilDependencies(t *testing.T) {
 	}
 	if _, err := NewService(t.Context(), db, storage, unavailable, dialer, auditor, publisher, logger); !errors.Is(err, secrets.ErrUnavailable) {
 		t.Fatalf("unavailable secret box error = %v, want ErrUnavailable", err)
+	}
+}
+
+func TestServiceRequiresExactlyFourWorkers(t *testing.T) {
+	db, storage, box, _, _, _ := newTransferServiceData(t)
+	dialer := transferDialerFunc(func(context.Context, string, string, uint16) (net.Conn, error) { return nil, errors.New("unused") })
+	auditor := transferAuditFunc(func(context.Context, audit.Entry) error { return nil })
+	publisher := transferPublisherFunc(func(string, events.Envelope) {})
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	for _, workers := range []int{1, 2, 3, 5} {
+		limits := DefaultServiceLimits()
+		limits.Workers = workers
+		if service, err := NewServiceWithLimits(t.Context(), db, storage, box, dialer, auditor, publisher, logger, limits); err == nil {
+			_ = service.Close()
+			t.Errorf("NewServiceWithLimits accepted %d workers", workers)
+		}
+	}
+}
+
+func TestStageFileClosesSourceWhenServiceIsAlreadyClosed(t *testing.T) {
+	db, storage, box, owner, server, _ := newTransferServiceData(t)
+	service := newLoopbackTransferService(t, db, storage, box, owner.ID, "", server.ID)
+	if err := service.Close(); err != nil {
+		t.Fatal(err)
+	}
+	source := &recordingReadCloser{reader: strings.NewReader("x")}
+	if _, err := service.StageFile(t.Context(), owner.ID, newEntityID(), StageFileInput{VirtualPath: "closed.txt", Size: 1, Body: source}); !errors.Is(err, ErrServiceClosed) {
+		t.Fatalf("StageFile error = %v, want ErrServiceClosed", err)
+	}
+	if !source.closed.Load() {
+		t.Fatal("StageFile did not close source after closed-service rejection")
+	}
+}
+
+func TestConcurrentStageFileUsesAtomicConfiguredShareLimitBeforeSecondBodyRead(t *testing.T) {
+	db, storage, box, owner, server, _ := newTransferServiceData(t)
+	limits := DefaultServiceLimits()
+	limits.MaxFileBytes = 4
+	limits.MaxShareBytes = 4
+	limits.MaxJobBytes = 6
+	service, err := NewServiceWithLimits(t.Context(), db, storage, box,
+		transferDialerFunc(func(context.Context, string, string, uint16) (net.Conn, error) { return nil, errors.New("unused") }),
+		transferAuditFunc(func(context.Context, audit.Entry) error { return nil }), transferPublisherFunc(func(string, events.Envelope) {}), slog.New(slog.NewTextHandler(io.Discard, nil)), limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = service.Close() })
+	share, err := service.CreateShare(t.Context(), owner.ID, CreateShareInput{ServerID: server.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	first := newBlockingReadCloser()
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := service.StageFile(ctx, owner.ID, share.ID, StageFileInput{VirtualPath: "first.bin", Size: 4, Body: first})
+		firstDone <- err
+	}()
+	<-first.started
+	second := &recordingReadCloser{reader: strings.NewReader("x")}
+	if _, err := service.StageFile(t.Context(), owner.ID, share.ID, StageFileInput{VirtualPath: "second.bin", Size: 1, Body: second}); !errors.Is(err, ErrQuotaExceeded) {
+		t.Fatalf("second concurrent StageFile error = %v, want ErrQuotaExceeded", err)
+	}
+	if len(second.readSizes) != 0 || !second.closed.Load() {
+		t.Fatalf("rejected StageFile source reads=%v closed=%t", second.readSizes, second.closed.Load())
+	}
+	cancel()
+	select {
+	case <-firstDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first StageFile did not stop")
+	}
+}
+
+func TestStageFileClassifiesProbeByteAgainstConfiguredFileLimit(t *testing.T) {
+	db, _, box, owner, server, _ := newTransferServiceData(t)
+	storage, err := NewStorageWithLimits(filepath.Join(t.TempDir(), "lower-file"), StorageLimits{MaxFileBytes: 4, MaxScopeBytes: 8, MaxOwnerBytes: 16, MaxFilesPerScope: MaxFilesPerShare})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = storage.Close() })
+	limits := DefaultServiceLimits()
+	limits.MaxFileBytes = 4
+	limits.MaxShareBytes = 8
+	limits.MaxJobBytes = 8
+	service, err := NewServiceWithLimits(t.Context(), db, storage, box,
+		transferDialerFunc(func(context.Context, string, string, uint16) (net.Conn, error) { return nil, errors.New("unused") }),
+		transferAuditFunc(func(context.Context, audit.Entry) error { return nil }), transferPublisherFunc(func(string, events.Envelope) {}), slog.New(slog.NewTextHandler(io.Discard, nil)), limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = service.Close() })
+	share, err := service.CreateShare(t.Context(), owner.ID, CreateShareInput{ServerID: server.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.StageFile(t.Context(), owner.ID, share.ID, StageFileInput{VirtualPath: "max.bin", Size: 4, Body: io.NopCloser(strings.NewReader("12345"))}); !errors.Is(err, ErrFileTooLarge) {
+		t.Fatalf("StageFile probe at max error = %v, want ErrFileTooLarge", err)
+	}
+	if _, err := service.StageFile(t.Context(), owner.ID, share.ID, StageFileInput{VirtualPath: "mismatch.bin", Size: 3, Body: io.NopCloser(strings.NewReader("1234"))}); !errors.Is(err, ErrSizeMismatch) {
+		t.Fatalf("StageFile probe below max error = %v, want ErrSizeMismatch", err)
 	}
 }
 
@@ -1463,6 +1566,176 @@ func TestStartupInterruptsAbandonedJobThenRecoveryResumesIt(t *testing.T) {
 			t.Fatalf("resumed job did not complete; status=%s", row.Status)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestLowerLimitsAfterRestartDenyHandlerAndStartThenRecoveryCleansUsage(t *testing.T) {
+	db, highStorage, box, owner, server, _ := newTransferServiceData(t)
+	client := db.TailClient.Create().SetUserID(owner.ID).SetName("lower-restart").SetServerTokenCipher([]byte("cipher")).SetTokenHint("hint").SaveX(t.Context())
+	first := newLoopbackTransferService(t, db, highStorage, box, owner.ID, client.ID, server.ID)
+	type pair struct {
+		share ShareView
+		job   JobView
+	}
+	pairs := make([]pair, 3)
+	for index := range pairs {
+		share, err := first.CreateShare(t.Context(), owner.ID, CreateShareInput{ServerID: server.ID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := first.StageFile(t.Context(), owner.ID, share.ID, StageFileInput{VirtualPath: fmt.Sprintf("large-%d.bin", index), Size: 6, Body: io.NopCloser(strings.NewReader("123456"))}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := first.FinalizeShare(t.Context(), owner.ID, share.ID); err != nil {
+			t.Fatal(err)
+		}
+		job, err := first.CreateIncomingJob(t.Context(), owner.ID, CreateIncomingJobInput{ClientID: client.ID, Capability: share.Capability})
+		if err != nil {
+			t.Fatal(err)
+		}
+		pairs[index] = pair{share: share, job: job}
+	}
+	rootPath := highStorage.root.Name()
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	db.TransferJob.UpdateOneID(pairs[2].job.ID).SetStatus(transferjob.StatusRunning).SetStartedAt(now).ExecX(t.Context())
+	db.TransferItem.Query().Where(transferitem.JobIDEQ(pairs[2].job.ID)).OnlyX(t.Context()).Update().SetStatus(transferitem.StatusRunning).SetStartedAt(now).ExecX(t.Context())
+	if err := highStorage.Close(); err != nil {
+		t.Fatal(err)
+	}
+	lowStorage, err := NewStorageWithLimits(rootPath, StorageLimits{MaxFileBytes: 4, MaxScopeBytes: 5, MaxOwnerBytes: 64, MaxFilesPerScope: MaxFilesPerShare})
+	if err != nil {
+		t.Fatalf("reopen lower-limit storage: %v", err)
+	}
+	t.Cleanup(func() { _ = lowStorage.Close() })
+	auditor, err := audit.NewService(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	limits := DefaultServiceLimits()
+	limits.MaxFileBytes = 4
+	limits.MaxShareBytes = 4
+	limits.MaxJobBytes = 5
+	second, err := NewServiceWithLimits(t.Context(), db, lowStorage, box,
+		transferDialerFunc(func(context.Context, string, string, uint16) (net.Conn, error) {
+			return nil, errors.New("unexpected dial")
+		}),
+		auditor, transferPublisherFunc(func(string, events.Envelope) {}), slog.New(slog.NewTextHandler(io.Discard, nil)), limits)
+	if err != nil {
+		t.Fatalf("NewServiceWithLimits lower restart: %v", err)
+	}
+	t.Cleanup(func() { _ = second.Close() })
+	if _, err := fetchManifest(t.Context(), handlerDial(t, second.ReservedHandler(server.ID)), pairs[0].share.ID, pairs[0].share.Capability); protocolCode(err) != CodeLimitExceeded {
+		t.Fatalf("lower-limit handler error = %v, want %s", err, CodeLimitExceeded)
+	}
+	if _, err := second.StartJob(t.Context(), owner.ID, pairs[0].job.ID); !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("lower-limit StartJob error = %v, want ErrInvalidState", err)
+	}
+	if _, err := second.RetryJob(t.Context(), owner.ID, pairs[1].job.ID); !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("lower-limit RetryJob error = %v, want ErrInvalidState", err)
+	}
+	if err := second.RecoverAfterRestore(t.Context()); err != nil {
+		t.Fatalf("RecoverAfterRestore lower limits: %v", err)
+	}
+	if got := db.TransferShare.Query().CountX(t.Context()); got != 0 {
+		t.Fatalf("shares after lower-limit reconciliation = %d", got)
+	}
+	if got := db.TransferJob.Query().CountX(t.Context()); got != 0 {
+		t.Fatalf("jobs after lower-limit reconciliation = %d", got)
+	}
+	usage, err := lowStorage.Usage(t.Context(), owner.ID, pairs[0].share.ID)
+	if err != nil || usage != (QuotaUsage{}) {
+		t.Fatalf("usage after lower-limit reconciliation = %+v, %v", usage, err)
+	}
+	if got := db.AuditEvent.Query().Where(auditevent.UserIDEQ(owner.ID), auditevent.ActionEQ("transfer.expire")).CountX(t.Context()); got != 6 {
+		t.Fatalf("lower-limit expire audits = %d, want 6", got)
+	}
+}
+
+func TestConfiguredEffectiveExpiryOverridesLongerPersistedExpiryOnRecovery(t *testing.T) {
+	db, storage, box, owner, server, _ := newTransferServiceData(t)
+	service := newTransferServiceForTest(t, db, storage, box)
+	share, err := service.CreateShare(t.Context(), owner.ID, CreateShareInput{ServerID: server.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.StageFile(t.Context(), owner.ID, share.ID, StageFileInput{VirtualPath: "retention.txt", Size: 3, Body: io.NopCloser(strings.NewReader("abc"))}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.FinalizeShare(t.Context(), owner.ID, share.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Close(); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(2 * time.Millisecond)
+	limits := DefaultServiceLimits()
+	limits.Expiry = time.Millisecond
+	restarted, err := NewServiceWithLimits(t.Context(), db, storage, box,
+		transferDialerFunc(func(context.Context, string, string, uint16) (net.Conn, error) { return nil, errors.New("unused") }),
+		transferAuditFunc(func(context.Context, audit.Entry) error { return nil }), transferPublisherFunc(func(string, events.Envelope) {}), slog.New(slog.NewTextHandler(io.Discard, nil)), limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = restarted.Close() })
+	if err := restarted.RecoverAfterRestore(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if db.TransferShare.Query().CountX(t.Context()) != 0 {
+		t.Fatal("effective configured expiry did not remove longer-lived persisted share")
+	}
+}
+
+func TestRecoveryReconcilesExistingOwnerUsageAfterLowering(t *testing.T) {
+	db, highStorage, box, owner, server, _ := newTransferServiceData(t)
+	first := newTransferServiceForTest(t, db, highStorage, box)
+	for index := range 3 {
+		share, err := first.CreateShare(t.Context(), owner.ID, CreateShareInput{ServerID: server.ID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := first.StageFile(t.Context(), owner.ID, share.ID, StageFileInput{VirtualPath: fmt.Sprintf("owner-%d.bin", index), Size: 4, Body: io.NopCloser(strings.NewReader("1234"))}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := first.FinalizeShare(t.Context(), owner.ID, share.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rootPath := highStorage.root.Name()
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := highStorage.Close(); err != nil {
+		t.Fatal(err)
+	}
+	lowStorage, err := NewStorageWithLimits(rootPath, StorageLimits{MaxFileBytes: 4, MaxScopeBytes: 4, MaxOwnerBytes: 8, MaxFilesPerScope: MaxFilesPerShare})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lowStorage.Close() })
+	limits := DefaultServiceLimits()
+	limits.MaxFileBytes = 4
+	limits.MaxShareBytes = 4
+	limits.MaxJobBytes = 4
+	second, err := NewServiceWithLimits(t.Context(), db, lowStorage, box,
+		transferDialerFunc(func(context.Context, string, string, uint16) (net.Conn, error) { return nil, errors.New("unused") }),
+		transferAuditFunc(func(context.Context, audit.Entry) error { return nil }), transferPublisherFunc(func(string, events.Envelope) {}), slog.New(slog.NewTextHandler(io.Discard, nil)), limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = second.Close() })
+	if err := second.RecoverAfterRestore(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	remaining := db.TransferShare.Query().AllX(t.Context())
+	if len(remaining) != 2 {
+		t.Fatalf("remaining shares = %d, want 2", len(remaining))
+	}
+	usage, err := lowStorage.Usage(t.Context(), owner.ID, remaining[0].ID)
+	if err != nil || usage.OwnerBytes != 8 {
+		t.Fatalf("reconciled owner usage = %+v, %v", usage, err)
 	}
 }
 

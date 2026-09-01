@@ -127,7 +127,7 @@ func (s *Service) CreateIncomingJob(ctx context.Context, ownerID string, input C
 		}
 	}()
 	for _, file := range files {
-		partial, err := s.storage.CreatePartial(ctx, ownerID, jobID, file.Size())
+		partial, err := s.storage.CreatePartialScoped(ctx, ownerID, jobID, file.Size(), ScopeLimits{MaxBytes: s.limits.MaxJobBytes, MaxFiles: s.limits.MaxFilesPerShare})
 		if err != nil {
 			if partial != nil {
 				prepared = append(prepared, preparedIncomingItem{id: newEntityID(), storageName: partial.StorageName(), manifest: file})
@@ -295,10 +295,21 @@ func (s *Service) OpenCompletedItem(ctx context.Context, ownerID, jobID, itemID 
 	if err := s.ensureOpen(); err != nil {
 		return CompletedItemRead{}, err
 	}
-	if exists, err := s.db.TransferJob.Query().Where(transferjob.IDEQ(jobID), transferjob.UserIDEQ(ownerID), transferjob.StatusEQ(transferjob.StatusCompleted)).Exist(ctx); err != nil {
-		return CompletedItemRead{}, fmt.Errorf("validate completed transfer job: %w", err)
-	} else if !exists {
+	job, err := s.db.TransferJob.Query().Where(transferjob.IDEQ(jobID), transferjob.UserIDEQ(ownerID), transferjob.StatusEQ(transferjob.StatusCompleted)).Only(ctx)
+	if ent.IsNotFound(err) {
 		return CompletedItemRead{}, ErrNotFound
+	}
+	if err != nil {
+		return CompletedItemRead{}, fmt.Errorf("validate completed transfer job: %w", err)
+	}
+	if err := s.validateJobLimits(ctx, job, time.Now().UTC()); err != nil {
+		if errors.Is(err, errConfiguredIneligible) {
+			cleanupCtx, cancelCleanup := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+			defer cancelCleanup()
+			cleanupErr := s.deleteJob(cleanupCtx, ownerID, jobID, "transfer.expire")
+			return CompletedItemRead{}, errors.Join(ErrNotFound, cleanupErr)
+		}
+		return CompletedItemRead{}, err
 	}
 	row, err := s.db.TransferItem.Query().Where(
 		transferitem.IDEQ(itemID), transferitem.JobIDEQ(jobID), transferitem.UserIDEQ(ownerID), transferitem.StatusEQ(transferitem.StatusCompleted),
@@ -348,10 +359,17 @@ func (s *Service) startJob(ctx context.Context, ownerID, jobID string, resumeMan
 	if !slices.Contains([]transferjob.Status{transferjob.StatusReady, transferjob.StatusInterrupted, transferjob.StatusFailed, transferjob.StatusCanceled}, row.Status) {
 		return JobView{}, ErrInvalidState
 	}
-	if !row.ExpiresAt.After(time.Now().UTC()) {
-		return JobView{}, ErrInvalidState
+	if err := s.validateJobLimits(ctx, row, time.Now().UTC()); err != nil {
+		if errors.Is(err, errConfiguredIneligible) {
+			cleanupCtx, cancelCleanup := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+			defer cancelCleanup()
+			cleanupErr := s.deleteJob(cleanupCtx, ownerID, jobID, "transfer.expire")
+			return JobView{}, errors.Join(ErrInvalidState, cleanupErr)
+		}
+		return JobView{}, err
 	}
-	expiryCtx, stopExpiry := context.WithDeadlineCause(context.Background(), row.ExpiresAt, protocolError(CodeExpired, errors.New("transfer job expired")))
+	effectiveExpiry := s.effectiveExpiry(row.CreatedAt, row.ExpiresAt)
+	expiryCtx, stopExpiry := context.WithDeadlineCause(context.Background(), effectiveExpiry, protocolError(CodeExpired, errors.New("transfer job expired")))
 	jobCtx, cancel := context.WithCancelCause(expiryCtx)
 	active := &activeJob{ownerID: ownerID, resumeManaged: resumeManaged, ctx: jobCtx, cancel: cancel, stopExpiry: stopExpiry, done: make(chan struct{})}
 	s.mu.Lock()
@@ -427,6 +445,9 @@ func (s *Service) transitionJobToRunning(ctx context.Context, row *ent.TransferJ
 		return nil, err
 	}
 	now := time.Now().UTC()
+	if !s.effectiveExpiry(current.CreatedAt, current.ExpiresAt).After(now) {
+		return nil, ErrInvalidState
+	}
 	update := current.Update().
 		Where(transferjob.UserIDEQ(row.UserID), transferjob.StatusIn(transferjob.StatusReady, transferjob.StatusInterrupted, transferjob.StatusFailed, transferjob.StatusCanceled)).
 		SetStatus(transferjob.StatusRunning).
@@ -553,7 +574,7 @@ func (s *Service) executeJob(ctx context.Context, jobID string) {
 	close(taskQueue)
 	completions := make(chan blockCompletion, max(1, len(tasks)))
 	var workers sync.WaitGroup
-	for range s.limits.Workers {
+	for range 4 {
 		workers.Go(func() {
 			if s.runnerHooks.workerStarted != nil {
 				s.runnerHooks.workerStarted()

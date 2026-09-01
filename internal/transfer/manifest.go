@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/zeebo/blake3"
@@ -295,7 +296,7 @@ func manifestBlockCount(size int64) int {
 }
 
 func validateVirtualPath(virtualPath string) error {
-	if virtualPath == "" || len(virtualPath) > maxBoundaryBytes || !utf8.ValidString(virtualPath) || strings.IndexFunc(virtualPath, func(character rune) bool { return character < 0x20 || character == 0x7f }) >= 0 || strings.HasPrefix(virtualPath, "/") || strings.ContainsAny(virtualPath, "\\:") {
+	if virtualPath == "" || len(virtualPath) > maxBoundaryBytes || !utf8.ValidString(virtualPath) || strings.IndexFunc(virtualPath, unicode.IsControl) >= 0 || strings.HasPrefix(virtualPath, "/") || strings.ContainsAny(virtualPath, "\\:") {
 		return fmt.Errorf("%w: virtual path must be canonical and relative", ErrInvalidPath)
 	}
 	segments := strings.Split(virtualPath, "/")

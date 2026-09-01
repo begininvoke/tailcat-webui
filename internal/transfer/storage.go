@@ -101,6 +101,14 @@ type StorageLimits struct {
 	MaxFilesPerScope int
 }
 
+// ScopeLimits atomically tightens the byte and file-count admission for one
+// outgoing share or incoming job. A live scope remembers the minimum limit
+// requested until its last reservation or committed file is released.
+type ScopeLimits struct {
+	MaxBytes int64
+	MaxFiles int
+}
+
 func DefaultStorageLimits() StorageLimits {
 	return StorageLimits{MaxFileBytes: MaxFileBytes, MaxScopeBytes: MaxShareBytes, MaxOwnerBytes: MaxOwnerBytes, MaxFilesPerScope: MaxFilesPerShare}
 }
@@ -170,8 +178,10 @@ type ownerUsage struct {
 }
 
 type shareUsage struct {
-	bytes int64
-	files int
+	bytes    int64
+	files    int
+	maxBytes int64
+	maxFiles int
 }
 
 type quotaLedger struct {
@@ -206,6 +216,7 @@ type Reservation struct {
 	ownerID       string
 	shareID       string
 	size          int64
+	maxFileBytes  int64
 	state         atomic.Uint32
 	guard         sync.Mutex
 	committedName string
@@ -498,15 +509,21 @@ func (s *Storage) releasePendingReservations() {
 // Reserve atomically admits a prospective file against file, share, owner,
 // and per-share file-count limits.
 func (s *Storage) Reserve(ctx context.Context, ownerID, shareID string, size int64) (*Reservation, error) {
+	return s.ReserveScoped(ctx, ownerID, shareID, size, ScopeLimits{MaxBytes: s.limits.MaxScopeBytes, MaxFiles: s.limits.MaxFilesPerScope})
+}
+
+// ReserveScoped atomically applies the operation-specific scope limit before
+// admitting bytes or a file slot.
+func (s *Storage) ReserveScoped(ctx context.Context, ownerID, shareID string, size int64, scopeLimits ScopeLimits) (*Reservation, error) {
 	operationCtx, end, err := s.beginOperation(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer end()
-	return s.reserve(operationCtx, ownerID, shareID, size)
+	return s.reserve(operationCtx, ownerID, shareID, size, scopeLimits)
 }
 
-func (s *Storage) reserve(ctx context.Context, ownerID, shareID string, size int64) (*Reservation, error) {
+func (s *Storage) reserve(ctx context.Context, ownerID, shareID string, size int64, scopeLimits ScopeLimits) (*Reservation, error) {
 	if err := contextError(ctx); err != nil {
 		return nil, err
 	}
@@ -515,6 +532,9 @@ func (s *Storage) reserve(ctx context.Context, ownerID, shareID string, size int
 	}
 	if size > s.limits.MaxFileBytes {
 		return nil, ErrFileTooLarge
+	}
+	if scopeLimits.MaxBytes <= 0 || scopeLimits.MaxBytes > s.limits.MaxScopeBytes || scopeLimits.MaxFiles <= 0 || scopeLimits.MaxFiles > s.limits.MaxFilesPerScope {
+		return nil, fmt.Errorf("%w: invalid scope limits", ErrInvalidPath)
 	}
 	shareRoot, err := s.openShare(ownerID, shareID, true)
 	if err != nil {
@@ -536,13 +556,29 @@ func (s *Storage) reserve(ctx context.Context, ownerID, shareID string, size int
 		share = &shareUsage{}
 		owner.shares[shareID] = share
 	}
-	if size > s.limits.MaxOwnerBytes-owner.bytes || size > s.limits.MaxScopeBytes-share.bytes || share.files >= s.limits.MaxFilesPerScope {
+	if share.maxBytes == 0 {
+		share.maxBytes = scopeLimits.MaxBytes
+	} else {
+		share.maxBytes = min(share.maxBytes, scopeLimits.MaxBytes)
+	}
+	if share.maxFiles == 0 {
+		share.maxFiles = scopeLimits.MaxFiles
+	} else {
+		share.maxFiles = min(share.maxFiles, scopeLimits.MaxFiles)
+	}
+	if size > s.limits.MaxOwnerBytes-owner.bytes || size > share.maxBytes-share.bytes || share.files >= share.maxFiles {
+		if share.files == 0 {
+			delete(owner.shares, shareID)
+			if len(owner.shares) == 0 {
+				delete(s.quota.owners, ownerID)
+			}
+		}
 		return nil, ErrQuotaExceeded
 	}
 	owner.bytes += size
 	share.bytes += size
 	share.files++
-	reservation := &Reservation{storage: s, ownerID: ownerID, shareID: shareID, size: size}
+	reservation := &Reservation{storage: s, ownerID: ownerID, shareID: shareID, size: size, maxFileBytes: s.limits.MaxFileBytes}
 	s.trackReservation(reservation)
 	return reservation, nil
 }
@@ -596,6 +632,12 @@ func (s *Storage) Usage(ctx context.Context, ownerID, shareID string) (QuotaUsag
 // src and closes it on every return; Close must unblock Read, as net/http
 // request bodies and io.PipeReader do.
 func (s *Storage) Store(ctx context.Context, ownerID, shareID string, size int64, src io.ReadCloser) (StoredFile, error) {
+	return s.StoreScoped(ctx, ownerID, shareID, size, ScopeLimits{MaxBytes: s.limits.MaxScopeBytes, MaxFiles: s.limits.MaxFilesPerScope}, src)
+}
+
+// StoreScoped reserves with an operation-specific scope limit, then streams
+// exactly size bytes. Rejected reservations close src before any read.
+func (s *Storage) StoreScoped(ctx context.Context, ownerID, shareID string, size int64, scopeLimits ScopeLimits, src io.ReadCloser) (StoredFile, error) {
 	operationCtx, end, err := s.beginOperation(ctx)
 	if err != nil {
 		if src != nil {
@@ -604,7 +646,7 @@ func (s *Storage) Store(ctx context.Context, ownerID, shareID string, size int64
 		return StoredFile{}, err
 	}
 	defer end()
-	reservation, err := s.reserve(operationCtx, ownerID, shareID, size)
+	reservation, err := s.reserve(operationCtx, ownerID, shareID, size, scopeLimits)
 	if err != nil {
 		if src != nil {
 			_ = src.Close()
@@ -704,7 +746,7 @@ func (s *Storage) storeReserved(ctx context.Context, reservation *Reservation, s
 	}()
 
 	hasher := blake3.New()
-	written, ingestErr := copyExactAndProbe(ctx, io.MultiWriter(file, hasher), src, reservation.size)
+	written, ingestErr := copyExactAndProbe(ctx, io.MultiWriter(file, hasher), src, reservation.size, reservation.maxFileBytes)
 	if s.hooks.afterIngest != nil {
 		info, statErr := file.Stat()
 		if statErr != nil {
@@ -1429,7 +1471,7 @@ func (s *Storage) rebuildShareQuota(ownerID, shareID string, shareRoot *os.Root)
 		if err != nil {
 			return err
 		}
-		if info.Size() < 0 || info.Size() > s.limits.MaxFileBytes {
+		if info.Size() < 0 || info.Size() > MaxFileBytes {
 			return ErrFileTooLarge
 		}
 		if err := s.quota.addCommitted(ownerID, shareID, name, info.Size(), s.limits); err != nil {
@@ -1802,8 +1844,18 @@ func (q *quotaLedger) addCommitted(ownerID, shareID, storageName string, size in
 		share = &shareUsage{}
 		owner.shares[shareID] = share
 	}
-	if size > limits.MaxOwnerBytes-owner.bytes || size > limits.MaxScopeBytes-share.bytes || share.files >= limits.MaxFilesPerScope {
+	if size > MaxOwnerBytes-owner.bytes || size > MaxShareBytes-share.bytes || share.files >= MaxFilesPerShare {
 		return ErrQuotaExceeded
+	}
+	if share.maxBytes == 0 {
+		share.maxBytes = limits.MaxScopeBytes
+	} else {
+		share.maxBytes = min(share.maxBytes, limits.MaxScopeBytes)
+	}
+	if share.maxFiles == 0 {
+		share.maxFiles = limits.MaxFilesPerScope
+	} else {
+		share.maxFiles = min(share.maxFiles, limits.MaxFilesPerScope)
 	}
 	owner.bytes += size
 	share.bytes += size
@@ -1844,7 +1896,7 @@ func (q *quotaLedger) releaseLocked(ownerID, shareID string, size int64) {
 	}
 }
 
-func copyExactAndProbe(ctx context.Context, dst io.Writer, src io.Reader, size int64) (int64, error) {
+func copyExactAndProbe(ctx context.Context, dst io.Writer, src io.Reader, size, maxFileBytes int64) (int64, error) {
 	buffer := make([]byte, 128*1024)
 	remaining := size
 	var written int64
@@ -1900,7 +1952,7 @@ func copyExactAndProbe(ctx context.Context, dst io.Writer, src io.Reader, size i
 			return written, fmt.Errorf("%w: invalid probe count %d", ErrSizeMismatch, read)
 		}
 		if read > 0 {
-			if size == MaxFileBytes {
+			if size == maxFileBytes {
 				return written, ErrFileTooLarge
 			}
 			return written, ErrSizeMismatch

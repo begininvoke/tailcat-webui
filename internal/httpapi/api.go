@@ -154,6 +154,7 @@ func (a *API) Handler() (http.Handler, error) {
 	api.GET("/transfers/jobs/:id/items", a.listTransferJobItems)
 	api.GET("/transfers/jobs/:id/items/:item_id", a.getTransferJobItem)
 	api.GET("/transfers/jobs/:id/items/:item_id/download", a.downloadTransferJobItem)
+	api.HEAD("/transfers/jobs/:id/items/:item_id/download", a.downloadTransferJobItem)
 
 	e.Any("/r/:slug", a.handlePublished)
 	e.Any("/r/:slug/*", a.handlePublished)

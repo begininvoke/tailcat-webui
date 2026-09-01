@@ -330,11 +330,15 @@ func (s *Service) RecoverAfterRestore(ctx context.Context) error {
 			if share.ErrorCode == transfershare.ErrorCodeTransferExpired {
 				action = "transfer.expire"
 			}
-			if err := s.deleteShare(ctx, share.UserID, share.ID, action); err != nil {
+			if err := s.deleteShare(ctx, share.UserID, share.ID, action); err != nil && !errors.Is(err, ErrNotFound) {
 				errs = append(errs, err)
 			}
-		} else if !share.ExpiresAt.After(now) {
-			if err := s.deleteShare(ctx, share.UserID, share.ID, "transfer.expire"); err != nil {
+		} else if limitErr := s.validateShareLimits(ctx, share, now); limitErr != nil {
+			if !errors.Is(limitErr, errConfiguredIneligible) {
+				errs = append(errs, limitErr)
+				continue
+			}
+			if err := s.deleteShare(ctx, share.UserID, share.ID, "transfer.expire"); err != nil && !errors.Is(err, ErrNotFound) {
 				errs = append(errs, err)
 			}
 		}
@@ -349,13 +353,17 @@ func (s *Service) RecoverAfterRestore(ctx context.Context) error {
 			if job.ErrorCode == transferjob.ErrorCodeTransferExpired {
 				action = "transfer.expire"
 			}
-			if err := s.deleteJob(ctx, job.UserID, job.ID, action); err != nil {
+			if err := s.deleteJob(ctx, job.UserID, job.ID, action); err != nil && !errors.Is(err, ErrNotFound) {
 				errs = append(errs, err)
 			}
 			continue
 		}
-		if !job.ExpiresAt.After(now) {
-			if err := s.deleteJob(ctx, job.UserID, job.ID, "transfer.expire"); err != nil {
+		if limitErr := s.validateJobLimits(ctx, job, now); limitErr != nil {
+			if !errors.Is(limitErr, errConfiguredIneligible) {
+				errs = append(errs, limitErr)
+				continue
+			}
+			if err := s.deleteJob(ctx, job.UserID, job.ID, "transfer.expire"); err != nil && !errors.Is(err, ErrNotFound) {
 				errs = append(errs, err)
 			}
 			continue

@@ -120,6 +120,7 @@ func TestBuildFileManifestRejectsUnsafeIdentityAndOverFileLimit(t *testing.T) {
 	unsafePaths := []string{
 		"", ".", "../x", "/x", "folder//x", "folder/./x", "folder/../x",
 		`C:\x`, `\\?\C:\x`, "CON", "folder/con.txt", "folder/trailing. ",
+		"folder/next\u0085line.txt",
 		strings.Repeat("a", 1025), strings.Repeat("a/", 32) + "x",
 	}
 	for _, virtualPath := range unsafePaths {

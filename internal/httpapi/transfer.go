@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/ca-x/tailcat-webui/internal/transfer"
@@ -427,16 +428,47 @@ func (a *API) downloadTransferJobItem(c *echo.Context) error {
 	response := c.Response()
 	response.Header().Set("Content-Type", "application/octet-stream")
 	response.Header().Set("Content-Disposition", disposition)
-	response.Header().Set("Content-Length", strconv.FormatInt(opened.Item.Size, 10))
 	response.Header().Set("X-Content-Type-Options", "nosniff")
 	response.Header().Set("Cache-Control", "private, no-store")
+	if rangeHeader := c.Request().Header.Get("Range"); rangeHeader != "" && !validSingleDownloadRange(rangeHeader, opened.Item.Size) {
+		response.Header().Set("Content-Range", "bytes */"+strconv.FormatInt(opened.Item.Size, 10))
+		response.Header().Set("Accept-Ranges", "bytes")
+		return c.NoContent(http.StatusRequestedRangeNotSatisfiable)
+	}
 	http.ServeContent(response, c.Request(), filename, opened.Item.MTime, opened.Handle)
 	return nil
 }
 
+func validSingleDownloadRange(header string, size int64) bool {
+	value, ok := strings.CutPrefix(header, "bytes=")
+	if !ok || value == "" || strings.Contains(value, ",") {
+		return false
+	}
+	startText, endText, ok := strings.Cut(value, "-")
+	if !ok || strings.Contains(endText, "-") {
+		return false
+	}
+	if size == 0 {
+		return true
+	}
+	if startText == "" {
+		suffix, err := strconv.ParseUint(endText, 10, 63)
+		return err == nil && suffix > 0
+	}
+	start, err := strconv.ParseUint(startText, 10, 63)
+	if err != nil || start >= uint64(size) {
+		return false
+	}
+	if endText == "" {
+		return true
+	}
+	end, err := strconv.ParseUint(endText, 10, 63)
+	return err == nil && start <= end
+}
+
 func safeDownloadName(name string) string {
 	name = strings.Map(func(character rune) rune {
-		if character < 0x20 || character == 0x7f {
+		if unicode.IsControl(character) {
 			return '_'
 		}
 		return character

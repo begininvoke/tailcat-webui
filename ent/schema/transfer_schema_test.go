@@ -64,6 +64,19 @@ func TestTransferSchemaDescriptors(t *testing.T) {
 	requireAssociationCascade(t, TailClient{}.Edges(), "transfer_jobs", "TransferJob")
 }
 
+func TestTransferVirtualPathRejectsUnicodeControls(t *testing.T) {
+	for _, path := range []string{"next\u0085line.txt", "folder/nested\u009fcontrol.txt", "folder/line\r\nbreak.txt"} {
+		if err := validateVirtualPath(path); err == nil {
+			t.Errorf("validateVirtualPath(%q) accepted a Unicode control", path)
+		}
+	}
+	for _, path := range []string{"目录/报告.txt", `folder/héllo "quote".txt`} {
+		if err := validateVirtualPath(path); err != nil {
+			t.Errorf("validateVirtualPath(%q) = %v", path, err)
+		}
+	}
+}
+
 func fieldsByName(fields []ent.Field) map[string]*field.Descriptor {
 	result := make(map[string]*field.Descriptor, len(fields))
 	for _, candidate := range fields {

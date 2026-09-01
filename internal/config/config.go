@@ -218,8 +218,8 @@ func (transfer Transfer) validate() error {
 	if transfer.MaxFilesPerShare <= 0 || transfer.MaxFilesPerShare > maxTransferFilesPerShare {
 		return errors.New("TAILCAT_WEBUI_TRANSFER_MAX_FILES_PER_SHARE must be within 1..1000")
 	}
-	if transfer.Workers <= 0 || transfer.Workers > maxTransferWorkers {
-		return errors.New("TAILCAT_WEBUI_TRANSFER_WORKERS must be within 1..4")
+	if transfer.Workers != maxTransferWorkers {
+		return errors.New("TAILCAT_WEBUI_TRANSFER_WORKERS must be exactly 4")
 	}
 	if transfer.MaxJobsPerOwner <= 0 || transfer.MaxJobsPerOwner > maxTransferJobsPerOwner {
 		return errors.New("TAILCAT_WEBUI_TRANSFER_MAX_JOBS_PER_OWNER must be within 1..2")

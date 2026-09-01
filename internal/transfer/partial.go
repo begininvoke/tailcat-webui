@@ -85,6 +85,12 @@ func (file *PartialFile) Close() error {
 // CreatePartial reserves quota and durably creates a private sparse file with
 // a cryptographically random Storage-owned basename.
 func (s *Storage) CreatePartial(ctx context.Context, ownerID, jobID string, size int64) (partial *PartialFile, retErr error) {
+	return s.CreatePartialScoped(ctx, ownerID, jobID, size, ScopeLimits{MaxBytes: s.limits.MaxScopeBytes, MaxFiles: s.limits.MaxFilesPerScope})
+}
+
+// CreatePartialScoped reserves one incoming item against the job-specific
+// scope limit before creating or sizing any file.
+func (s *Storage) CreatePartialScoped(ctx context.Context, ownerID, jobID string, size int64, scopeLimits ScopeLimits) (partial *PartialFile, retErr error) {
 	operationCtx, end, err := s.beginOperation(ctx)
 	if err != nil {
 		return nil, err
@@ -95,7 +101,7 @@ func (s *Storage) CreatePartial(ctx context.Context, ownerID, jobID string, size
 			end()
 		}
 	}()
-	reservation, err := s.reserve(operationCtx, ownerID, jobID, size)
+	reservation, err := s.reserve(operationCtx, ownerID, jobID, size, scopeLimits)
 	if err != nil {
 		return nil, err
 	}

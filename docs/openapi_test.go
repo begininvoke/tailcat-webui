@@ -51,12 +51,21 @@ func TestOpenAPIIsValidYAMLWithPaths(t *testing.T) {
 		"/transfers/jobs/{id}/retry":                    {"post"},
 		"/transfers/jobs/{id}/items":                    {"get"},
 		"/transfers/jobs/{id}/items/{item_id}":          {"get"},
-		"/transfers/jobs/{id}/items/{item_id}/download": {"get"},
+		"/transfers/jobs/{id}/items/{item_id}/download": {"get", "head"},
 	}
 	for path, methods := range transferRoutes {
 		for _, method := range methods {
-			if document.Paths[path][method] == nil {
+			operation, ok := document.Paths[path][method].(map[string]any)
+			if !ok {
 				t.Errorf("OpenAPI transfer operation %s %s is missing", method, path)
+				continue
+			}
+			responses, ok := operation["responses"].(map[string]any)
+			if !ok || responses["503"] == nil {
+				t.Errorf("OpenAPI transfer operation %s %s is missing 503", method, path)
+			}
+			if (method == "post" || method == "delete") && (responses == nil || responses["413"] == nil) {
+				t.Errorf("OpenAPI transfer mutation %s %s is missing global body-limit 413", method, path)
 			}
 		}
 	}
@@ -70,9 +79,45 @@ func TestOpenAPIIsValidYAMLWithPaths(t *testing.T) {
 	if content["application/octet-stream"] == nil {
 		t.Error("transfer upload is not documented as raw application/octet-stream")
 	}
+	parameters, ok := upload["parameters"].([]any)
+	if !ok {
+		t.Fatal("transfer upload parameters are missing")
+	}
+	uploadHeaders := make(map[string]bool)
+	for _, value := range parameters {
+		parameter, _ := value.(map[string]any)
+		if parameter["in"] == "header" {
+			uploadHeaders[parameter["name"].(string)] = parameter["required"] == true
+		}
+	}
+	if !uploadHeaders["Content-Length"] || !uploadHeaders["X-Tailcat-Virtual-Path"] {
+		t.Errorf("transfer upload required headers = %v", uploadHeaders)
+	}
 	for _, status := range []string{"201", "400", "401", "403", "404", "409", "413", "415", "422", "429"} {
 		if upload["responses"].(map[string]any)[status] == nil {
 			t.Errorf("transfer upload response %s is missing", status)
+		}
+	}
+	download := document.Paths["/transfers/jobs/{id}/items/{item_id}/download"]["get"].(map[string]any)
+	downloadResponses := download["responses"].(map[string]any)
+	for _, status := range []string{"200", "206", "304", "412", "416", "503"} {
+		if downloadResponses[status] == nil {
+			t.Errorf("transfer download response %s is missing", status)
+		}
+	}
+	for status, wantHeaders := range map[string][]string{
+		"200": {"Accept-Ranges", "Content-Disposition", "Content-Length", "Last-Modified"},
+		"206": {"Accept-Ranges", "Content-Disposition", "Content-Length", "Content-Range", "Last-Modified"},
+		"304": {"Last-Modified"},
+		"412": {"Last-Modified"},
+		"416": {"Content-Range"},
+	} {
+		response := downloadResponses[status].(map[string]any)
+		headers, _ := response["headers"].(map[string]any)
+		for _, header := range wantHeaders {
+			if headers[header] == nil {
+				t.Errorf("transfer download %s header %s is missing", status, header)
+			}
 		}
 	}
 	for schema, forbidden := range map[string][]string{

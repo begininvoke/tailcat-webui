@@ -642,6 +642,82 @@ func TestQuotaEnforcesShareBytesAndFileCount(t *testing.T) {
 	}
 }
 
+func TestScopedStoreAtomicallyKeepsTheMinimumLiveScopeLimitWithoutReadingRejectedSource(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "scoped-store")
+	storage, err := NewStorageWithLimits(root, StorageLimits{MaxFileBytes: 8, MaxScopeBytes: 8, MaxOwnerBytes: 16, MaxFilesPerScope: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = storage.Close() })
+	ctx, cancel := context.WithCancel(t.Context())
+	first := newBlockingReadCloser()
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := storage.StoreScoped(ctx, testOwnerID, testShareID, 4, ScopeLimits{MaxBytes: 4, MaxFiles: 8}, first)
+		firstDone <- err
+	}()
+	<-first.started
+	second := &recordingReadCloser{reader: strings.NewReader("x")}
+	if _, err := storage.StoreScoped(t.Context(), testOwnerID, testShareID, 1, ScopeLimits{MaxBytes: 8, MaxFiles: 8}, second); !errors.Is(err, ErrQuotaExceeded) {
+		t.Fatalf("widened live scope error = %v, want ErrQuotaExceeded", err)
+	}
+	if len(second.readSizes) != 0 || !second.closed.Load() {
+		t.Fatalf("rejected source reads=%v closed=%t", second.readSizes, second.closed.Load())
+	}
+	cancel()
+	select {
+	case <-firstDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first scoped store did not stop")
+	}
+}
+
+func TestScopedShareAndJobReservationsUseIndependentAsymmetricLimits(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "asymmetric-scopes")
+	storage, err := NewStorageWithLimits(root, StorageLimits{MaxFileBytes: 8, MaxScopeBytes: 8, MaxOwnerBytes: 16, MaxFilesPerScope: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = storage.Close() })
+	if _, err := storage.StoreScoped(t.Context(), testOwnerID, testShareID, 4, ScopeLimits{MaxBytes: 4, MaxFiles: 8}, readCloser(strings.NewReader("abcd"))); err != nil {
+		t.Fatalf("share StoreScoped: %v", err)
+	}
+	jobID := "019b1e80-42e8-7000-8000-000000000099"
+	partial, err := storage.CreatePartialScoped(t.Context(), testOwnerID, jobID, 6, ScopeLimits{MaxBytes: 6, MaxFiles: 8})
+	if err != nil {
+		t.Fatalf("job CreatePartialScoped: %v", err)
+	}
+	if err := partial.Close(); err != nil {
+		t.Fatal(err)
+	}
+	shareUsage, err := storage.Usage(t.Context(), testOwnerID, testShareID)
+	if err != nil || shareUsage.ShareBytes != 4 {
+		t.Fatalf("share usage = %+v, %v", shareUsage, err)
+	}
+	jobUsage, err := storage.Usage(t.Context(), testOwnerID, jobID)
+	if err != nil || jobUsage.ShareBytes != 6 || jobUsage.OwnerBytes != 10 {
+		t.Fatalf("job usage = %+v, %v", jobUsage, err)
+	}
+	if _, err := storage.CreatePartialScoped(t.Context(), testOwnerID, jobID, 1, ScopeLimits{MaxBytes: 8, MaxFiles: 8}); !errors.Is(err, ErrQuotaExceeded) {
+		t.Fatalf("later job scope widening error = %v, want ErrQuotaExceeded", err)
+	}
+}
+
+func TestScopedStoreClassifiesProbeByteAgainstEffectiveFileLimit(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "scoped-classification")
+	storage, err := NewStorageWithLimits(root, StorageLimits{MaxFileBytes: 4, MaxScopeBytes: 8, MaxOwnerBytes: 16, MaxFilesPerScope: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = storage.Close() })
+	if _, err := storage.StoreScoped(t.Context(), testOwnerID, testShareID, 4, ScopeLimits{MaxBytes: 8, MaxFiles: 8}, readCloser(strings.NewReader("12345"))); !errors.Is(err, ErrFileTooLarge) {
+		t.Fatalf("probe at effective max error = %v, want ErrFileTooLarge", err)
+	}
+	if _, err := storage.StoreScoped(t.Context(), testOwnerID, testShareID, 3, ScopeLimits{MaxBytes: 8, MaxFiles: 8}, readCloser(strings.NewReader("1234"))); !errors.Is(err, ErrSizeMismatch) {
+		t.Fatalf("probe below effective max error = %v, want ErrSizeMismatch", err)
+	}
+}
+
 func TestReservationCommitIsIdempotentAndStaysCharged(t *testing.T) {
 	storage := newTestStorage(t)
 	reservation, err := storage.Reserve(t.Context(), testOwnerID, testShareID, 1)

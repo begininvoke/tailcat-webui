@@ -114,18 +114,23 @@ func errorHandler(c *echo.Context, err error) {
 		status, code, message = http.StatusNotFound, "NOT_FOUND", "The requested endpoint was not found"
 	} else if errors.Is(err, echo.ErrMethodNotAllowed) {
 		status, code, message = http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "The method is not allowed"
-	} else if httpErr, ok := errors.AsType[*echo.HTTPError](err); ok {
-		status = httpErr.Code
-		if status == http.StatusBadRequest {
+	} else if statusCode := echo.StatusCode(err); statusCode != 0 {
+		status = statusCode
+		switch status {
+		case http.StatusBadRequest:
 			code, message = "BAD_REQUEST", "The request body is invalid"
-		} else if status == http.StatusNotFound {
+		case http.StatusRequestEntityTooLarge:
+			code, message = "REQUEST_TOO_LARGE", "The request body exceeds the management limit"
+		case http.StatusNotFound:
 			code, message = "NOT_FOUND", "The requested endpoint was not found"
-		} else if status == http.StatusMethodNotAllowed {
+		case http.StatusMethodNotAllowed:
 			code, message = "METHOD_NOT_ALLOWED", "The method is not allowed"
-		} else if status == http.StatusTooManyRequests {
+		case http.StatusTooManyRequests:
 			code, message = "RATE_LIMITED", "Too many requests; try again later"
-		} else if status < 500 {
-			code, message = "HTTP_ERROR", http.StatusText(status)
+		default:
+			if status < 500 {
+				code, message = "HTTP_ERROR", http.StatusText(status)
+			}
 		}
 	}
 	requestID := c.Response().Header().Get(echo.HeaderXRequestID)

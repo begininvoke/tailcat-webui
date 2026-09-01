@@ -70,6 +70,7 @@ type transferAPIHarness struct {
 	t       *testing.T
 	db      *ent.Client
 	service *transfer.Service
+	api     *API
 	handler http.Handler
 	ownerA  *ent.User
 	ownerB  *ent.User
@@ -147,7 +148,7 @@ func newTransferAPIHarness(t *testing.T, limits config.Transfer) *transferAPIHar
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &transferAPIHarness{t: t, db: db, service: service, handler: handler, ownerA: ownerA, ownerB: ownerB, tokenA: tokenA, tokenB: tokenB, serverA: serverA, clientA: clientA, dialer: dialer}
+	return &transferAPIHarness{t: t, db: db, service: service, api: api, handler: handler, ownerA: ownerA, ownerB: ownerB, tokenA: tokenA, tokenB: tokenB, serverA: serverA, clientA: clientA, dialer: dialer}
 }
 
 func transferAPISession(t *testing.T, db *ent.Client, ownerID, token string) string {
@@ -536,6 +537,9 @@ func TestTransferReceiveWorkflowAndCompletedDownload(t *testing.T) {
 	if got := download.Header().Get("Cache-Control"); got != "private, no-store" {
 		t.Fatalf("Cache-Control = %q", got)
 	}
+	if download.Header().Get("Accept-Ranges") != "bytes" || download.Header().Get("Content-Length") != "22" || download.Header().Get("Last-Modified") == "" {
+		t.Fatalf("download length/range/conditional headers = %v", download.Header())
+	}
 	disposition := download.Header().Get("Content-Disposition")
 	if !strings.Contains(disposition, "filename*=") || strings.ContainsAny(disposition, "\r\n") {
 		t.Fatalf("unsafe/non-Unicode Content-Disposition = %q", disposition)
@@ -548,11 +552,69 @@ func TestTransferReceiveWorkflowAndCompletedDownload(t *testing.T) {
 	if rangeResponse.Code != http.StatusPartialContent || rangeResponse.Body.String() != "download" {
 		t.Fatalf("range = %d %q headers=%v", rangeResponse.Code, rangeResponse.Body.String(), rangeResponse.Header())
 	}
+	if rangeResponse.Header().Get("Content-Range") != "bytes 9-16/22" || rangeResponse.Header().Get("Content-Length") != "8" || rangeResponse.Header().Get("Accept-Ranges") != "bytes" {
+		t.Fatalf("range headers = %v", rangeResponse.Header())
+	}
+	for name, rangeValue := range map[string]string{"multiple": "bytes=0-1,3-4", "invalid": "bytes=nope", "unsatisfiable": "bytes=999-1000"} {
+		t.Run(name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, "https://tailcat.example.com"+downloadPath, nil)
+			request.Header.Set("Range", rangeValue)
+			request.AddCookie(&http.Cookie{Name: sessionCookie, Value: h.tokenA})
+			response := httptest.NewRecorder()
+			h.handler.ServeHTTP(response, request)
+			if response.Code != http.StatusRequestedRangeNotSatisfiable || response.Header().Get("Content-Range") != "bytes */22" {
+				t.Fatalf("range %q = %d headers=%v body=%q", rangeValue, response.Code, response.Header(), response.Body.String())
+			}
+			if name == "multiple" && response.Body.Len() != 0 {
+				t.Fatalf("multi-range body = %q", response.Body.String())
+			}
+		})
+	}
+	for name, header := range map[string]string{
+		"not-modified":      "If-Modified-Since",
+		"precondition-fail": "If-Unmodified-Since",
+	} {
+		t.Run(name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, "https://tailcat.example.com"+downloadPath, nil)
+			when := time.Now().UTC().Add(time.Hour)
+			want := http.StatusNotModified
+			if header == "If-Unmodified-Since" {
+				when = time.Unix(1, 0).UTC()
+				want = http.StatusPreconditionFailed
+			}
+			request.Header.Set(header, when.Format(http.TimeFormat))
+			request.AddCookie(&http.Cookie{Name: sessionCookie, Value: h.tokenA})
+			response := httptest.NewRecorder()
+			h.handler.ServeHTTP(response, request)
+			if response.Code != want || response.Body.Len() != 0 || response.Header().Get("Content-Length") != "" || response.Header().Get("Last-Modified") == "" {
+				t.Fatalf("%s = %d length=%q body=%q", header, response.Code, response.Header().Get("Content-Length"), response.Body.String())
+			}
+		})
+	}
+	headRequest := httptest.NewRequest(http.MethodHead, "https://tailcat.example.com"+downloadPath, nil)
+	headRequest.AddCookie(&http.Cookie{Name: sessionCookie, Value: h.tokenA})
+	headResponse := httptest.NewRecorder()
+	h.handler.ServeHTTP(headResponse, headRequest)
+	if headResponse.Code != http.StatusOK || headResponse.Body.Len() != 0 || headResponse.Header().Get("Content-Length") != "22" {
+		t.Fatalf("HEAD download = %d length=%q body=%q", headResponse.Code, headResponse.Header().Get("Content-Length"), headResponse.Body.String())
+	}
+	headRangeRequest := httptest.NewRequest(http.MethodHead, "https://tailcat.example.com"+downloadPath, nil)
+	headRangeRequest.Header.Set("Range", "bytes=9-16")
+	headRangeRequest.AddCookie(&http.Cookie{Name: sessionCookie, Value: h.tokenA})
+	headRangeResponse := httptest.NewRecorder()
+	h.handler.ServeHTTP(headRangeResponse, headRangeRequest)
+	if headRangeResponse.Code != http.StatusPartialContent || headRangeResponse.Body.Len() != 0 || headRangeResponse.Header().Get("Content-Range") != "bytes 9-16/22" || headRangeResponse.Header().Get("Content-Length") != "8" {
+		t.Fatalf("HEAD range = %d headers=%v body=%q", headRangeResponse.Code, headRangeResponse.Header(), headRangeResponse.Body.String())
+	}
 	if foreign := h.request(http.MethodGet, downloadPath, h.tokenB, "", nil); foreign.Code != http.StatusNotFound {
 		t.Fatalf("foreign download = %d %s", foreign.Code, foreign.Body.String())
 	}
 	if disposition := mime.FormatMediaType("attachment", map[string]string{"filename": safeDownloadName("bad\r\nInjected.txt")}); strings.ContainsAny(disposition, "\r\n") || strings.Contains(disposition, "\r") || strings.Contains(disposition, "\n") {
 		t.Fatalf("CRLF download disposition = %q", disposition)
+	}
+	sanitizedC1 := safeDownloadName("bad\u0085Injected.txt")
+	if disposition := mime.FormatMediaType("attachment", map[string]string{"filename": sanitizedC1}); sanitizedC1 != "bad_Injected.txt" || strings.Contains(disposition, "%C2%85") || strings.ContainsRune(disposition, '\u0085') {
+		t.Fatalf("C1 download name=%q disposition=%q", sanitizedC1, disposition)
 	}
 }
 
@@ -680,13 +742,76 @@ func TestTransferUploadBodyLimitBypassMatchesOnlyExactRouteShape(t *testing.T) {
 	}
 }
 
+func TestTransferUploadBodyLimitBypassRemainsInsideAllManagementMiddleware(t *testing.T) {
+	h := newTransferAPIHarness(t, config.Transfer{})
+	shareID, _ := h.createShare(h.tokenA)
+	payload := bytes.Repeat([]byte("x"), (1<<20)+1)
+	if response := h.upload(h.tokenA, shareID, "large-browser.bin", payload); response.Code != http.StatusCreated {
+		t.Fatalf("exact upload route did not bypass global body limit: %d %s", response.Code, response.Body.String())
+	}
+	for name, target := range map[string]struct{ method, path string }{
+		"method":     {http.MethodPut, "/api/v1/transfers/shares/" + shareID + "/files"},
+		"missing-id": {http.MethodPost, "/api/v1/transfers/shares//files"},
+		"sibling":    {http.MethodPost, "/api/v1/transfers/shares/" + shareID + "/finalize"},
+		"deeper":     {http.MethodPost, "/api/v1/transfers/shares/" + shareID + "/files/extra"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			request := httptest.NewRequest(target.method, "https://tailcat.example.com"+target.path, bytes.NewReader(payload))
+			request.AddCookie(&http.Cookie{Name: sessionCookie, Value: h.tokenA})
+			response := httptest.NewRecorder()
+			h.handler.ServeHTTP(response, request)
+			if response.Code != http.StatusRequestEntityTooLarge {
+				t.Fatalf("%s %s = %d %s", target.method, target.path, response.Code, response.Body.String())
+			}
+		})
+	}
+	unauthBody := &observedBody{data: bytes.NewReader([]byte("secret"))}
+	unauth := httptest.NewRequest(http.MethodPost, "https://tailcat.example.com/api/v1/transfers/shares/"+shareID+"/files", unauthBody)
+	unauth.ContentLength = int64(len(payload))
+	unauth.Header.Set("Content-Type", "application/octet-stream")
+	unauth.Header.Set("X-Tailcat-Virtual-Path", "unauth.bin")
+	unauthResponse := httptest.NewRecorder()
+	h.handler.ServeHTTP(unauthResponse, unauth)
+	if unauthResponse.Code != http.StatusUnauthorized || unauthBody.reads != 0 {
+		t.Fatalf("unauthenticated exact upload = %d reads=%d", unauthResponse.Code, unauthBody.reads)
+	}
+	wrongOriginBody := &observedBody{data: bytes.NewReader([]byte("secret"))}
+	wrongOrigin := httptest.NewRequest(http.MethodPost, "https://other.example/api/v1/transfers/shares/"+shareID+"/files", wrongOriginBody)
+	wrongOrigin.ContentLength = int64(len(payload))
+	wrongOrigin.Header.Set("Content-Type", "application/octet-stream")
+	wrongOrigin.Header.Set("X-Tailcat-Virtual-Path", "origin.bin")
+	wrongOrigin.AddCookie(&http.Cookie{Name: sessionCookie, Value: h.tokenA})
+	wrongOriginResponse := httptest.NewRecorder()
+	h.handler.ServeHTTP(wrongOriginResponse, wrongOrigin)
+	if wrongOriginResponse.Code != http.StatusNotFound || wrongOriginBody.reads != 0 {
+		t.Fatalf("wrong-origin exact upload = %d reads=%d", wrongOriginResponse.Code, wrongOriginBody.reads)
+	}
+	h.api.mutationMu.Lock()
+	h.api.mutationRates[h.ownerA.ID] = rate.NewLimiter(0, 0)
+	h.api.mutationMu.Unlock()
+	rateBody := &observedBody{data: bytes.NewReader(nil)}
+	rateRequest := httptest.NewRequest(http.MethodPost, "https://tailcat.example.com/api/v1/transfers/shares/"+shareID+"/files", rateBody)
+	rateRequest.ContentLength = 0
+	rateRequest.Header.Set("Content-Type", "application/octet-stream")
+	rateRequest.Header.Set("X-Tailcat-Virtual-Path", "rate.bin")
+	rateRequest.AddCookie(&http.Cookie{Name: sessionCookie, Value: h.tokenA})
+	rateResponse := httptest.NewRecorder()
+	h.handler.ServeHTTP(rateResponse, rateRequest)
+	if rateResponse.Code != http.StatusTooManyRequests || rateBody.reads != 0 {
+		t.Fatalf("rate-limited exact upload = %d reads=%d", rateResponse.Code, rateBody.reads)
+	}
+	if count := h.db.AuditEvent.Query().Where(auditevent.UserIDEQ(h.ownerA.ID), auditevent.ActionEQ("POST /api/v1/transfers/shares/:id/files"), auditevent.OutcomeEQ(auditevent.OutcomeSuccess)).CountX(t.Context()); count != 1 {
+		t.Fatalf("exact upload success audits = %d, want 1", count)
+	}
+}
+
 func TestTransferPublicConfigAndConfiguredSingleJobAdmission(t *testing.T) {
 	limits := config.DefaultTransfer()
 	limits.MaxJobsPerOwner = 1
-	limits.Workers = 2
+	limits.Workers = 4
 	h := newTransferAPIHarness(t, limits)
 	public := h.request(http.MethodGet, "/api/v1/config", "", "", nil)
-	if public.Code != http.StatusOK || !strings.Contains(public.Body.String(), `"workers":2`) || !strings.Contains(public.Body.String(), `"max_jobs_per_owner":1`) {
+	if public.Code != http.StatusOK || !strings.Contains(public.Body.String(), `"workers":4`) || !strings.Contains(public.Body.String(), `"max_jobs_per_owner":1`) {
 		t.Fatalf("public transfer config = %d %s", public.Code, public.Body.String())
 	}
 	shareID, capability := h.createShare(h.tokenA)

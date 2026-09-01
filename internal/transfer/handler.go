@@ -57,22 +57,39 @@ func (s *Service) serveReserved(ctx context.Context, serverID string, connection
 		_ = writeErrorResponse(requestCtx, connection, responseCode(err))
 		return err
 	}
-	defer s.finishShareAdmission(admission)
+	expireAfterRequest := false
+	expireOwnerID := ""
+	defer func() {
+		s.finishShareAdmission(admission)
+		if !expireAfterRequest || expireOwnerID == "" {
+			return
+		}
+		cleanupCtx, cancelCleanup := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+		defer cancelCleanup()
+		if cleanupErr := s.deleteShare(cleanupCtx, expireOwnerID, request.ShareID, "transfer.expire"); cleanupErr != nil && !errors.Is(cleanupErr, ErrNotFound) {
+			s.recordFailure(cleanupErr)
+		}
+	}()
 	stopAdmission := context.AfterFunc(admission.ctx, func() { _ = connection.Close() })
 	defer stopAdmission()
 	share, err := s.authorizeRequest(admission.ctx, serverID, request)
 	if err != nil {
+		expireAfterRequest = errors.Is(err, errConfiguredIneligible)
+		if share != nil {
+			expireOwnerID = share.UserID
+		}
 		_ = writeErrorResponse(requestCtx, connection, responseCode(err))
 		return err
 	}
-	if err := s.armShareExpiry(admission, share.ExpiresAt); err != nil {
+	effectiveExpiry := s.effectiveExpiry(share.CreatedAt, share.ExpiresAt)
+	if err := s.armShareExpiry(admission, effectiveExpiry); err != nil {
 		_ = writeErrorResponse(requestCtx, connection, responseCode(err))
 		return err
 	}
 	if s.handlerHooks.afterAuthorized != nil {
 		s.handlerHooks.afterAuthorized()
 	}
-	streamCtx, err := s.commitShareAdmission(admission, share.ExpiresAt)
+	streamCtx, err := s.commitShareAdmission(admission, effectiveExpiry)
 	if err != nil {
 		_ = writeErrorResponse(requestCtx, connection, responseCode(err))
 		return err
@@ -115,19 +132,27 @@ func (s *Service) authorizeRequest(ctx context.Context, serverID string, request
 	now := time.Now().UTC()
 	row, queryErr = s.db.TransferShare.Query().Where(
 		transfershare.IDEQ(request.ShareID), transfershare.ServerIDEQ(serverID),
-		transfershare.StatusEQ(transfershare.StatusReady), transfershare.ExpiresAtGT(now),
+		transfershare.StatusEQ(transfershare.StatusReady),
 	).Only(ctx)
-	eligible := queryErr == nil && row != nil && parseErr == nil && parsed.shareID == request.ShareID &&
-		len(row.CapabilityHash) == sha256.Size
-	if eligible {
+	identityEligible := queryErr == nil && row != nil && parseErr == nil && parsed.shareID == request.ShareID && len(row.CapabilityHash) == sha256.Size
+	if identityEligible {
 		storedHash = row.CapabilityHash
 	}
 	matched := s.compareCapability(storedHash, candidateHash[:])
 	if queryErr != nil && !ent.IsNotFound(queryErr) {
 		return nil, protocolError(CodeRemoteUnavailable, errors.New("transfer metadata unavailable"))
 	}
-	if !eligible || matched != 1 {
+	if !identityEligible || matched != 1 {
 		return nil, protocolError(CodeInvalidCapability, ErrInvalidCapability)
+	}
+	if err := s.validateShareLimits(ctx, row, now); err != nil {
+		if errors.Is(err, errConfiguredIneligible) {
+			if errors.Is(err, errConfiguredExpired) {
+				return row, protocolError(CodeInvalidCapability, err)
+			}
+			return row, protocolError(CodeLimitExceeded, err)
+		}
+		return nil, protocolError(CodeRemoteUnavailable, errors.New("transfer metadata unavailable"))
 	}
 	return row, nil
 }

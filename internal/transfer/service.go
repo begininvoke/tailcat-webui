@@ -292,7 +292,7 @@ func NewServiceWithLimits(ctx context.Context, db *ent.Client, storage *Storage,
 	if db == nil || storage == nil || box == nil || dialer == nil || auditor == nil || publisher == nil || logger == nil {
 		return nil, errors.New("transfer service: nil dependency")
 	}
-	if limits.MaxFileBytes <= 0 || limits.MaxFileBytes > MaxFileBytes || limits.MaxShareBytes < limits.MaxFileBytes || limits.MaxShareBytes > MaxShareBytes || limits.MaxJobBytes < limits.MaxFileBytes || limits.MaxJobBytes > MaxShareBytes || limits.MaxFilesPerShare <= 0 || limits.MaxFilesPerShare > MaxFilesPerShare || limits.Workers <= 0 || limits.Workers > 4 || limits.MaxJobsPerOwner <= 0 || limits.MaxJobsPerOwner > 2 || limits.Expiry <= 0 || limits.Expiry > defaultTransferExpiry {
+	if limits.MaxFileBytes <= 0 || limits.MaxFileBytes > MaxFileBytes || limits.MaxShareBytes < limits.MaxFileBytes || limits.MaxShareBytes > MaxShareBytes || limits.MaxJobBytes < limits.MaxFileBytes || limits.MaxJobBytes > MaxShareBytes || limits.MaxFilesPerShare <= 0 || limits.MaxFilesPerShare > MaxFilesPerShare || limits.Workers != 4 || limits.MaxJobsPerOwner <= 0 || limits.MaxJobsPerOwner > 2 || limits.Expiry <= 0 || limits.Expiry > defaultTransferExpiry {
 		return nil, errors.New("transfer service: invalid limits")
 	}
 	if !box.Available() {
@@ -380,34 +380,34 @@ func (s *Service) CreateShare(ctx context.Context, ownerID string, input CreateS
 }
 
 func (s *Service) StageFile(ctx context.Context, ownerID, shareID string, input StageFileInput) (_ FileView, retErr error) {
+	sourceOwned := input.Body != nil
+	defer func() {
+		if sourceOwned {
+			retErr = errors.Join(retErr, input.Body.Close())
+		}
+	}()
 	if err := s.ensureOpen(); err != nil {
 		return FileView{}, err
 	}
 	if input.Body == nil || input.Size < 0 || input.Size > s.limits.MaxFileBytes || validateVirtualPath(input.VirtualPath) != nil {
-		if input.Body != nil {
-			_ = input.Body.Close()
-		}
 		return FileView{}, fmt.Errorf("%w: staged file input", ErrInvalidState)
 	}
 	share, err := s.db.TransferShare.Query().Where(transfershare.IDEQ(shareID), transfershare.UserIDEQ(ownerID)).Only(ctx)
 	if ent.IsNotFound(err) {
-		_ = input.Body.Close()
 		return FileView{}, ErrNotFound
 	}
 	if err != nil {
-		_ = input.Body.Close()
 		return FileView{}, fmt.Errorf("load staging transfer share: %w", err)
 	}
 	if share.Status != transfershare.StatusStaging {
-		_ = input.Body.Close()
 		return FileView{}, ErrInvalidState
 	}
 	if !share.ExpiresAt.After(time.Now()) || share.FileCount >= s.limits.MaxFilesPerShare || input.Size > s.limits.MaxShareBytes-share.TotalBytes {
-		_ = input.Body.Close()
 		return FileView{}, fmt.Errorf("%w: share limit or expiry", ErrInvalidState)
 	}
 	fileID := newEntityID()
-	stored, err := s.storage.Store(ctx, ownerID, shareID, input.Size, input.Body)
+	sourceOwned = false
+	stored, err := s.storage.StoreScoped(ctx, ownerID, shareID, input.Size, ScopeLimits{MaxBytes: s.limits.MaxShareBytes, MaxFiles: s.limits.MaxFilesPerShare}, input.Body)
 	if err != nil {
 		if stored.StorageName != "" {
 			cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

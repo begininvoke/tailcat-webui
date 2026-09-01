@@ -33,7 +33,7 @@ func TestLoadTransferDefaultsAndEnvironmentOverrides(t *testing.T) {
 	t.Setenv("TAILCAT_WEBUI_TRANSFER_MAX_JOB_BYTES", "256MIB")
 	t.Setenv("TAILCAT_WEBUI_TRANSFER_MAX_OWNER_BYTES", " 512 mib")
 	t.Setenv("TAILCAT_WEBUI_TRANSFER_MAX_FILES_PER_SHARE", "25")
-	t.Setenv("TAILCAT_WEBUI_TRANSFER_WORKERS", "2")
+	t.Setenv("TAILCAT_WEBUI_TRANSFER_WORKERS", "4")
 	t.Setenv("TAILCAT_WEBUI_TRANSFER_MAX_JOBS_PER_OWNER", "1")
 	t.Setenv("TAILCAT_WEBUI_TRANSFER_EXPIRY", "12h")
 	t.Setenv("TAILCAT_WEBUI_TRANSFER_RETENTION", "12h")
@@ -45,7 +45,7 @@ func TestLoadTransferDefaultsAndEnvironmentOverrides(t *testing.T) {
 	}
 	wantOverrides := Transfer{
 		MaxFileBytes: 64 << 20, MaxShareBytes: 128 << 20, MaxJobBytes: 256 << 20,
-		MaxOwnerBytes: 512 << 20, MaxFilesPerShare: 25, Workers: 2,
+		MaxOwnerBytes: 512 << 20, MaxFilesPerShare: 25, Workers: 4,
 		MaxJobsPerOwner: 1, Expiry: 12 * time.Hour, Retention: 12 * time.Hour,
 		UploadTimeout: 15 * time.Minute,
 	}
@@ -102,6 +102,26 @@ func TestLoadRejectsUnsafeTransferConfiguration(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLoadRequiresExactlyFourTransferWorkers(t *testing.T) {
+	for _, workers := range []string{"1", "2", "3", "5"} {
+		t.Run(workers, func(t *testing.T) {
+			t.Setenv("TAILCAT_WEBUI_DEMO_MODE", "true")
+			t.Setenv("TAILCAT_WEBUI_TRANSFER_WORKERS", workers)
+			if _, err := Load(); err == nil {
+				t.Fatalf("Load accepted %s transfer workers", workers)
+			}
+		})
+	}
+	t.Run("four", func(t *testing.T) {
+		t.Setenv("TAILCAT_WEBUI_DEMO_MODE", "true")
+		t.Setenv("TAILCAT_WEBUI_TRANSFER_WORKERS", "4")
+		cfg, err := Load()
+		if err != nil || cfg.Transfer.Workers != 4 {
+			t.Fatalf("Load workers = %d, %v", cfg.Transfer.Workers, err)
+		}
+	})
 }
 
 func TestTransferRetentionAloneAliasesTheExpiryLifetime(t *testing.T) {
