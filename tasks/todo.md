@@ -37,5 +37,5 @@
 - [x] Rooted staging storage and BLAKE3 block manifests
 - [x] Capability protocol, resume runner and reserved Tailcat service
 - [x] Share/transfer management API, quotas, cleanup and OpenAPI
-- [ ] Transfer UI with multi-file upload, progress, retry and downloads
+- [x] Transfer UI with multi-file upload, progress, retry and downloads
 - [ ] Browser QA, security review, release verification and documentation
