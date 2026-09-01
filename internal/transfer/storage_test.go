@@ -51,7 +51,7 @@ func TestNewStorageRequiresSafeRootAndCreatesPrivateDirectories(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Stat(%q): %v", path, err)
 		}
-		if got := info.Mode().Perm(); got != 0o700 {
+		if got := info.Mode().Perm(); runtime.GOOS != "windows" && got != 0o700 {
 			t.Errorf("mode for %q = %o, want 700", path, got)
 		}
 	}
@@ -825,7 +825,7 @@ func TestStorePublishesAtomicallyAndRemoveReleasesCommittedQuota(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stat stored file: %v", err)
 	}
-	if got := info.Mode().Perm(); got != 0o600 {
+	if got := info.Mode().Perm(); runtime.GOOS != "windows" && got != 0o600 {
 		t.Errorf("stored mode = %o, want 600", got)
 	}
 	if got := requireUsage(t, storage); got != (QuotaUsage{OwnerBytes: 3, OwnerFiles: 1, ShareBytes: 3, ShareFiles: 1}) {

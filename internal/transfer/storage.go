@@ -991,19 +991,24 @@ func (s *Storage) CleanupTemps(ctx context.Context, ownerID, shareID string) (re
 		if linkErr != nil {
 			return removed, linkErr
 		}
-		if available && links == 2 {
-			outcome, recoverErr := s.recoverTempAlias(shareRoot, entry.Name())
-			if outcome.aliasRemoved {
-				removed++
-				directoryDirty = true
+		if available {
+			if links == 2 {
+				outcome, recoverErr := s.recoverTempAlias(shareRoot, entry.Name())
+				if outcome.aliasRemoved {
+					removed++
+					directoryDirty = true
+				}
+				if recoverErr != nil {
+					return removed, recoverErr
+				}
+				if !outcome.finalValidated {
+					return removed, ErrFileChanged
+				}
+				continue
 			}
-			if recoverErr != nil {
-				return removed, recoverErr
+			if links != 1 {
+				return removed, ErrMultipleLinks
 			}
-			if !outcome.finalValidated {
-				return removed, ErrFileChanged
-			}
-			continue
 		}
 		if err := validateStoredFileInfo(info); err != nil {
 			return removed, err

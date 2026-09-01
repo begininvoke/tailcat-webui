@@ -595,7 +595,7 @@ func TestExpirySchedulerDeletesIdleShareAndCompletedJobWithoutAccessOrRestart(t 
 	db, storage, box, owner, server, _ := newTransferServiceData(t)
 	client := db.TailClient.Create().SetUserID(owner.ID).SetName("expiry-client").SetServerTokenCipher([]byte("cipher")).SetTokenHint("hint").SaveX(t.Context())
 	service := newLoopbackTransferService(t, db, storage, box, owner.ID, client.ID, server.ID)
-	expiresAt := time.Now().Add(250 * time.Millisecond)
+	expiresAt := time.Now().Add(5 * time.Second)
 
 	idleShare, err := service.CreateShare(t.Context(), owner.ID, CreateShareInput{ServerID: server.ID, ExpiresAt: expiresAt})
 	if err != nil {
@@ -627,7 +627,7 @@ func TestExpirySchedulerDeletesIdleShareAndCompletedJobWithoutAccessOrRestart(t 
 	}
 	waitForTransferJobStatus(t, db, job.ID, transferjob.StatusCompleted)
 
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := expiresAt.Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		shareExists := db.TransferShare.Query().Where(transfershare.IDEQ(idleShare.ID)).ExistX(t.Context())
 		jobExists := db.TransferJob.Query().Where(transferjob.IDEQ(job.ID)).ExistX(t.Context())
@@ -2610,7 +2610,14 @@ func waitForTransferJobStatus(t *testing.T, db *ent.Client, jobID string, want t
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		status := db.TransferJob.GetX(t.Context(), jobID).Status
+		row, err := db.TransferJob.Get(t.Context(), jobID)
+		if ent.IsNotFound(err) {
+			t.Fatalf("job %s was deleted before reaching status %s", jobID, want)
+		}
+		if err != nil {
+			t.Fatalf("load job %s while waiting for status %s: %v", jobID, want, err)
+		}
+		status := row.Status
 		if status == want {
 			return
 		}
