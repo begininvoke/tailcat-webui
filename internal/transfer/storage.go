@@ -1367,7 +1367,7 @@ func (s *Storage) syncShareDirectory(root *os.Root) error {
 }
 
 func isUnsupportedDirectorySync(err error) bool {
-	return err != nil && (errors.Is(err, errors.ErrUnsupported) || errors.Is(err, fs.ErrInvalid))
+	return err != nil && (errors.Is(err, errors.ErrUnsupported) || errors.Is(err, fs.ErrInvalid) || isPlatformUnsupportedDirectorySync(err))
 }
 
 func (s *Storage) rebuildQuota() error {
